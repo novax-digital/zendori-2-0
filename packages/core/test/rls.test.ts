@@ -125,6 +125,48 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
     expect(error).not.toBeNull();
   });
 
+  it('widget_sessions are service-role only — members can neither read nor write', async () => {
+    const { data: channel } = await admin
+      .from('channels')
+      .select('id')
+      .eq('org_id', orgAId)
+      .limit(1)
+      .single();
+
+    const insertConversation = () =>
+      admin
+        .from('conversations')
+        .insert({ org_id: orgAId, channel_id: channel!.id, status: 'open', mode: 'bot' })
+        .select('id')
+        .single();
+    const [{ data: convA }, { data: convB }] = await Promise.all([
+      insertConversation(),
+      insertConversation(),
+    ]);
+
+    // service role may create sessions (widget API routes)
+    const { error: adminInsertError } = await admin.from('widget_sessions').insert({
+      org_id: orgAId,
+      channel_id: channel!.id,
+      conversation_id: convA!.id,
+      secret_hash: 'test-hash',
+    });
+    expect(adminInsertError).toBeNull();
+
+    // org members must not see sessions (secret hashes) even in their own org
+    const { data: visible } = await alice.from('widget_sessions').select('*').eq('org_id', orgAId);
+    expect(visible).toHaveLength(0);
+
+    // ... and must not create sessions either
+    const { error: memberInsertError } = await alice.from('widget_sessions').insert({
+      org_id: orgAId,
+      channel_id: channel!.id,
+      conversation_id: convB!.id,
+      secret_hash: 'member-hash',
+    });
+    expect(memberInsertError).not.toBeNull();
+  });
+
   it('accept_invite rejects a token issued for another email', async () => {
     const { data: invite } = await alice
       .from('invites')

@@ -4,13 +4,18 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "predev": "node scripts/build-widget.mjs",
     "build": "next build",
+    "prebuild": "node scripts/build-widget.mjs",
+    "build:widget": "node scripts/build-widget.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.110.2",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.38.0",
     "@zendori/core": "workspace:*",
     "next": "15.5.20",
     "react": "^19.2.0",
@@ -21,6 +26,7 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0"
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.28.1"
   }
 }

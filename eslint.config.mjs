@@ -13,6 +13,8 @@ export default tseslint.config(
       'old-bridge/**',
       'old-n8n-flows/**',
       'apps/web/next-env.d.ts',
+      // generated widget bundle (esbuild output, see apps/web/scripts/build-widget.mjs)
+      'apps/web/public/widget.js',
     ],
   },
   ...tseslint.configs.recommended,

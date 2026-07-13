@@ -7,3 +7,4 @@ old-bridge
 old-n8n-flows
 pnpm-lock.yaml
 supabase/migrations
+apps/web/public/widget.js

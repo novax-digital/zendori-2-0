@@ -6,6 +6,7 @@ node_modules/
 out/
 dist/
 *.tsbuildinfo
+apps/web/public/widget.js
 
 # env & secrets — never commit
 .env

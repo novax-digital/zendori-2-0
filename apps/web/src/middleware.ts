@@ -6,6 +6,13 @@ import { publicSupabaseEnv } from './lib/env';
 const PUBLIC_PATHS = ['/login', '/register'];
 
 export async function middleware(request: NextRequest) {
+  // public widget surface: the embeddable script and its API do their own
+  // token/secret auth and are called cross-origin from customer websites
+  const path = request.nextUrl.pathname;
+  if (path === '/widget.js' || path.startsWith('/api/widget/')) {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({ request });
   const { url, anonKey } = publicSupabaseEnv();
 
@@ -29,7 +36,6 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
 
   if (!user && !isPublic) {

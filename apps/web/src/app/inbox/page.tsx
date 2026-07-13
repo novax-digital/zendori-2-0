@@ -60,6 +60,7 @@ export default async function InboxPage({
         <nav className="inbox-nav" aria-label="Hauptnavigation">
           <Link href={`/inbox?org=${orgId}`}>Inbox</Link>
           <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>
+          <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo</Link>
           <span className="inbox-nav-group">Einstellungen:</span>
           <Link href={`/settings/canned-responses?org=${orgId}`}>Textbausteine</Link>
           <Link href={`/settings/channels?org=${orgId}`}>Kanäle</Link>
