@@ -5,6 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { conversationStatusSchema } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { deliverOutboundEmail } from '@/lib/email/dispatch';
 
 // --- form field helpers ------------------------------------------------------
 
@@ -123,18 +125,70 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
     return { error: errorText };
   }
 
-  const { error } = await supabase.from('messages').insert({
-    org_id: org,
-    conversation_id: conversationId,
-    channel_id: conversation.channel_id,
-    direction: 'out',
-    sender_type: 'agent',
-    content,
-    content_type: 'text',
-    processing_state: null,
-  });
-  if (error) {
+  const { data: insertedRow, error } = await supabase
+    .from('messages')
+    .insert({
+      org_id: org,
+      conversation_id: conversationId,
+      channel_id: conversation.channel_id,
+      direction: 'out',
+      sender_type: 'agent',
+      content,
+      content_type: 'text',
+      processing_state: null,
+    })
+    .select('id')
+    .single();
+  if (error || !insertedRow) {
     return { error: errorText };
+  }
+  const messageId = (insertedRow as { id: string }).id;
+
+  // Email/inbound channels: actually deliver the reply via Resend and record the
+  // outcome on the message. Every other channel keeps the Phase-1 persist-only
+  // behavior (the reply just appears in the thread).
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('type, config')
+    .eq('org_id', org)
+    .eq('id', conversation.channel_id)
+    .maybeSingle();
+  const channel = channelRow as { type: string; config: { mode?: unknown } } | null;
+  const isInboundEmail = channel?.type === 'email' && channel.config.mode === 'inbound';
+
+  if (isInboundEmail) {
+    const admin = createSupabaseAdminClient();
+    const result = admin
+      ? await deliverOutboundEmail(admin, {
+          conversationId,
+          orgId: org,
+          channelId: conversation.channel_id,
+          content,
+        })
+      : ({ ok: false, error: 'E-Mail-Versand ist serverseitig nicht konfiguriert.' } as const);
+
+    if (!result.ok) {
+      // reply is saved; flag the failed delivery so the agent can retry / follow up
+      await supabase
+        .from('messages')
+        .update({ metadata: { delivery: { failed: true, error: result.error } } })
+        .eq('org_id', org)
+        .eq('id', messageId);
+      revalidatePath('/inbox');
+      redirect(
+        inboxUrl({
+          ...base,
+          error: `Antwort gespeichert, aber E-Mail-Versand fehlgeschlagen: ${result.error}`,
+        })
+      );
+    }
+
+    // store the outbound Message-ID so inbound replies thread back to this message
+    await supabase
+      .from('messages')
+      .update({ metadata: { email: { message_id: result.messageId } } })
+      .eq('org_id', org)
+      .eq('id', messageId);
   }
 
   revalidatePath('/inbox');

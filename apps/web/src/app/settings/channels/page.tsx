@@ -4,7 +4,7 @@ import type { Channel, ChannelType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createTestChannel } from '@/app/inbox/actions';
-import { createWidgetChannel, updateWidgetTheme } from './actions';
+import { createWidgetChannel, updateWidgetTheme, createIntakeAddress } from './actions';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
 
@@ -43,6 +43,26 @@ function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
   };
 }
 
+type IntakeChannelView = {
+  id: string;
+  name: string;
+  address: string;
+  isActive: boolean;
+};
+
+/** Extracts an inbound-email intake channel; returns null for other channels. */
+function toIntakeChannelView(channel: Channel): IntakeChannelView | null {
+  if (channel.type !== 'email') return null;
+  const config = channel.config as { mode?: unknown; address?: unknown };
+  if (config.mode !== 'inbound' || typeof config.address !== 'string') return null;
+  return {
+    id: channel.id,
+    name: channel.name,
+    address: config.address,
+    isActive: channel.is_active,
+  };
+}
+
 const textareaStyle: CSSProperties = {
   width: '100%',
   padding: '0.55rem 0.75rem',
@@ -66,6 +86,9 @@ export default async function ChannelsPage({
   const widgetChannels = channels
     .map(toWidgetChannelView)
     .filter((view): view is WidgetChannelView => view !== null);
+  const intakeChannels = channels
+    .map(toIntakeChannelView)
+    .filter((view): view is IntakeChannelView => view !== null);
 
   return (
     <div className="shell">
@@ -212,6 +235,67 @@ export default async function ChannelsPage({
       ))}
 
       <div className="panel">
+        <h2>E-Mail-Intake-Adressen</h2>
+        <p
+          style={{
+            fontSize: '0.9rem',
+            color: 'var(--text-muted)',
+            marginBottom: '1rem',
+          }}
+        >
+          An diese Adressen gesendete E-Mails (als Empfänger oder in CC) landen automatisch in der
+          Inbox. Ideal für Kontaktformulare beliebiger Websites: einfach die Adresse als Empfänger
+          eintragen — kein Code auf der Kundenseite nötig.
+        </p>
+        {intakeChannels.length === 0 ? (
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Noch keine Intake-Adressen angelegt.
+          </p>
+        ) : (
+          <div style={{ marginBottom: '1.25rem' }}>
+            {intakeChannels.map((intake) => (
+              <div key={intake.id} style={{ marginBottom: '0.9rem' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                  {intake.name}
+                  {intake.isActive ? '' : ' (inaktiv)'}
+                </span>
+                <code className="invite-link">{intake.address}</code>
+              </div>
+            ))}
+          </div>
+        )}
+        <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
+          <input type="hidden" name="org" value={orgId} />
+          <div>
+            <label htmlFor="intake-name">Name</label>
+            <input
+              id="intake-name"
+              name="name"
+              type="text"
+              required
+              minLength={2}
+              maxLength={120}
+              placeholder="z. B. Kontaktformular strong-energy.eu"
+            />
+          </div>
+          <div>
+            <label htmlFor="intake-purpose">Zweck (Kürzel)</label>
+            <input
+              id="intake-purpose"
+              name="purpose"
+              type="text"
+              required
+              maxLength={40}
+              placeholder="z. B. kf"
+            />
+          </div>
+          <button className="primary" type="submit">
+            Intake-Adresse anlegen
+          </button>
+        </form>
+      </div>
+
+      <div className="panel">
         <h2>Test-Channel anlegen</h2>
         <p
           style={{
@@ -222,7 +306,7 @@ export default async function ChannelsPage({
         >
           Ein Test-Channel dient zum manuellen Einspeisen von Nachrichten über den{' '}
           <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>. Weitere echte Kanäle
-          (E-Mail, WhatsApp) folgen in späteren Phasen.
+          (WhatsApp, Telefon) folgen in späteren Phasen.
         </p>
         <form className="stack" action={createTestChannel} style={{ maxWidth: '26rem' }}>
           <input type="hidden" name="org" value={orgId} />

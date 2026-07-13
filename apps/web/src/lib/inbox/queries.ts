@@ -7,6 +7,8 @@ import type {
   ConversationListItem,
   InboxFilters,
   MemberOption,
+  MessageAttachment,
+  MessageWithAttachments,
   NoteItem,
 } from './types';
 
@@ -93,6 +95,76 @@ type NoteRow = {
   created_at: string;
 };
 
+type AttachmentRow = {
+  id: string;
+  message_id: string;
+  storage_path: string;
+  mime: string;
+  size: number;
+};
+
+/** Basename of a storage path (path convention: <org_id>/<message_id>/<filename>). */
+function attachmentFilename(storagePath: string): string {
+  const parts = storagePath.split('/');
+  return parts[parts.length - 1] || storagePath;
+}
+
+/**
+ * Loads attachments for the given messages and pairs each with a short-lived
+ * signed download URL (service role, server-only). Messages without attachments
+ * get an empty list — Phase-1 rendering is unaffected.
+ */
+async function attachMessageAttachments(
+  orgId: string,
+  messages: Message[]
+): Promise<MessageWithAttachments[]> {
+  if (messages.length === 0) return [];
+
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('attachments')
+    .select('id, message_id, storage_path, mime, size')
+    .eq('org_id', orgId)
+    .in(
+      'message_id',
+      messages.map((m) => m.id)
+    );
+  const rows = (data ?? []) as unknown as AttachmentRow[];
+
+  // Sign all paths in one batch and force a download disposition: a signed URL
+  // must never let a browser inline-render an uploaded HTML/SVG payload.
+  const admin = createSupabaseAdminClient();
+  const signedUrlByPath = new Map<string, string>();
+  if (admin && rows.length > 0) {
+    const { data: signed } = await admin.storage.from('attachments').createSignedUrls(
+      rows.map((row) => row.storage_path),
+      3600,
+      { download: true }
+    );
+    for (const entry of signed ?? []) {
+      if (entry.path && entry.signedUrl) signedUrlByPath.set(entry.path, entry.signedUrl);
+    }
+  }
+
+  const byMessage = new Map<string, MessageAttachment[]>();
+  for (const row of rows) {
+    const list = byMessage.get(row.message_id) ?? [];
+    list.push({
+      id: row.id,
+      filename: attachmentFilename(row.storage_path),
+      mime: row.mime,
+      size: row.size,
+      url: signedUrlByPath.get(row.storage_path) ?? null,
+    });
+    byMessage.set(row.message_id, list);
+  }
+
+  return messages.map((message) => ({
+    ...message,
+    attachments: byMessage.get(message.id) ?? [],
+  }));
+}
+
 export async function getConversationDetail(
   orgId: string,
   conversationId: string
@@ -123,12 +195,13 @@ export async function getConversationDetail(
       .order('created_at', { ascending: true }),
   ]);
 
-  const messages = (messageData ?? []) as unknown as Message[];
+  const messageRows = (messageData ?? []) as unknown as Message[];
   const noteRows = (noteData ?? []) as unknown as NoteRow[];
 
-  const emailByUserId = await resolveUserEmails(
-    noteRows.map((n) => n.author_id).filter((id): id is string => id !== null)
-  );
+  const [messages, emailByUserId] = await Promise.all([
+    attachMessageAttachments(orgId, messageRows),
+    resolveUserEmails(noteRows.map((n) => n.author_id).filter((id): id is string => id !== null)),
+  ]);
   const notes: NoteItem[] = noteRows.map((n) => ({
     ...n,
     author_email: n.author_id ? (emailByUserId.get(n.author_id) ?? null) : null,

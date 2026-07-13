@@ -16,11 +16,13 @@
     "@supabase/supabase-js": "^2.110.2",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
+    "@zendori/channels": "workspace:*",
     "@zendori/core": "workspace:*",
     "next": "15.5.20",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "server-only": "^0.0.1",
+    "svix": "^1.96.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

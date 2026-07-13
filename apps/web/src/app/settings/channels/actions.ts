@@ -3,8 +3,10 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import { emailInboundConfigSchema } from '@zendori/channels';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, generatePublicToken } from '@/lib/widget/session';
+import { generateIntakeAddress } from '@/lib/email/provisioning';
 
 function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -109,4 +111,66 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
 
   revalidatePath('/settings/channels');
   redirect(channelsUrl(org, { notice: 'Theme gespeichert.' }));
+}
+
+// --- create e-mail intake address ------------------------------------------------
+
+const createIntakeAddressSchema = z.object({
+  org: z.uuid(),
+  name: z.string().min(2).max(120),
+  purpose: z.string().min(1).max(40),
+});
+
+/**
+ * Provisions a generated, non-guessable inbound e-mail address and creates the
+ * matching email/inbound channel. Mails sent to that address (as recipient or
+ * CC) reach this org's inbox via the Resend webhook.
+ */
+export async function createIntakeAddress(formData: FormData): Promise<void> {
+  const parsed = createIntakeAddressSchema.safeParse({
+    org: formData.get('org'),
+    name: textField(formData.get('name')),
+    purpose: textField(formData.get('purpose')),
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(textField(formData.get('org')), {
+        error: 'Bitte einen Namen (2–120 Zeichen) und einen Zweck (z. B. „kf") angeben.',
+      })
+    );
+  }
+  const { org, name, purpose } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+
+  // the org slug seeds the readable local part of the intake address
+  const { data: orgRow } = await supabase
+    .from('organizations')
+    .select('slug')
+    .eq('id', org)
+    .maybeSingle();
+  const slug = (orgRow as { slug: string } | null)?.slug;
+  if (!slug) {
+    redirect(channelsUrl(org, { error: 'Organisation wurde nicht gefunden.' }));
+  }
+
+  const address = generateIntakeAddress(slug, purpose);
+  // Validate the channel config against the shared schema before persisting.
+  const config = emailInboundConfigSchema.safeParse({ type: 'email', mode: 'inbound', address });
+  if (!config.success) {
+    redirect(channelsUrl(org, { error: 'Intake-Adresse konnte nicht angelegt werden.' }));
+  }
+  const { error } = await supabase.from('channels').insert({
+    org_id: org,
+    type: 'email',
+    name,
+    is_active: true,
+    config: config.data,
+  });
+  if (error) {
+    redirect(channelsUrl(org, { error: 'Intake-Adresse konnte nicht angelegt werden.' }));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(channelsUrl(org, { notice: 'Intake-Adresse angelegt.' }));
 }

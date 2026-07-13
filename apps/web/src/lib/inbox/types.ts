@@ -27,11 +27,25 @@ export type CannedResponseItem = {
   content: string;
 };
 
+export type MessageAttachment = {
+  id: string;
+  /** Original filename (basename of the storage path). */
+  filename: string;
+  mime: string;
+  size: number;
+  /** Short-lived signed download URL; null when the service role is unavailable. */
+  url: string | null;
+};
+
+export type MessageWithAttachments = Message & {
+  attachments: MessageAttachment[];
+};
+
 export type ConversationDetail = {
   conversation: Conversation;
   channel: Pick<Channel, 'id' | 'name' | 'type'> | null;
   contact: Contact | null;
-  messages: Message[];
+  messages: MessageWithAttachments[];
   notes: NoteItem[];
 };
 

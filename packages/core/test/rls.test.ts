@@ -176,6 +176,39 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
     const { error } = await bob.rpc('accept_invite', { p_token: invite!.token });
     expect(error).not.toBeNull();
   });
+
+  it('attachments bucket: org members read their org files, non-members cannot', async () => {
+    // NB: by now bob is a member of org A (accepted the invite above), so the
+    // negative case uses a separate org that neither alice nor bob belongs to.
+    const body = new Blob(['hallo'], { type: 'text/plain' });
+    const pathA = `${orgAId}/${randomUUID()}/hello.txt`;
+    const { error: uploadA } = await admin.storage.from('attachments').upload(pathA, body);
+    expect(uploadA).toBeNull();
+
+    // member of org A may download org A's file
+    const { data: allowed, error: allowedError } = await alice.storage
+      .from('attachments')
+      .download(pathA);
+    expect(allowedError).toBeNull();
+    expect(allowed).not.toBeNull();
+
+    // a foreign org's file is invisible to non-members (alice and bob alike)
+    const { data: foreignOrg } = await admin
+      .from('organizations')
+      .insert({ name: 'Org C', slug: `org-c-${randomUUID().slice(0, 8)}` })
+      .select()
+      .single();
+    const pathC = `${foreignOrg!.id}/${randomUUID()}/secret.txt`;
+    await admin.storage.from('attachments').upload(pathC, body);
+
+    const { data: deniedAlice } = await alice.storage.from('attachments').download(pathC);
+    expect(deniedAlice).toBeNull();
+    const { data: deniedBob } = await bob.storage.from('attachments').download(pathC);
+    expect(deniedBob).toBeNull();
+
+    await admin.storage.from('attachments').remove([pathA, pathC]);
+    await admin.from('organizations').delete().eq('id', foreignOrg!.id);
+  });
 });
 
 describe.skipIf(enabled)('RLS (skipped)', () => {

@@ -6,10 +6,11 @@ import { publicSupabaseEnv } from './lib/env';
 const PUBLIC_PATHS = ['/login', '/register'];
 
 export async function middleware(request: NextRequest) {
-  // public widget surface: the embeddable script and its API do their own
-  // token/secret auth and are called cross-origin from customer websites
+  // public surfaces that authenticate themselves and are called by third
+  // parties (customer sites, Resend/WhatsApp/voice webhooks) — never redirect
+  // these to /login. Widget API + script, and provider webhooks under /api/hooks/.
   const path = request.nextUrl.pathname;
-  if (path === '/widget.js' || path.startsWith('/api/widget/')) {
+  if (path === '/widget.js' || path.startsWith('/api/widget/') || path.startsWith('/api/hooks/')) {
     return NextResponse.next();
   }
 
