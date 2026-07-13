@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# builds
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# env & secrets — never commit
+.env
+.env.*
+!.env.example
+
+# test & coverage
+coverage/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+
+# legacy reference folders: kept locally as READ-ONLY reference,
+# excluded from the new repo because they contain real .env secrets
+# and their own .git histories
+old-app/
+old-bridge/
+old-n8n-flows/
+
+# supabase local dev
+supabase/.temp/
+supabase/.branches/

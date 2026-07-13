@@ -1,0 +1,9 @@
+node_modules
+.next
+dist
+coverage
+old-app
+old-bridge
+old-n8n-flows
+pnpm-lock.yaml
+supabase/migrations

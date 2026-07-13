@@ -1,0 +1,11 @@
+# Zendori worker on the Hetzner VPS — single container, NO ingress:
+# no Traefik, no domain, no open ports; outbound connections only.
+# Usage on the VPS (always docker compose v2, never docker-compose):
+#   sudo docker compose pull && sudo docker compose up -d
+# .env next to this file provides GHCR_OWNER, WORKER_IMAGE_TAG and the runtime env.
+services:
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/zendori-worker:${WORKER_IMAGE_TAG}
+    restart: unless-stopped
+    env_file: .env
+    # healthcheck is defined in the image (pg-boss heartbeat file)
