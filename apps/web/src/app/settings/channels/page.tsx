@@ -4,7 +4,12 @@ import type { Channel, ChannelType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createTestChannel } from '@/app/inbox/actions';
-import { createWidgetChannel, updateWidgetTheme, createIntakeAddress } from './actions';
+import {
+  createWidgetChannel,
+  updateWidgetTheme,
+  createIntakeAddress,
+  createWhatsappTwilioChannel,
+} from './actions';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
 
@@ -63,6 +68,26 @@ function toIntakeChannelView(channel: Channel): IntakeChannelView | null {
   };
 }
 
+type WhatsappChannelView = {
+  id: string;
+  name: string;
+  sender: string;
+  isActive: boolean;
+};
+
+/** Extracts a Twilio WhatsApp channel; returns null for other channels/providers. */
+function toWhatsappChannelView(channel: Channel): WhatsappChannelView | null {
+  if (channel.type !== 'whatsapp') return null;
+  const config = channel.config as { provider?: unknown; sender?: unknown };
+  if (config.provider !== 'twilio' || typeof config.sender !== 'string') return null;
+  return {
+    id: channel.id,
+    name: channel.name,
+    sender: config.sender,
+    isActive: channel.is_active,
+  };
+}
+
 const textareaStyle: CSSProperties = {
   width: '100%',
   padding: '0.55rem 0.75rem',
@@ -89,6 +114,11 @@ export default async function ChannelsPage({
   const intakeChannels = channels
     .map(toIntakeChannelView)
     .filter((view): view is IntakeChannelView => view !== null);
+  const whatsappChannels = channels
+    .map(toWhatsappChannelView)
+    .filter((view): view is WhatsappChannelView => view !== null);
+  // strip a trailing slash so the displayed URL matches what the route reconstructs
+  const whatsappTwilioWebhookUrl = `${appUrl().replace(/\/+$/, '')}/api/hooks/whatsapp/twilio`;
 
   return (
     <div className="shell">
@@ -296,6 +326,95 @@ export default async function ChannelsPage({
       </div>
 
       <div className="panel">
+        <h2>WhatsApp (Twilio)</h2>
+        <p
+          style={{
+            fontSize: '0.9rem',
+            color: 'var(--text-muted)',
+            marginBottom: '1rem',
+          }}
+        >
+          Eine Twilio-WhatsApp-Nummer je Kunde. Nachrichten an diese Nummer landen in der Inbox,
+          Antworten gehen über Twilio zurück. Nach dem Anlegen die unten angezeigte Webhook-URL im
+          Twilio-Console bei der Nummer (oder Messaging Service) unter „A message comes in"
+          (Methode POST) eintragen.
+        </p>
+        {whatsappChannels.length === 0 ? (
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Noch keine WhatsApp-Nummer verbunden.
+          </p>
+        ) : (
+          <div style={{ marginBottom: '1.25rem' }}>
+            {whatsappChannels.map((wa) => (
+              <div key={wa.id} style={{ marginBottom: '0.9rem' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                  {wa.name}
+                  {wa.isActive ? '' : ' (inaktiv)'}
+                </span>
+                <code className="invite-link">{wa.sender}</code>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Webhook-URL (in Twilio eintragen)</span>
+          <code className="invite-link">{whatsappTwilioWebhookUrl}</code>
+        </div>
+        <form className="stack" action={createWhatsappTwilioChannel} style={{ maxWidth: '26rem' }}>
+          <input type="hidden" name="org" value={orgId} />
+          <div>
+            <label htmlFor="wa-name">Name</label>
+            <input
+              id="wa-name"
+              name="name"
+              type="text"
+              required
+              minLength={2}
+              maxLength={120}
+              placeholder="z. B. WhatsApp Support strong-energy.eu"
+            />
+          </div>
+          <div>
+            <label htmlFor="wa-sender">Absendernummer (+E164)</label>
+            <input
+              id="wa-sender"
+              name="sender"
+              type="text"
+              required
+              placeholder="+493012345678"
+            />
+          </div>
+          <div>
+            <label htmlFor="wa-account-sid">Twilio Account SID</label>
+            <input id="wa-account-sid" name="accountSid" type="text" required placeholder="AC…" />
+          </div>
+          <div>
+            <label htmlFor="wa-auth-token">Twilio Auth Token</label>
+            <input
+              id="wa-auth-token"
+              name="authToken"
+              type="password"
+              required
+              autoComplete="off"
+              placeholder="wird verschlüsselt gespeichert"
+            />
+          </div>
+          <div>
+            <label htmlFor="wa-messaging-service">Messaging Service SID (optional)</label>
+            <input
+              id="wa-messaging-service"
+              name="messagingServiceSid"
+              type="text"
+              placeholder="MG… (optional)"
+            />
+          </div>
+          <button className="primary" type="submit">
+            WhatsApp-Nummer verbinden
+          </button>
+        </form>
+      </div>
+
+      <div className="panel">
         <h2>Test-Channel anlegen</h2>
         <p
           style={{
@@ -305,8 +424,8 @@ export default async function ChannelsPage({
           }}
         >
           Ein Test-Channel dient zum manuellen Einspeisen von Nachrichten über den{' '}
-          <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>. Weitere echte Kanäle
-          (WhatsApp, Telefon) folgen in späteren Phasen.
+          <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>. Der Telefon-Kanal (Voice)
+          folgt in einer späteren Phase.
         </p>
         <form className="stack" action={createTestChannel} style={{ maxWidth: '26rem' }}>
           <input type="hidden" name="org" value={orgId} />

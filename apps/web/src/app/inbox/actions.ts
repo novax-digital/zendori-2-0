@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { deliverOutboundEmail } from '@/lib/email/dispatch';
+import { deliverOutboundWhatsApp } from '@/lib/whatsapp/dispatch';
 
 // --- form field helpers ------------------------------------------------------
 
@@ -188,6 +189,40 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
     await supabase
       .from('messages')
       .update({ metadata: { email: { message_id: result.messageId } } })
+      .eq('org_id', org)
+      .eq('id', messageId);
+  } else if (channel?.type === 'whatsapp') {
+    // WhatsApp: deliver via the provider adapter. Agent replies never fall back
+    // to a template — outside the 24h window the send fails and is flagged so the
+    // agent knows their text did not reach the customer.
+    const admin = createSupabaseAdminClient();
+    const result = admin
+      ? await deliverOutboundWhatsApp(admin, {
+          conversationId,
+          orgId: org,
+          channelId: conversation.channel_id,
+          content,
+        })
+      : ({ ok: false, error: 'WhatsApp-Versand ist serverseitig nicht konfiguriert.' } as const);
+
+    if (!result.ok) {
+      await supabase
+        .from('messages')
+        .update({ metadata: { delivery: { failed: true, error: result.error } } })
+        .eq('org_id', org)
+        .eq('id', messageId);
+      revalidatePath('/inbox');
+      redirect(
+        inboxUrl({
+          ...base,
+          error: `Antwort gespeichert, aber WhatsApp-Versand fehlgeschlagen: ${result.error}`,
+        })
+      );
+    }
+
+    await supabase
+      .from('messages')
+      .update({ metadata: { whatsapp: { message_sid: result.externalId } } })
       .eq('org_id', org)
       .eq('id', messageId);
   }
@@ -752,6 +787,34 @@ async function sendAgentReply(
     await supabase
       .from('messages')
       .update({ metadata: { email: { message_id: result.messageId } } })
+      .eq('org_id', org)
+      .eq('id', messageId);
+  } else if (channel?.type === 'whatsapp') {
+    const admin = createSupabaseAdminClient();
+    const result = admin
+      ? await deliverOutboundWhatsApp(admin, {
+          conversationId,
+          orgId: org,
+          channelId: conversation.channel_id,
+          content,
+        })
+      : ({ ok: false, error: 'WhatsApp-Versand ist serverseitig nicht konfiguriert.' } as const);
+
+    if (!result.ok) {
+      await supabase
+        .from('messages')
+        .update({ metadata: { delivery: { failed: true, error: result.error } } })
+        .eq('org_id', org)
+        .eq('id', messageId);
+      return {
+        ok: false,
+        error: `Antwort gespeichert, aber WhatsApp-Versand fehlgeschlagen: ${result.error}`,
+      };
+    }
+
+    await supabase
+      .from('messages')
+      .update({ metadata: { whatsapp: { message_sid: result.externalId } } })
       .eq('org_id', org)
       .eq('id', messageId);
   }

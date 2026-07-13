@@ -39,11 +39,14 @@ Kern-Features:
   - Pro Intake-Quelle eine **generierte, nicht erratbare Adresse** (z. B. `strongenergy-kf-x7k2m9@in.zendori.de`) = ein Channel mit sprechendem Namen in der Inbox.
   - Versand über die Resend-API (verifizierte Kundendomain, sonst Zendori-Absender mit Reply-To auf die Intake-Adresse).
   - Komplett serverless — läuft ohne Worker in apps/web.
-- **E-Mail (optional, Phase 8): IMAP/SMTP** für Kunden, die ihr bestehendes Postfach direkt anbinden wollen (ImapFlow + Nodemailer im Worker, Credentials verschlüsselt).
-- **WhatsApp:** Meta WhatsApp Cloud API direkt (Webhooks + Graph API). Kein BSP, kein Twilio.
+- **E-Mail (bestehende Postfächer): Weiterleitung statt IMAP.** Kunden binden ihr Postfach per E-Mail-Weiterleitung auf eine Resend-Inbound-Adresse an (gleiche Mechanik wie Formular-Intake, serverless). Direktes IMAP/SMTP (ursprünglich Phase 8) ist **gestrichen** — siehe §11.
+- **WhatsApp (provider-agnostisch, pro Org eigene Nummer):** ein Kanaltyp `whatsapp`, Backend pro Channel über `config.provider`:
+  - **Twilio** — Operator (Novax) besitzt die WhatsApp-Sender, eine Nummer je Kunde; Routing über die `To`-Nummer, Verify `X-Twilio-Signature`.
+  - **Meta WhatsApp Cloud API direkt** — Kunde besitzt seine eigene Nummer/WABA, verbunden per **Embedded Signup (Tech Provider)**; Routing über `phone_number_id`, Verify `X-Hub-Signature-256`.
+  - Beide hinter *einem* Adapter (`packages/channels/whatsapp`, dispatch auf `provider`), gleiche `UnifiedInboundMessage`/`OutboundMessage`; Credentials pro Org verschlüsselt in `channels.config`. Twilio ist hier bewusst erlaubt — die frühere „kein Twilio"-Regel ist damit aufgehoben.
 - **Chat:** eigenes Embeddable Widget (ein Script-Tag) + Supabase Realtime.
 - **HubSpot (optional, Phase 6):** einseitiger Ticket-Sync pro Org mit Sync-Regeln (alle Konversationen | nur ausgewählte Kanäle | nur manuell). Kein Kern-Bestandteil.
-- **Voice (Phase 9):** Provider-Entscheidung offen (xAI Grok Voice vs. ElevenLabs Agents). NICHT vorab implementieren. Integration ist provider-agnostisch über Zendori-Tool-Endpoints (§9).
+- **Voice (Phase 9): xAI Voice API + Twilio als reiner Nummern-/SIP-Trunk-Lieferant** (Entscheidung getroffen; ElevenLabs verworfen). Formaler Go/No-Go bleibt der deutsche Testanruf vor Phasenstart. API ist OpenAI-Realtime-kompatibel → Plan B OpenAI Realtime mit fast gleichem Code. NICHT vorab implementieren. Details §9.
 - **Deployment:** apps/web → **Vercel** (Region `fra1`), apps/worker → Docker-Container auf dem bestehenden Hetzner VPS (Details §12).
 - Validierung: `zod` überall an Systemgrenzen. Tests: `vitest`. Logging: `pino`.
 
@@ -51,9 +54,9 @@ Kern-Features:
 
 ```
 apps/web        → Next.js: Inbox, Settings, Widget-Host, Webhooks (/api/hooks/*), Resend-Ingest
-apps/worker     → Node-Prozess: pg-boss Worker (KI-Pipeline, Crawler, HubSpot-Sync, ab Phase 8 IMAP)
+apps/worker     → Node-Prozess: pg-boss Worker (KI-Pipeline, Crawler, HubSpot-Sync, WhatsApp-Versand, ab Phase 9 Voice-WebSocket-Sessions)
 packages/core   → Domain-Typen, zod-Schemas, DB-Client, Verschlüsselung
-packages/channels → Adapter: chat | email | whatsapp | voice (ein Interface)
+packages/channels → Adapter: chat | email | whatsapp (meta|twilio) | voice (ein Interface)
 packages/ai     → Klassifikation, Extraktion/Ticketisierung, RAG, Draft, Confidence
 supabase/       → Migrations (supabase CLI), Seed
 docs/           → Architektur-Notizen, legacy-analysis.md, Testanleitungen
@@ -126,9 +129,10 @@ Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, 
 
 - Alle Daten in EU (Supabase EU, Hetzner). Keine US-Datenverarbeitung ohne explizite Freigabe von mir.
   - **Bewusste, freigegebene Ausnahme: Resend** als E-Mail-Provider (bereits im Einsatz). Vor Kunden-Rollout: AVV/SCCs und Speicherorte prüfen — Aufgabe von mir, im Code nichts weiter nötig.
+  - **Weitere freigegebene US-Processor-Ausnahmen (mit mir entschieden):** WhatsApp über **Meta** und **Twilio** (Phase 7) sowie **xAI Voice** + Twilio-SIP (Phase 9). Gleiche Auflage wie Resend: vor Produktiv-Rollout AVV/SCCs/DPAs unterschreiben und Speicherorte dokumentieren — Aufgabe von mir. Hinweis: Meta hat **keine** EU-resident WhatsApp-Option; bei Twilio/xAI EU-Region prüfen, wo verfügbar. Kein Produktivkunde vor DPA-Freigabe (bis dahin nur Test-/Sandbox-Nummern).
 - Secrets nur via `.env` / Server-Env. Nie ins Repo. `.env.example` immer aktuell halten.
 - Kanal- und Integrations-Credentials (IMAP/SMTP-Passwörter, WhatsApp-Tokens, HubSpot-Token) verschlüsselt in `channels.config` bzw. `integrations.config`: libsodium secretbox mit `MASTER_ENCRYPTION_KEY` aus Env. Nie im Klartext loggen oder an den Client geben.
-- Webhooks verifizieren: Resend per Svix-Signatur (`resend.webhooks.verify`, Raw Body!), WhatsApp per `X-Hub-Signature-256` (App Secret), Widget-Requests mit org-gebundenem Public Token + Rate Limit. Unbekannte Inbound-Adressen: loggen (nur Metadaten) und verwerfen.
+- Webhooks verifizieren: Resend per Svix-Signatur (`resend.webhooks.verify`, Raw Body!), WhatsApp-Meta per `X-Hub-Signature-256` (App Secret, Raw Body), WhatsApp-Twilio per `X-Twilio-Signature` (Auth Token, exakte öffentliche URL aus `APP_URL` + sortierte Params — NICHT aus dem Proxy-Host rekonstruieren), Voice per signiertem xAI-Webhook (Secret pro Nummer), Widget-Requests mit org-gebundenem Public Token + Rate Limit. Unbekannte Inbound-Adressen/Nummern: loggen (nur Metadaten) und verwerfen.
 - RLS: Zugriff nur über `org_members`. Worker nutzt Service Role. Jede neue Tabelle bekommt einen RLS-Test.
 - Keine Nachrichteninhalte in Logs (pino redact). Request-IDs ja, Content nein.
 - Löschkonzept: Konversationen, Kontakte, KB inkl. Embeddings pro Org vollständig löschbar (Job `org.purge`).
@@ -145,16 +149,19 @@ Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, 
 8. Wenn etwas im Legacy-Code unklar ist: fragen, nicht raten.
 9. Bei Fehlern in Produktion/Deploy: erst Diagnose + Ursache erklären, dann Fix vorschlagen, dann umsetzen.
 
-## 9. Voice-Integration (Vorgabe für Phase 9, provider-agnostisch)
+## 9. Voice-Integration (Phase 9 — xAI Voice API + Twilio-SIP)
 
-Der Voice-Provider (xAI oder ElevenLabs — Entscheidung fällt mit mir per Testanruf vor Phasenstart) läuft extern und spricht mit Zendori über drei Endpoints:
+Provider-Entscheidung getroffen: **xAI Voice API** (OpenAI-Realtime-kompatibel → Plan B OpenAI Realtime mit fast gleichem Code); **Twilio** liefert nur Nummer + SIP-Trunk. Formaler Start erst nach deutschem Testanruf (§11 Phase 9). Kernarchitektur:
 
-- `POST /api/voice/tools/kb-search` → { query } → Top-KB-Chunks der Org (gleiche RAG-Funktion wie Text-Pipeline)
-- `POST /api/voice/tools/handoff` → { reason } → Handoff + Rückruf-Ticket, optional Live-Transfer-Nummer zurückgeben
-- `POST /api/hooks/voice` → Call-Events + Transkript → Conversation (channel=voice), Transkript-Turns als `messages`, Audio-Recording in Storage
-
-Auth: pro Org ein Voice-API-Key (Header), Requests zod-validiert. Kontakt-Matching über Anrufernummer.
-Damit bleibt der Kern identisch: Anrufe erscheinen als ganz normale Konversationen in der Inbox.
+- **Kein persistentes Agent-Objekt beim Provider.** Ein „Agent" = die `session.update`-Config beim Call-Join (System-Prompt, Stimme, Keyterms, Tools, Transfer-Nummer). Pro Org in `channels.config` (type=voice) gespeichert und beim Session-Start gesetzt — das ideale Multi-Tenant-Modell (kein Setup pro Kunde beim Provider außer der Nummer).
+- **Anruf-Flow:** eingehender Anruf → xAI schickt signierten Webhook (`call_id` + SIP `From`/`To`) an `POST /api/hooks/voice` (Vercel, schnell, nichts Langlaufendes) → Vercel schreibt eine `voice_calls`-Zeile. Der **Worker (Hetzner) hört per Supabase Realtime** auf diese Inserts (ausgehende Verbindung, **kein Ingress** nötig — §12) und **joint sofort den WebSocket `?call_id`**, der für die Dauer des Anrufs im Worker lebt. Audio bridged xAI, Zendori fasst es nie an. (Der 3-s-DB-Poll wäre fürs Klingeln zu langsam → Realtime-Push, gleiches Muster wie Migration 0003.)
+- **Routing:** gewählte Nummer (`To`) → voice-Channel → Org → deren Voice-Config laden → damit joinen. Kontakt-Matching über die Anrufernummer.
+- **Tools laufen im Zendori-Worker** (nicht beim Provider), `org_id` beim Session-Start gebunden → RLS-Scoping, strikte Mandantentrennung. Mindestens: `kb_search` (gleiche RAG-Funktion wie die Text-Pipeline, Supabase — KB bleibt bei uns, NICHT als xAI-Collection), `create_ticket`/Ticketisierung, `handoff`. Umsetzung als Function-Tools über die Session oder als MCP-Server.
+- **Handoff (§6):** xAI `refer` = Transfer an ein PSTN/SIP-Ziel (Live-Transfer-Nummer der Org), `hangup` = Auflegen; Rückruf-Ticket bei Nicht-Erreichbarkeit. DTMF wird als Text ans Modell gegeben.
+- **Nummern:** Twilio-Nummer per API kaufen (geteilte Nummern-Infra mit Phase 7), Direct-SIP-Trunk `sip:{nummer}@sip.voice.x.ai`, bei xAI registrieren (`POST /v2/phone-numbers`, origin `byo_trunk`); das einmalige Webhook-Signing-Secret verschlüsselt in `channels.config`. `bundle_sid` pro Org (Default = Novax-Bundle, Rufumleitungs-Modell), Kunden-Bundle-Flow für eigene öffentliche Nummern.
+- **Deutsch:** offiziell (`de`, auto-detect, `language_hint`, bis 100 Keyterms, optional Custom Voice aus ≤120 s Referenzclip). `force_message` für Pflichtansagen (z. B. Aufzeichnungshinweis), Per-Response-Instructions für dynamischen Kontext (bekannter Kontakt / offene Tickets).
+- Auth: signierter xAI-Webhook (Secret pro Nummer), Requests zod-validiert. Anrufe erscheinen als ganz normale Konversationen (channel=voice), Transkript-Turns als `messages`, optional Audio-Recording in Storage.
+- **DSGVO:** xAI ist US-Processor (freigegebene §7-Ausnahme; DPA/EU-Residency prüfen vor Rollout — meine Aufgabe). Zunächst nur Inbound; Outbound später klären.
 
 ## 10. Legacy-Import (Teil von Phase 0)
 
@@ -195,11 +202,14 @@ Erstelle `docs/legacy-analysis.md`:
 
 **Phase 6 — HubSpot-Sync (globale Integration, Bridge-Ablösung):** integrations-Setup pro Org (Private-App-Token, verschlüsselt), **Sync-Regeln: alle Konversationen | nur ausgewählte Kanäle | nur manuell** (Button „An HubSpot senden" pro Konversation gibt es immer), einseitiger Sync: Konversation → HubSpot-Ticket (Property-Mapping aus docs/legacy-analysis.md), Statusänderungen nachziehen, Contact ↔ HubSpot-Kontakt-Matching, Retries über pg-boss, `external_refs.hubspot_ticket_id`. Cutover Bestandskunde: Formular-Empfänger der Strong-Energy-Website auf die Inbound-Adresse umstellen, Parallelbetrieb prüfen, alte Bridge abschalten. **STOP.**
 
-**Phase 7 — WhatsApp:** Meta Cloud API: Webhook-Verify + Signaturprüfung, Ingest (Text, Medien), 24h-Service-Window-Logik, Template-Versand außerhalb des Fensters, Medienversand. **STOP.**
+**Phase 7 — WhatsApp (provider-agnostisch, pro Org eigene Nummer):** ein Kanaltyp `whatsapp`, Backend pro Channel über `config.provider` (discriminated union). Keine DB-Migration nötig (jsonb-config + bestehender `(channel_id, external_id)`-Index). **Sub-Reihenfolge (STOP zwischen 7a und 7b):**
 
-**Phase 8 — IMAP/SMTP-Postfächer (optional):** Bestehendes Kundenpostfach verbinden (Credentials verschlüsselt), Ingest-Worker mit Message-ID-Idempotenz, Threading, HTML→Text-Normalisierung, Anhänge → Storage, SMTP-Versand mit korrekten Reply-Headern. **STOP.**
+- **7a — Gemeinsames Skelett + Twilio (zuerst, sofort startklar):** Config-Union `meta|twilio`, Adapter-Dispatch `packages/channels/whatsapp`, provider-unabhängiger 24h-Service-Window-Helper, Webhook-Route `/api/hooks/whatsapp/twilio` (Verify `X-Twilio-Signature`, Routing über `To`, Ingest Text/Medien mit Basic-Auth-Download, Idempotenz `MessageSid`), Versand freiform im Fenster / **Content-Template** (`ContentSid`) außerhalb, Settings-UI „WhatsApp verbinden (Twilio)". Sub-Account je Kunde empfohlen. **STOP.**
+- **7b — Meta Cloud API via Embedded Signup:** ein App/Webhook/App-Secret (Tech Provider), Route `/api/hooks/whatsapp/meta` (GET-`hub.challenge`-Handshake, POST `X-Hub-Signature-256` über Raw Body, Routing über `phone_number_id`, Idempotenz `wamid`), Versand Text im Fenster / **Template** (`name`+`language`) außerhalb, Medien über Graph-Media-API, Self-Service-Onboarding-Popup. Meta-Tech-Provider-Verifizierung ist Voraussetzung (Vorlaufzeit — früh anstoßen). **STOP.**
 
-**Phase 9 — Voice:** erst Provider-Entscheidung mit mir (Testanruf Deutsch: Latenz, Aussprache, Preis, DSGVO/AVV). Danach Umsetzung gemäß §9. **STOP.**
+**Phase 8 — IMAP/SMTP: ENTFÄLLT.** Bestehende Kundenpostfächer werden per **E-Mail-Weiterleitung auf eine Resend-Inbound-Adresse** angebunden (Phase-3-Mechanik, serverless, kein IMAP). Zwei Use-Cases, je eigene Intake-Adresse = eigener Kanal: Formular-Weiterleitung und E-Mail-Weiterleitung. Einziger Zusatz: `channels.config.purpose: 'form' | 'forwarded_email'`, damit die Phase-4-Extraktion bei weitergeleiteten Mails den echten Absender aus dem Weiterleitungs-Header (statt aus einem Formular-Block) zieht. (Klein, kann an Phase 3/4 angehängt werden.)
+
+**Phase 9 — Voice (xAI + Twilio-SIP):** erst deutscher Testanruf mit mir (Latenz, Aussprache, Custom Voice, Preis, DSGVO/DPA), dann Umsetzung gemäß §9 (Worker-WebSocket-Session, Supabase-Realtime-Trigger statt Poll, Tools im Worker mit org_id/RLS, `refer`-Handoff, Twilio-SIP-Trunk-Provisionierung, `voice_calls`-Tabelle). **STOP.**
 
 ## 12. Deployment
 
@@ -213,7 +223,7 @@ Erstelle `docs/legacy-analysis.md`:
 
 ### apps/worker → Hetzner (Docker)
 
-- Einzelner Container **ohne Ingress**: kein Traefik, keine Domain, keine offenen Ports — nur ausgehende Verbindungen (Supabase, Anthropic/OpenAI, Resend, Meta Graph API, HubSpot; IMAP/SMTP erst ab Phase 8). Dadurch unabhängig von der restlichen Server-Infrastruktur.
+- Einzelner Container **ohne Ingress**: kein Traefik, keine Domain, keine offenen Ports — nur ausgehende Verbindungen (Supabase inkl. Realtime, Anthropic/OpenAI, Resend, Meta Graph API, Twilio, HubSpot; ab Phase 9 ausgehender WebSocket zu xAI). Dadurch unabhängig von der restlichen Server-Infrastruktur. Wichtig für Phase 9: Der Voice-Anruf-WebSocket ist eine **ausgehende** Verbindung, die per Supabase-Realtime-Push (nicht Ingress) getriggert wird — die Ingress-freie Regel bleibt gültig.
 - Immer `sudo docker compose` (v2, mit Leerzeichen), niemals `docker-compose`.
 - **Image-Tags pinnen** (feste Node-Version). Keine Auto-Updates/`:latest` — ein Docker-Auto-Update hat auf diesem Server schon mal einen Ausfall verursacht.
 - `restart: unless-stopped`, Healthcheck (pg-boss-Heartbeat), Env via `.env` neben der Compose-Datei, nie im Image.
@@ -233,9 +243,11 @@ MASTER_ENCRYPTION_KEY=         # 32 Byte base64, für channels.config / integrat
 RESEND_API_KEY=
 RESEND_WEBHOOK_SECRET=         # Svix Signing Secret (wird nur einmal beim Anlegen des Webhooks angezeigt)
 INBOUND_EMAIL_DOMAIN=          # z. B. in.zendori.de
-WHATSAPP_ACCESS_TOKEN= / WHATSAPP_PHONE_NUMBER_ID= / WHATSAPP_VERIFY_TOKEN= / WHATSAPP_APP_SECRET=
+# WhatsApp Meta — nur Plattform-Ebene für Embedded Signup (access_token + phone_number_id pro Org in channels.config):
+WHATSAPP_APP_ID= / WHATSAPP_APP_SECRET= / WHATSAPP_VERIFY_TOKEN= / WHATSAPP_CONFIG_ID=
+# WhatsApp Twilio (+ Voice-Twilio): AccountSid/AuthToken (+ ggf. API-Key SK/Secret) pro Org verschlüsselt in channels.config, NICHT hier
 # HubSpot-Token: pro Org verschlüsselt in integrations.config, NICHT hier
-# Voice-Provider-Keys erst in Phase 9
+# Voice (Phase 9): XAI_API_KEY= (+ EU-Endpoint wo verfügbar); xAI-Webhook-Signing-Secret pro Nummer in channels.config, NICHT hier
 ```
 
 ## 14. Definition of Done (pro Feature)

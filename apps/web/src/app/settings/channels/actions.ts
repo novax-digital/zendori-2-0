@@ -3,7 +3,8 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { emailInboundConfigSchema } from '@zendori/channels';
+import { emailInboundConfigSchema, whatsappTwilioConfigSchema } from '@zendori/channels';
+import { encryptSecret } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, generatePublicToken } from '@/lib/widget/session';
 import { generateIntakeAddress } from '@/lib/email/provisioning';
@@ -173,4 +174,88 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
 
   revalidatePath('/settings/channels');
   redirect(channelsUrl(org, { notice: 'Intake-Adresse angelegt.' }));
+}
+
+// --- connect a WhatsApp channel (Twilio, Phase 7a) -------------------------------
+
+const createWhatsappTwilioSchema = z.object({
+  org: z.uuid(),
+  name: z.string().min(2).max(120),
+  /** Operator-owned sender in +E164. */
+  sender: z.string().regex(/^\+[1-9]\d{6,15}$/),
+  accountSid: z.string().regex(/^AC[0-9a-zA-Z]{32}$/),
+  authToken: z.string().min(10).max(200),
+  messagingServiceSid: z
+    .string()
+    .regex(/^MG[0-9a-zA-Z]{32}$/)
+    .optional(),
+});
+
+/**
+ * Connects a Twilio-owned WhatsApp sender as a channel. The Auth Token (used to
+ * both verify inbound signatures and send) is encrypted with MASTER_ENCRYPTION_KEY
+ * before it touches the DB; the sender/accountSid are plaintext routing keys.
+ */
+export async function createWhatsappTwilioChannel(formData: FormData): Promise<void> {
+  const rawMsgSvc = textField(formData.get('messagingServiceSid'));
+  const parsed = createWhatsappTwilioSchema.safeParse({
+    org: formData.get('org'),
+    name: textField(formData.get('name')),
+    sender: textField(formData.get('sender')),
+    accountSid: textField(formData.get('accountSid')),
+    authToken: textField(formData.get('authToken')),
+    messagingServiceSid: rawMsgSvc === '' ? undefined : rawMsgSvc,
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(textField(formData.get('org')), {
+        error:
+          'Bitte Nummer (+49…), Account SID (AC…), Auth Token und optional Messaging Service SID (MG…) angeben.',
+      })
+    );
+  }
+  const { org, name, sender, accountSid, authToken, messagingServiceSid } = parsed.data;
+
+  const masterKey = process.env.MASTER_ENCRYPTION_KEY;
+  if (!masterKey) {
+    redirect(channelsUrl(org, { error: 'Verschlüsselung ist serverseitig nicht konfiguriert.' }));
+  }
+  const authTokenEncrypted = await encryptSecret(authToken, masterKey);
+
+  const config = whatsappTwilioConfigSchema.safeParse({
+    type: 'whatsapp',
+    provider: 'twilio',
+    sender,
+    accountSid,
+    authTokenEncrypted,
+    ...(messagingServiceSid ? { messagingServiceSid } : {}),
+  });
+  if (!config.success) {
+    redirect(channelsUrl(org, { error: 'WhatsApp-Kanal konnte nicht angelegt werden.' }));
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.from('channels').insert({
+    org_id: org,
+    type: 'whatsapp',
+    name,
+    is_active: true,
+    config: config.data,
+  });
+  if (error) {
+    // The partial unique index on the Twilio sender (migration 0008) rejects a
+    // number already connected in this OR another org — inbound routing is global.
+    const message =
+      error.code === '23505'
+        ? 'Diese Nummer ist bereits als WhatsApp-Kanal verbunden.'
+        : 'WhatsApp-Kanal konnte nicht angelegt werden.';
+    redirect(channelsUrl(org, { error: message }));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(
+    channelsUrl(org, {
+      notice: 'WhatsApp-Kanal (Twilio) angelegt. Bitte die Webhook-URL im Twilio-Console eintragen.',
+    })
+  );
 }

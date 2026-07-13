@@ -2,7 +2,7 @@
 // (CLAUDE.md §6, §4 message-flow). detectHandoff / decideDraftAction /
 // isAutopilotEnabled are pure and unit-tested; deliverBotReply performs the
 // outbound persist + channel delivery. Message content is never logged (§7).
-import { deliverOutboundEmail } from '@zendori/channels';
+import { deliverOutboundEmail, deliverOutboundWhatsApp } from '@zendori/channels';
 import type { ChannelType, HandoffReason, SupabaseClient } from '@zendori/core';
 
 export interface DetectHandoffInput {
@@ -97,11 +97,12 @@ export interface DeliverBotReplyParams {
 
 /**
  * Persist and deliver a bot/system outbound reply. Always inserts the outbound
- * `messages` row (direction='out'); for email channels it additionally sends via
- * Resend and stores metadata.email.message_id on the row for reply threading.
- * A failed email send is recorded (metadata.delivery.failed) and swallowed — it
- * must never kill the pipeline. Chat/WhatsApp/Voice persist only; for chat the
- * 0003 broadcast trigger pushes the row to the widget. Never logs content (§7).
+ * `messages` row (direction='out'); for email it additionally sends via Resend
+ * (storing metadata.email.message_id for threading) and for WhatsApp via the
+ * provider adapter (storing metadata.whatsapp.message_sid for status matching).
+ * A failed send is recorded (metadata.delivery.failed) and swallowed — it must
+ * never kill the pipeline. Chat/Voice persist only; for chat the 0003 broadcast
+ * trigger pushes the row to the widget. Never logs content (§7).
  */
 export async function deliverBotReply(
   supabase: SupabaseClient,
@@ -128,22 +129,34 @@ export async function deliverBotReply(
   }
   const outboundId = (inserted as { id: string }).id;
 
-  if (channel.type !== 'email') return; // chat/whatsapp/voice: persist only
+  // Email and WhatsApp actually deliver; both record the outcome on the row and
+  // never throw. Chat/Voice persist only.
+  let metadata: Record<string, unknown> | null = null;
+  if (channel.type === 'email') {
+    const result = await deliverOutboundEmail(supabase, {
+      conversationId: conv.id,
+      orgId: conv.org_id,
+      channelId: channel.id,
+      content,
+    });
+    metadata = result.ok
+      ? { email: { message_id: result.messageId } }
+      : { delivery: { failed: true, error: result.error } };
+  } else if (channel.type === 'whatsapp') {
+    // Bot/system re-engagement may fall back to the approved template outside the 24h window.
+    const result = await deliverOutboundWhatsApp(supabase, {
+      conversationId: conv.id,
+      orgId: conv.org_id,
+      channelId: channel.id,
+      content,
+      allowTemplateFallback: true,
+    });
+    metadata = result.ok
+      ? { whatsapp: { message_sid: result.externalId } }
+      : { delivery: { failed: true, error: result.error } };
+  }
 
-  // Email: send via Resend, then record the outcome on the outbound row. Never
-  // throws — a delivery failure is flagged so an agent can follow up.
-  const result = await deliverOutboundEmail(supabase, {
-    conversationId: conv.id,
-    orgId: conv.org_id,
-    channelId: channel.id,
-    content,
-  });
-  const metadata: Record<string, unknown> = result.ok
-    ? { email: { message_id: result.messageId } }
-    : { delivery: { failed: true, error: result.error } };
-  await supabase
-    .from('messages')
-    .update({ metadata })
-    .eq('org_id', conv.org_id)
-    .eq('id', outboundId);
+  if (metadata) {
+    await supabase.from('messages').update({ metadata }).eq('org_id', conv.org_id).eq('id', outboundId);
+  }
 }
