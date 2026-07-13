@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useFormStatus } from 'react-dom';
+import type { ConversationMode } from '@zendori/core';
 import { acceptDraft, discardDraft, markDraftEdited } from '@/app/inbox/actions';
 import type { DraftItem } from '@/lib/inbox/types';
 
@@ -95,11 +96,21 @@ const actionsStyle: CSSProperties = {
   alignItems: 'center',
 };
 
+const pausedHintStyle: CSSProperties = {
+  fontSize: '0.78rem',
+  color: 'var(--text-muted)',
+  background: 'var(--bg)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  padding: '0.4rem 0.6rem',
+};
+
 type SuggestedReplyProps = {
   orgId: string;
   conversationId: string;
   filterStatus: string;
   filterChannel: string;
+  mode: ConversationMode;
   draft: DraftItem;
 };
 
@@ -117,6 +128,7 @@ export default function SuggestedReply({
   conversationId,
   filterStatus,
   filterChannel,
+  mode,
   draft,
 }: SuggestedReplyProps) {
   const [editing, setEditing] = useState(false);
@@ -136,6 +148,11 @@ export default function SuggestedReply({
 
   return (
     <div style={cardStyle} aria-label="KI-Antwortvorschlag">
+      {mode === 'human' ? (
+        <div style={pausedHintStyle}>
+          Bot pausiert – von Ihnen übernommen. Dieser Vorschlag bleibt als Entwurf nutzbar.
+        </div>
+      ) : null}
       <div style={headerStyle}>
         <span style={titleStyle}>KI-Vorschlag</span>
         <span style={badgeStyle(tone)} title={`Sicherheit ${confidencePercent} %`}>

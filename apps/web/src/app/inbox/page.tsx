@@ -66,6 +66,7 @@ export default async function InboxPage({
           <Link href={`/settings/canned-responses?org=${orgId}`}>Textbausteine</Link>
           <Link href={`/settings/channels?org=${orgId}`}>Kanäle</Link>
           <Link href={`/settings/knowledge?org=${orgId}`}>Wissensdatenbank</Link>
+          <Link href={`/settings/ai?org=${orgId}`}>KI &amp; Autopilot</Link>
           <Link href={`/settings/members?org=${orgId}`}>Mitglieder</Link>
         </nav>
         <div className="inbox-header-spacer" />
@@ -129,6 +130,7 @@ export default async function InboxPage({
                   draft={detail.draft}
                   orgId={orgId}
                   conversationId={detail.conversation.id}
+                  mode={detail.conversation.mode}
                   filterStatus={filters.status}
                   filterChannel={filters.channelId}
                 />

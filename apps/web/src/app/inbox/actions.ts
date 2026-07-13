@@ -741,6 +741,162 @@ async function sendAgentReply(
   return { ok: true };
 }
 
+// --- Phase 5: handoff (take over / return to bot / request draft) -------------
+
+const handoffActionSchema = z.object({
+  org: z.uuid(),
+  conversationId: z.uuid(),
+});
+
+/**
+ * „Übernehmen" (§6 trigger #4): the agent takes the conversation off the bot.
+ * Sets mode='human', status='pending', assigns it to the acting agent and
+ * records a manual handoff_event. While mode='human' the worker stays silent.
+ */
+export async function takeOverConversation(formData: FormData): Promise<void> {
+  const errorText = 'Konversation konnte nicht übernommen werden.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  const { data, error } = await supabase
+    .from('conversations')
+    .update({ mode: 'human', status: 'pending', assignee_id: user.id })
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  // record the manual handoff (triggered_by = acting agent, §6)
+  await supabase.from('handoff_events').insert({
+    org_id: org,
+    conversation_id: conversationId,
+    reason: 'manual',
+    triggered_by: user.id,
+  });
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Konversation übernommen — der Bot pausiert.' }));
+}
+
+/** „An Bot zurückgeben": hands control back to the bot (mode='bot'); status stays. */
+export async function returnToBot(formData: FormData): Promise<void> {
+  const errorText = 'Konversation konnte nicht an den Bot zurückgegeben werden.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('conversations')
+    .update({ mode: 'bot' })
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'An den Bot zurückgegeben.' }));
+}
+
+/**
+ * „Entwurf anfordern" (§6): even while mode='human', re-queue the newest inbound
+ * message with metadata.force_draft so the worker generates a draft without
+ * auto-sending. The worker clears force_draft after the draft is stored.
+ */
+export async function requestDraft(formData: FormData): Promise<void> {
+  const errorText = 'Entwurf konnte nicht angefordert werden.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+
+  // the conversation must belong to the submitted org (RLS also enforces this)
+  const { data: conversation } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (!conversation) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  // newest inbound message of this conversation → re-queue it for the worker
+  const { data: rows } = await supabase
+    .from('messages')
+    .select('id, metadata')
+    .eq('org_id', org)
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'in')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const message = (rows ?? [])[0] as
+    { id: string; metadata: Record<string, unknown> | null } | undefined;
+  if (!message) {
+    redirect(
+      inboxUrl({ ...base, error: 'Keine eingehende Nachricht für einen Entwurf gefunden.' })
+    );
+  }
+
+  const mergedMetadata = { ...(message.metadata ?? {}), force_draft: true };
+  const { error } = await supabase
+    .from('messages')
+    .update({ processing_state: 'pending', metadata: mergedMetadata })
+    .eq('org_id', org)
+    .eq('id', message.id);
+  if (error) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Entwurf wird erstellt …' }));
+}
+
 const draftActionSchema = z.object({
   org: z.uuid(),
   conversationId: z.uuid(),

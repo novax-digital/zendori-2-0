@@ -1,16 +1,13 @@
 import 'server-only';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import {
-  resendReceivedEmailSchema,
-  resendSendResponseSchema,
-  sanitizeMessageId,
-} from '@zendori/channels';
+import { resendReceivedEmailSchema } from '@zendori/channels';
 
 /**
- * Minimal Resend REST client (no SDK — full control over threading headers and
- * one dependency less). Reads RESEND_API_KEY / RESEND_API_BASE / INBOUND_EMAIL_DOMAIN
- * from the server env. Never logs email content, headers or addresses.
+ * Minimal Resend REST client for INBOUND e-mail (retrieve body + attachments).
+ * No SDK — full control and one dependency less. Reads RESEND_API_KEY /
+ * RESEND_API_BASE from the server env. Never logs email content, headers or
+ * addresses. Outbound sending lives in @zendori/channels (email/send.ts) so the
+ * worker can reuse it.
  */
 
 const DEFAULT_API_BASE = 'https://api.resend.com';
@@ -40,12 +37,6 @@ function apiKey(): string {
   const key = process.env.RESEND_API_KEY;
   if (!key) throw new ResendConfigError('RESEND_API_KEY is not set');
   return key;
-}
-
-function inboundDomain(): string {
-  const domain = process.env.INBOUND_EMAIL_DOMAIN?.trim();
-  if (!domain) throw new ResendConfigError('INBOUND_EMAIL_DOMAIN is not set');
-  return domain;
 }
 
 /** Performs an authenticated Resend API request. Resolves config before any I/O so config errors stay config errors. */
@@ -147,60 +138,4 @@ export async function downloadAttachment(url: string): Promise<{ bytes: Uint8Arr
   }
   const buffer = await res.arrayBuffer();
   return { bytes: new Uint8Array(buffer) };
-}
-
-export interface SendEmailParams {
-  from: string;
-  to: string;
-  /** Reply-To (intake address) so customer replies re-enter the inbox. */
-  replyTo?: string;
-  subject: string;
-  text: string;
-  html?: string;
-  /** RFC Message-ID of the mail being answered (In-Reply-To). */
-  inReplyTo?: string;
-  /** Full RFC References chain. */
-  references?: string[];
-}
-
-/**
- * Sends an email via Resend. Generates its own Message-ID (<uuid@INBOUND_EMAIL_DOMAIN>)
- * and returns it so inbound-reply threading is deterministic.
- */
-export async function sendEmail(
-  params: SendEmailParams
-): Promise<{ id: string; messageId: string }> {
-  const domain = inboundDomain();
-  const messageId = `<${randomUUID()}@${domain}>`;
-
-  // Defensively sanitize caller-supplied threading ids against header injection:
-  // accept only strict "<token>" values (drop anything with CR/LF, spaces, extras).
-  const inReplyTo = sanitizeMessageId(params.inReplyTo);
-  const references = (params.references ?? [])
-    .map((ref) => sanitizeMessageId(ref))
-    .filter((ref): ref is string => ref !== undefined);
-
-  const headers: Record<string, string> = { 'Message-ID': messageId };
-  if (inReplyTo) headers['In-Reply-To'] = inReplyTo;
-  if (references.length > 0) {
-    headers['References'] = references.join(' ');
-  }
-
-  const body = {
-    from: params.from,
-    to: [params.to],
-    reply_to: params.replyTo ? [params.replyTo] : undefined,
-    subject: params.subject,
-    text: params.text,
-    html: params.html,
-    headers,
-  };
-
-  const res = await resendRequest('/emails', { method: 'POST', body: JSON.stringify(body) });
-  const json = await parseJson(res, 'sendEmail');
-  const parsed = resendSendResponseSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new ResendApiError('send response did not match schema');
-  }
-  return { id: parsed.data.id, messageId };
 }

@@ -1,9 +1,13 @@
-// Full Phase-4 inbound message pipeline (CLAUDE.md §4/§11). Runs in the worker
-// off the pg-boss queue: classify → (extract + contact correction for
-// email/form) → retrieve (RAG) → draft → persist a pending ai_draft. No
-// auto-send, no handoff (Phase 5). Message content is never logged (§7); the
-// classification/extraction summaries stored in the DB are PII-free by prompt
-// design and live in RLS-protected tables, not in logs.
+// Full inbound message pipeline (CLAUDE.md §4/§6/§11). Runs in the worker off
+// the pg-boss queue: classify → (extract + contact correction for email/form) →
+// retrieve (RAG) → draft → decide. Phase 5 adds the autopilot + handoff gate
+// after the draft step: hand off to a human (low confidence / wants-human /
+// escalation keyword), auto-send when the org enabled autopilot for the channel,
+// or keep the draft as a suggestion. While a human owns the conversation the bot
+// stays silent unless an agent explicitly requested a draft (metadata.force_draft).
+// Message content is never logged (§7); the classification/extraction summaries
+// stored in the DB are PII-free by prompt design and live in RLS-protected
+// tables, not in logs.
 import {
   AI_MODELS,
   EMBEDDING_MODEL,
@@ -15,17 +19,31 @@ import {
   type ClassificationResult,
   type KbChunkMatch,
 } from '@zendori/ai';
+import {
+  type AutoAckTexts,
+  type BusinessHours,
+  autoAckTextsSchema,
+  businessHoursSchema,
+  selectAutoAckText,
+} from '@zendori/channels';
 import type {
   ChannelType,
   ContentType,
   ConversationMode,
   ConversationPriority,
+  HandoffReason,
   MessageDirection,
   ProcessingState,
   SenderType,
   SupabaseClient,
 } from '@zendori/core';
 import { getServiceClient } from '../db.js';
+import {
+  decideDraftAction,
+  deliverBotReply,
+  detectHandoff,
+  isAutopilotEnabled,
+} from './handoff.js';
 
 /**
  * Default ticket categories (docs/legacy-analysis.md §2.4). v2 has no per-org
@@ -145,13 +163,20 @@ export async function processMessage(messageId: string): Promise<void> {
     await markDone(supabase, message.id);
     return;
   }
-  if (conv.mode !== 'bot') {
+  // §6: while a human owns the conversation the bot stays silent — UNLESS an
+  // agent explicitly requested a draft (metadata.force_draft). In force-draft
+  // mode we regenerate a suggestion only: never auto-send, never hand off.
+  const forceDraft = conv.mode === 'human' && message.metadata.force_draft === true;
+  if (conv.mode !== 'bot' && !forceDraft) {
     await markDone(supabase, message.id);
     return;
   }
 
   const orgId = message.org_id;
   const updatedMetadata: Record<string, unknown> = { ...message.metadata };
+  // Consume the explicit-draft request: clear the flag so a stale value can
+  // never re-trigger a bot draft after the agent keeps owning the conversation.
+  if (forceDraft) delete updatedMetadata.force_draft;
   let currentStep: AiRunStep = 'classify';
 
   try {
@@ -306,34 +331,85 @@ export async function processMessage(messageId: string): Promise<void> {
       outputSummary: `confidence=${draftResult.confidence.toFixed(2)} used=${draftResult.used_source_ids.length}`,
     });
 
-    // --- 5. persist the draft ------------------------------------------------
+    // --- 5. decide + persist (§4 message-flow, §6) ---------------------------
     const draftSources = await buildDraftSources(supabase, matches, draftResult.used_source_ids);
-    // Supersede the existing pending draft first (unique-index: max 1 pending
-    // per conversation), then insert the fresh one.
-    const supersede = await supabase
-      .from('ai_drafts')
-      .update({ status: 'discarded' })
-      .eq('conversation_id', conv.id)
-      .eq('status', 'pending');
-    if (supersede.error) throw supersede.error;
-    const insertDraft = await supabase.from('ai_drafts').insert({
-      org_id: orgId,
-      conversation_id: conv.id,
-      message_id: message.id,
-      content: draftResult.reply,
+    const draftPersist = {
+      orgId,
+      conversationId: conv.id,
+      messageId: message.id,
+      reply: draftResult.reply,
       confidence: draftResult.confidence,
       sources: draftSources,
-      model: AI_MODELS.draft,
-      status: 'pending',
+    } as const;
+
+    if (forceDraft) {
+      // Agent explicitly requested a draft while owning the conversation:
+      // regenerate the suggestion only — no autopilot, no handoff (§6).
+      await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+      await finishMessage(supabase, message.id, updatedMetadata);
+      return;
+    }
+
+    // Bot mode: autopilot + handoff gate.
+    const settings = await loadAutopilotSettings(supabase, orgId);
+    const detection = detectHandoff({
+      confidence: draftResult.confidence,
+      threshold: settings.confidenceThreshold,
+      wantsHuman: classification.wants_human,
+      body: cleanBody,
+      keywords: settings.escalationKeywords,
     });
-    if (insertDraft.error) throw insertDraft.error;
+    const action = decideDraftAction(
+      detection.handoff,
+      isAutopilotEnabled(settings.autopilotEnabled, channel.type)
+    );
+
+    if (action === 'auto_send') {
+      // No handoff ⇒ confidence ≥ threshold. Auto-send delivers a real reply to
+      // the customer, so it must be at-most-once and must not fire after a
+      // takeover.
+      // (a) TOCTOU (§6): an agent may have clicked "Übernehmen" during the
+      //     multi-second pipeline. Re-read the mode; if a human now owns the
+      //     conversation, keep the answer as a suggestion and do not send.
+      const stillBot = await isStillBotMode(supabase, orgId, conv.id);
+      if (!stillBot) {
+        await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+        await finishMessage(supabase, message.id, updatedMetadata);
+        return;
+      }
+      // (b) Idempotency (§14): claim the inbound message (pending→done) BEFORE
+      //     the irreversible send. A retry after a successful send finds the row
+      //     already done and claims 0 rows, so the customer is never messaged
+      //     twice. (Residual millisecond race with a takeover between (a) and the
+      //     claim is accepted; the common seconds-long window is covered.)
+      const claimed = await claimMessageDone(supabase, message.id, updatedMetadata);
+      if (!claimed) return; // a prior run/retry already processed this message
+      await persistDraft(supabase, { ...draftPersist, status: 'accepted' });
+      await deliverBotReply(supabase, {
+        conv,
+        channel,
+        content: draftResult.reply,
+        senderType: 'bot',
+      });
+      return; // message already marked done by the claim
+    } else if (action === 'handoff' && detection.reason) {
+      // Keep the draft as a suggestion for the agent, then hand off (§6).
+      await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+      await applyHandoff(supabase, {
+        orgId,
+        conv,
+        channel,
+        reason: detection.reason,
+        autoAckTexts: settings.autoAckTexts,
+        businessHours: settings.businessHours,
+      });
+    } else {
+      // Autopilot off, no handoff: keep the draft as a suggestion (Phase-4).
+      await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+    }
 
     // --- 6. done -------------------------------------------------------------
-    const done = await supabase
-      .from('messages')
-      .update({ processing_state: 'done', metadata: updatedMetadata })
-      .eq('id', message.id);
-    if (done.error) throw done.error;
+    await finishMessage(supabase, message.id, updatedMetadata);
   } catch (err) {
     if (err instanceof PipelineError) throw err;
     throw new PipelineError(currentStep, orgId, conv.id, err);
@@ -381,6 +457,201 @@ async function markDone(supabase: SupabaseClient, messageId: string): Promise<vo
     .update({ processing_state: 'done' })
     .eq('id', messageId);
   if (error) throw error;
+}
+
+/** True if the conversation is still in bot mode (re-read before an auto-send). */
+async function isStillBotMode(
+  supabase: SupabaseClient,
+  orgId: string,
+  conversationId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('conversations')
+    .select('mode')
+    .eq('org_id', orgId)
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { mode?: string } | null)?.mode === 'bot';
+}
+
+/**
+ * Atomically claim the inbound message for the auto-send path: flip
+ * pending→done in a single conditional UPDATE and persist the metadata. Returns
+ * whether this run won the claim (exactly one row updated). A pg-boss retry that
+ * re-runs after a successful send finds the row already done and claims nothing,
+ * so the customer is never messaged twice.
+ */
+async function claimMessageDone(
+  supabase: SupabaseClient,
+  messageId: string,
+  metadata: Record<string, unknown>
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('messages')
+    .update({ processing_state: 'done', metadata })
+    .eq('id', messageId)
+    .eq('direction', 'in')
+    .eq('processing_state', 'pending')
+    .select('id');
+  if (error) throw error;
+  return (data?.length ?? 0) === 1;
+}
+
+/** Mark the inbound message processed and persist its accumulated metadata. */
+async function finishMessage(
+  supabase: SupabaseClient,
+  messageId: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  const { error } = await supabase
+    .from('messages')
+    .update({ processing_state: 'done', metadata })
+    .eq('id', messageId);
+  if (error) throw error;
+}
+
+interface DraftPersistArgs {
+  orgId: string;
+  conversationId: string;
+  messageId: string;
+  reply: string;
+  confidence: number;
+  sources: DraftSourceEntry[];
+  status: 'pending' | 'accepted';
+}
+
+/**
+ * Persist the drafted reply. Always discards the current pending draft first
+ * (ai_drafts_one_pending_idx allows at most one pending per conversation), then
+ * inserts the fresh row with the requested status ('pending' = suggestion,
+ * 'accepted' = auto-sent by the bot).
+ */
+async function persistDraft(supabase: SupabaseClient, args: DraftPersistArgs): Promise<void> {
+  const supersede = await supabase
+    .from('ai_drafts')
+    .update({ status: 'discarded' })
+    .eq('conversation_id', args.conversationId)
+    .eq('status', 'pending');
+  if (supersede.error) throw supersede.error;
+  const insert = await supabase.from('ai_drafts').insert({
+    org_id: args.orgId,
+    conversation_id: args.conversationId,
+    message_id: args.messageId,
+    content: args.reply,
+    confidence: args.confidence,
+    sources: args.sources,
+    model: AI_MODELS.draft,
+    status: args.status,
+  });
+  if (insert.error) throw insert.error;
+}
+
+interface AutopilotSettings {
+  /** org_settings.autopilot_enabled jsonb ({"chat": true, …}); read defensively. */
+  autopilotEnabled: unknown;
+  confidenceThreshold: number;
+  escalationKeywords: string[];
+  /** org_settings.auto_ack_texts jsonb; parsed via autoAckTextsSchema when used. */
+  autoAckTexts: unknown;
+  /** org_settings.business_hours jsonb (nullable); parsed via businessHoursSchema. */
+  businessHours: unknown;
+}
+
+/** Load the Phase-5 autopilot/handoff knobs for an org. Row exists by trigger. */
+async function loadAutopilotSettings(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<AutopilotSettings> {
+  const { data, error } = await supabase
+    .from('org_settings')
+    .select(
+      'autopilot_enabled, confidence_threshold, escalation_keywords, auto_ack_texts, business_hours'
+    )
+    .eq('org_id', orgId)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as {
+    autopilot_enabled: unknown;
+    confidence_threshold: number | string | null;
+    escalation_keywords: unknown;
+    auto_ack_texts: unknown;
+    business_hours: unknown;
+  } | null;
+  return {
+    autopilotEnabled: row?.autopilot_enabled ?? {},
+    confidenceThreshold: parseThreshold(row?.confidence_threshold),
+    escalationKeywords: Array.isArray(row?.escalation_keywords)
+      ? row.escalation_keywords.filter((k): k is string => typeof k === 'string')
+      : [],
+    autoAckTexts: row?.auto_ack_texts ?? {},
+    businessHours: row?.business_hours ?? null,
+  };
+}
+
+/** Clamp org_settings.confidence_threshold (numeric → number|string) to [0,1]; default 0.7. */
+function parseThreshold(value: number | string | null | undefined): number {
+  const n = typeof value === 'string' ? Number.parseFloat(value) : value;
+  if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n;
+  return 0.7; // org_settings.confidence_threshold default
+}
+
+interface ApplyHandoffArgs {
+  orgId: string;
+  conv: LoadedConversation;
+  channel: LoadedChannel;
+  reason: HandoffReason;
+  autoAckTexts: unknown;
+  businessHours: unknown;
+}
+
+/**
+ * Hand the conversation to a human (§6): flip mode='human'/status='pending'
+ * (org-scoped), record the automatic handoff_event (triggered_by null — no
+ * agent), and optionally send the customer an auto-ack (in-/out-of-hours text)
+ * as a system message. The mode flip is done first so a retry after a partial
+ * failure short-circuits at the human-mode guard instead of adding a second
+ * handoff_event (one event per message).
+ */
+async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): Promise<void> {
+  const convUpdate = await supabase
+    .from('conversations')
+    .update({ mode: 'human', status: 'pending' })
+    .eq('org_id', args.orgId)
+    .eq('id', args.conv.id);
+  if (convUpdate.error) throw convUpdate.error;
+
+  const eventInsert = await supabase.from('handoff_events').insert({
+    org_id: args.orgId,
+    conversation_id: args.conv.id,
+    reason: args.reason,
+    triggered_by: null,
+  });
+  if (eventInsert.error) throw eventInsert.error;
+
+  const ack = parseAutoAckTexts(args.autoAckTexts);
+  if (!ack) return; // no auto-ack configured
+  const text = selectAutoAckText(new Date(), ack, parseBusinessHours(args.businessHours));
+  if (!text) return; // disabled or empty
+  await deliverBotReply(supabase, {
+    conv: args.conv,
+    channel: args.channel,
+    content: text,
+    senderType: 'system',
+  });
+}
+
+/** Defensively parse org_settings.auto_ack_texts; null when unset/invalid. */
+function parseAutoAckTexts(value: unknown): AutoAckTexts | null {
+  const parsed = autoAckTextsSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Defensively parse org_settings.business_hours; null when unset/invalid. */
+function parseBusinessHours(value: unknown): BusinessHours | null {
+  if (value === null || value === undefined) return null;
+  const parsed = businessHoursSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

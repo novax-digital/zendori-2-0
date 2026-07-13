@@ -21,6 +21,23 @@ const HEARTBEAT_QUEUE = 'worker.heartbeat';
 const processMessageJobSchema = z.object({ messageId: z.uuid() });
 const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
 
+/**
+ * Ensure the queue exists with the 'stately' policy. createQueue does not change
+ * the policy of an existing queue and updateQueue cannot set policy (pg-boss
+ * v12), so when an earlier worker version created the queue with a different
+ * policy we drop and recreate it. Safe: the scan re-derives all work from the
+ * source-of-truth DB state every few seconds, so any dropped queued job is
+ * re-enqueued (there is a single worker process — §2).
+ */
+async function ensureQueuePolicy(boss: PgBoss, name: string): Promise<void> {
+  await boss.createQueue(name, { policy: 'stately' });
+  const existing = await boss.getQueue(name);
+  if (existing && existing.policy !== 'stately') {
+    await boss.deleteQueue(name);
+    await boss.createQueue(name, { policy: 'stately' });
+  }
+}
+
 async function main(): Promise<void> {
   const env = loadWorkerEnv();
 
@@ -40,11 +57,15 @@ async function main(): Promise<void> {
   });
 
   // --- Phase-4 pipelines -----------------------------------------------------
-  // 'singleton' policy: at most one *active* job per singletonKey (the row id),
-  // so a redelivered scan never runs the same message/source concurrently. The
-  // handlers additionally re-check the row's state as a second idempotency layer.
-  await boss.createQueue(PROCESS_MESSAGE_QUEUE, { policy: 'singleton' });
-  await boss.createQueue(INDEX_SOURCE_QUEUE, { policy: 'singleton' });
+  // 'stately' policy: at most one job in the created OR active state per
+  // singletonKey (the row id). This blocks BOTH a concurrent run and a queued
+  // duplicate, so a scan that re-sends the same message/source every 3s while it
+  // is still pending never fans out into multiple LLM pipeline runs. createQueue
+  // does NOT change the policy of an already-existing queue, so updateQueue
+  // enforces it on queues created by earlier worker versions. The handlers still
+  // re-check row state / claim before external side effects (belt and braces).
+  await ensureQueuePolicy(boss, PROCESS_MESSAGE_QUEUE);
+  await ensureQueuePolicy(boss, INDEX_SOURCE_QUEUE);
 
   await boss.work(
     PROCESS_MESSAGE_QUEUE,

@@ -3,8 +3,11 @@
 import type { ConversationPriority, ConversationStatus } from '@zendori/core';
 import {
   addNote,
+  requestDraft,
+  returnToBot,
   setConversationAssignee,
   setConversationStatus,
+  takeOverConversation,
   updateContact,
 } from '@/app/inbox/actions';
 import type { ConversationDetail, MemberOption } from '@/lib/inbox/types';
@@ -160,6 +163,31 @@ export default function ContextSidebar({
           <span className="inbox-badge inbox-badge-mode">
             {conversation.mode === 'bot' ? 'Bot' : 'Mensch'}
           </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+          {conversation.mode === 'bot' ? (
+            <form action={takeOverConversation}>
+              {hiddenFields}
+              <button className="primary" type="submit">
+                Übernehmen
+              </button>
+            </form>
+          ) : (
+            <>
+              <form action={returnToBot}>
+                {hiddenFields}
+                <button className="ghost" type="submit">
+                  An Bot zurückgeben
+                </button>
+              </form>
+              <form action={requestDraft}>
+                {hiddenFields}
+                <button className="ghost" type="submit">
+                  Entwurf anfordern
+                </button>
+              </form>
+            </>
+          )}
         </div>
       </section>
 
