@@ -16,6 +16,7 @@ import ConversationList from '@/components/inbox/ConversationList';
 import ConversationView from '@/components/inbox/ConversationView';
 import FilterBar from '@/components/inbox/FilterBar';
 import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
+import SuggestedReply from '@/components/inbox/SuggestedReply';
 
 type InboxSearchParams = {
   org?: string;
@@ -64,6 +65,7 @@ export default async function InboxPage({
           <span className="inbox-nav-group">Einstellungen:</span>
           <Link href={`/settings/canned-responses?org=${orgId}`}>Textbausteine</Link>
           <Link href={`/settings/channels?org=${orgId}`}>Kanäle</Link>
+          <Link href={`/settings/knowledge?org=${orgId}`}>Wissensdatenbank</Link>
           <Link href={`/settings/members?org=${orgId}`}>Mitglieder</Link>
         </nav>
         <div className="inbox-header-spacer" />
@@ -121,6 +123,16 @@ export default async function InboxPage({
           {detail ? (
             <>
               <ConversationView detail={detail} />
+              {detail.draft ? (
+                <SuggestedReply
+                  key={detail.draft.id}
+                  draft={detail.draft}
+                  orgId={orgId}
+                  conversationId={detail.conversation.id}
+                  filterStatus={filters.status}
+                  filterChannel={filters.channelId}
+                />
+              ) : null}
               <Composer
                 key={detail.conversation.id}
                 orgId={orgId}

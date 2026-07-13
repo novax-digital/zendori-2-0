@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { conversationStatusSchema } from '@zendori/core';
+import type { SupabaseClient } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { deliverOutboundEmail } from '@/lib/email/dispatch';
@@ -650,4 +651,246 @@ export async function ingestTestMessage(formData: FormData): Promise<void> {
   revalidatePath('/inbox');
   revalidatePath('/test-channel');
   redirect(testChannelUrl(org, { notice: 'Nachricht eingespeist.' }));
+}
+
+// --- AI suggested replies (Phase 4 — drafts, never auto-sent) -----------------
+
+type ReplyOutcome = { ok: true } | { ok: false; error: string };
+
+/**
+ * Persists an outbound agent message and, for inbound-email channels, delivers
+ * it via Resend (recording the outcome on the message). Mirrors sendReply's
+ * delivery path so accepting/editing a draft reaches the customer the same way.
+ * Never logs message content or recipient addresses (§7).
+ */
+async function sendAgentReply(
+  supabase: SupabaseClient,
+  org: string,
+  conversationId: string,
+  content: string
+): Promise<ReplyOutcome> {
+  const { data } = await supabase
+    .from('conversations')
+    .select('id, channel_id')
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .maybeSingle();
+  const conversation = data as { id: string; channel_id: string } | null;
+  if (!conversation) {
+    return { ok: false, error: 'Konversation wurde nicht gefunden.' };
+  }
+
+  const { data: insertedRow, error } = await supabase
+    .from('messages')
+    .insert({
+      org_id: org,
+      conversation_id: conversationId,
+      channel_id: conversation.channel_id,
+      direction: 'out',
+      sender_type: 'agent',
+      content,
+      content_type: 'text',
+      processing_state: null,
+    })
+    .select('id')
+    .single();
+  if (error || !insertedRow) {
+    return { ok: false, error: 'Antwort konnte nicht gespeichert werden.' };
+  }
+  const messageId = (insertedRow as { id: string }).id;
+
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('type, config')
+    .eq('org_id', org)
+    .eq('id', conversation.channel_id)
+    .maybeSingle();
+  const channel = channelRow as { type: string; config: { mode?: unknown } } | null;
+  const isInboundEmail = channel?.type === 'email' && channel.config.mode === 'inbound';
+
+  if (isInboundEmail) {
+    const admin = createSupabaseAdminClient();
+    const result = admin
+      ? await deliverOutboundEmail(admin, {
+          conversationId,
+          orgId: org,
+          channelId: conversation.channel_id,
+          content,
+        })
+      : ({ ok: false, error: 'E-Mail-Versand ist serverseitig nicht konfiguriert.' } as const);
+
+    if (!result.ok) {
+      await supabase
+        .from('messages')
+        .update({ metadata: { delivery: { failed: true, error: result.error } } })
+        .eq('org_id', org)
+        .eq('id', messageId);
+      return {
+        ok: false,
+        error: `Antwort gespeichert, aber E-Mail-Versand fehlgeschlagen: ${result.error}`,
+      };
+    }
+
+    await supabase
+      .from('messages')
+      .update({ metadata: { email: { message_id: result.messageId } } })
+      .eq('org_id', org)
+      .eq('id', messageId);
+  }
+
+  return { ok: true };
+}
+
+const draftActionSchema = z.object({
+  org: z.uuid(),
+  conversationId: z.uuid(),
+  draftId: z.uuid(),
+});
+
+const editDraftSchema = draftActionSchema.extend({
+  content: z.string().min(1),
+});
+
+/**
+ * Übernehmen: claims the pending draft (pending→accepted in one conditional
+ * update) BEFORE sending, so a double click / race can never send it twice —
+ * only the request that flips exactly one row proceeds to deliver.
+ */
+export async function acceptDraft(formData: FormData): Promise<void> {
+  const errorText = 'Vorschlag konnte nicht übernommen werden.';
+  const parsed = draftActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+    draftId: formData.get('draftId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId, draftId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  // Claim first: only the row still 'pending' flips, and only for this org.
+  const { data: claimed, error: claimError } = await supabase
+    .from('ai_drafts')
+    .update({ status: 'accepted' })
+    .eq('org_id', org)
+    .eq('id', draftId)
+    .eq('conversation_id', conversationId)
+    .eq('status', 'pending')
+    .select('id, content');
+  const claim = (claimed ?? [])[0] as { id: string; content: string } | undefined;
+  if (claimError || !claim) {
+    redirect(inboxUrl({ ...base, error: 'Der Vorschlag ist nicht mehr verfügbar.' }));
+  }
+
+  const sent = await sendAgentReply(supabase, org, conversationId, claim.content);
+  if (!sent.ok) {
+    // delivery failed after claiming → release the claim so the agent can retry
+    await supabase
+      .from('ai_drafts')
+      .update({ status: 'pending' })
+      .eq('org_id', org)
+      .eq('id', draftId)
+      .eq('status', 'accepted');
+    redirect(inboxUrl({ ...base, error: sent.error }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Vorschlag gesendet.' }));
+}
+
+/** Verwerfen: marks the pending draft discarded without sending anything. */
+export async function discardDraft(formData: FormData): Promise<void> {
+  const errorText = 'Vorschlag konnte nicht verworfen werden.';
+  const parsed = draftActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+    draftId: formData.get('draftId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId, draftId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase
+    .from('ai_drafts')
+    .update({ status: 'discarded' })
+    .eq('org_id', org)
+    .eq('id', draftId)
+    .eq('conversation_id', conversationId)
+    .eq('status', 'pending');
+  if (error) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Vorschlag verworfen.' }));
+}
+
+/**
+ * Bearbeiten: sends the agent-edited draft content and marks the draft edited.
+ * Editing happens inline in the SuggestedReply card; the edited text is sent
+ * through the same path as a normal agent reply.
+ */
+export async function markDraftEdited(formData: FormData): Promise<void> {
+  const errorText = 'Bearbeitete Antwort konnte nicht gesendet werden.';
+  const parsed = editDraftSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+    draftId: formData.get('draftId'),
+    content: textField(formData.get('content')),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId, draftId, content } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  // Claim first (pending→edited); only the winner of the race sends the edit.
+  const { data: claimed, error: claimError } = await supabase
+    .from('ai_drafts')
+    .update({ status: 'edited' })
+    .eq('org_id', org)
+    .eq('id', draftId)
+    .eq('conversation_id', conversationId)
+    .eq('status', 'pending')
+    .select('id');
+  const claim = (claimed ?? [])[0] as { id: string } | undefined;
+  if (claimError || !claim) {
+    redirect(inboxUrl({ ...base, error: 'Der Vorschlag ist nicht mehr verfügbar.' }));
+  }
+
+  const sent = await sendAgentReply(supabase, org, conversationId, content);
+  if (!sent.ok) {
+    // delivery failed after claiming → release the claim so the agent can retry
+    await supabase
+      .from('ai_drafts')
+      .update({ status: 'pending' })
+      .eq('org_id', org)
+      .eq('id', draftId)
+      .eq('status', 'edited');
+    redirect(inboxUrl({ ...base, error: sent.error }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Bearbeitete Antwort gesendet.' }));
 }

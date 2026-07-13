@@ -5,6 +5,8 @@ import type {
   CannedResponseItem,
   ConversationDetail,
   ConversationListItem,
+  DraftItem,
+  DraftSource,
   InboxFilters,
   MemberOption,
   MessageAttachment,
@@ -103,6 +105,36 @@ type AttachmentRow = {
   size: number;
 };
 
+type DraftRow = {
+  id: string;
+  content: string;
+  confidence: number | string;
+  sources: unknown;
+  model: string;
+  created_at: string;
+};
+
+/**
+ * Defensively normalizes the ai_drafts.sources jsonb (worker-written, so treated
+ * as untrusted at this boundary) into typed DraftSource entries.
+ */
+function parseDraftSources(raw: unknown): DraftSource[] {
+  if (!Array.isArray(raw)) return [];
+  const sources: DraftSource[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const rec = entry as Record<string, unknown>;
+    const sourceId = typeof rec.source_id === 'string' ? rec.source_id : null;
+    if (!sourceId) continue;
+    sources.push({
+      source_id: sourceId,
+      uri: typeof rec.uri === 'string' ? rec.uri : null,
+      snippet: typeof rec.snippet === 'string' ? rec.snippet : '',
+    });
+  }
+  return sources;
+}
+
 /** Basename of a storage path (path convention: <org_id>/<message_id>/<filename>). */
 function attachmentFilename(storagePath: string): string {
   const parts = storagePath.split('/');
@@ -182,7 +214,7 @@ export async function getConversationDetail(
   const { channel, contact, ...conversation } =
     conversationData as unknown as ConversationDetailRow;
 
-  const [{ data: messageData }, { data: noteData }] = await Promise.all([
+  const [{ data: messageData }, { data: noteData }, { data: draftData }] = await Promise.all([
     supabase
       .from('messages')
       .select('*')
@@ -193,10 +225,31 @@ export async function getConversationDetail(
       .select('id, content, author_id, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true }),
+    // newest pending AI draft (the unique index guarantees at most one pending)
+    supabase
+      .from('ai_drafts')
+      .select('id, content, confidence, sources, model, created_at')
+      .eq('org_id', orgId)
+      .eq('conversation_id', conversationId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   const messageRows = (messageData ?? []) as unknown as Message[];
   const noteRows = (noteData ?? []) as unknown as NoteRow[];
+  const draftRow = draftData as unknown as DraftRow | null;
+  const draft: DraftItem | null = draftRow
+    ? {
+        id: draftRow.id,
+        content: draftRow.content,
+        confidence: Number(draftRow.confidence),
+        sources: parseDraftSources(draftRow.sources),
+        model: draftRow.model,
+        created_at: draftRow.created_at,
+      }
+    : null;
 
   const [messages, emailByUserId] = await Promise.all([
     attachMessageAttachments(orgId, messageRows),
@@ -207,7 +260,7 @@ export async function getConversationDetail(
     author_email: n.author_id ? (emailByUserId.get(n.author_id) ?? null) : null,
   }));
 
-  return { conversation, channel, contact, messages, notes };
+  return { conversation, channel, contact, messages, notes, draft };
 }
 
 export async function listChannels(orgId: string): Promise<Channel[]> {

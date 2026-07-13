@@ -41,12 +41,31 @@ export type MessageWithAttachments = Message & {
   attachments: MessageAttachment[];
 };
 
+/** Provenance of a single RAG source used for a draft (kb_sources.uri + a chunk excerpt). */
+export type DraftSource = {
+  source_id: string;
+  uri: string | null;
+  snippet: string;
+};
+
+/** A pending AI-suggested reply (ai_drafts) shown above the composer (Phase 4 — never auto-sent). */
+export type DraftItem = {
+  id: string;
+  content: string;
+  confidence: number;
+  sources: DraftSource[];
+  model: string;
+  created_at: string;
+};
+
 export type ConversationDetail = {
   conversation: Conversation;
   channel: Pick<Channel, 'id' | 'name' | 'type'> | null;
   contact: Contact | null;
   messages: MessageWithAttachments[];
   notes: NoteItem[];
+  /** Newest pending AI draft for this conversation, or null when none is open. */
+  draft: DraftItem | null;
 };
 
 export type InboxFilters = {

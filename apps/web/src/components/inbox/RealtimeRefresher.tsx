@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 
 /**
- * Subscribes to postgres_changes on messages and conversations for the active org
- * and refreshes the current route (debounced) so server components re-render with
- * fresh data. Renders nothing.
+ * Subscribes to postgres_changes on messages, conversations and ai_drafts for the
+ * active org and refreshes the current route (debounced) so server components
+ * re-render with fresh data — this is how a new AI draft appears live above the
+ * composer. Renders nothing.
  */
 export default function RealtimeRefresher({ orgId }: { orgId: string }): null {
   const router = useRouter();
@@ -34,6 +35,11 @@ export default function RealtimeRefresher({ orgId }: { orgId: string }): null {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations', filter: `org_id=eq.${orgId}` },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ai_drafts', filter: `org_id=eq.${orgId}` },
         scheduleRefresh
       )
       .subscribe();

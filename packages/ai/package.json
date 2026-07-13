@@ -12,12 +12,16 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@zendori/core": "workspace:*"
+    "@anthropic-ai/sdk": "^0.111.0",
+    "@zendori/core": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0"
+    "@types/node": "^22.15.0",
+    "vitest": "^3.2.7"
   }
 }

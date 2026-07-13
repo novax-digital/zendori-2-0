@@ -167,6 +167,78 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
     expect(memberInsertError).not.toBeNull();
   });
 
+  it('ai_drafts: members read + update status, service-role inserts, foreign orgs blind', async () => {
+    const { data: channel } = await admin
+      .from('channels')
+      .select('id')
+      .eq('org_id', orgAId)
+      .limit(1)
+      .single();
+    const { data: conv } = await admin
+      .from('conversations')
+      .insert({ org_id: orgAId, channel_id: channel!.id, status: 'open', mode: 'bot' })
+      .select('id')
+      .single();
+
+    // service role (worker) inserts the draft
+    const { data: draft, error: insertError } = await admin
+      .from('ai_drafts')
+      .insert({
+        org_id: orgAId,
+        conversation_id: conv!.id,
+        content: 'Vorgeschlagene Antwort',
+        confidence: 0.82,
+        model: 'claude-sonnet-4-6',
+      })
+      .select('id')
+      .single();
+    expect(insertError).toBeNull();
+
+    // a member may read it and update its status (accept / discard)
+    const { data: visible } = await alice.from('ai_drafts').select('*').eq('id', draft!.id);
+    expect(visible).toHaveLength(1);
+    const { error: updateError } = await alice
+      .from('ai_drafts')
+      .update({ status: 'discarded' })
+      .eq('id', draft!.id);
+    expect(updateError).toBeNull();
+
+    // a member may NOT insert drafts (worker-only)
+    const { error: memberInsertError } = await alice.from('ai_drafts').insert({
+      org_id: orgAId,
+      conversation_id: conv!.id,
+      content: 'x',
+      model: 'x',
+    });
+    expect(memberInsertError).not.toBeNull();
+
+    // a foreign org's draft is invisible
+    const { data: orgC } = await admin
+      .from('organizations')
+      .insert({ name: 'Org D', slug: `org-d-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    const { data: chC } = await admin
+      .from('channels')
+      .insert({ org_id: orgC!.id, type: 'chat', name: 'c' })
+      .select('id')
+      .single();
+    const { data: convC } = await admin
+      .from('conversations')
+      .insert({ org_id: orgC!.id, channel_id: chC!.id, status: 'open', mode: 'bot' })
+      .select('id')
+      .single();
+    const { data: draftC } = await admin
+      .from('ai_drafts')
+      .insert({ org_id: orgC!.id, conversation_id: convC!.id, content: 'geheim', model: 'x' })
+      .select('id')
+      .single();
+    const { data: deniedAlice } = await alice.from('ai_drafts').select('*').eq('id', draftC!.id);
+    expect(deniedAlice).toHaveLength(0);
+
+    await admin.from('organizations').delete().eq('id', orgC!.id);
+  });
+
   it('accept_invite rejects a token issued for another email', async () => {
     const { data: invite } = await alice
       .from('invites')

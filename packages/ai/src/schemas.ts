@@ -1,0 +1,57 @@
+// zod schemas + inferred types for the Phase-4 AI pipeline. These are the
+// contract at the AI boundary (CLAUDE.md §8.4): classify/extract responses are
+// validated by the Anthropic SDK against these via zodOutputFormat, and the
+// draft response is defensively parsed against DraftResultSchema.
+import { z } from 'zod';
+
+/** Classification of an inbound customer message. */
+export const ClassificationResultSchema = z.object({
+  language: z.enum(['de', 'en', 'other']),
+  /** Short German keyword/phrase describing the intent (no PII). */
+  intent: z.string().max(80),
+  priority: z.enum(['low', 'normal', 'high', 'urgent']),
+  wants_human: z.boolean(),
+  is_spam: z.boolean(),
+  is_auto_reply: z.boolean(),
+  /** Exactly one German sentence summarising the request (no PII). */
+  summary: z.string().max(300),
+});
+export type ClassificationResult = z.infer<typeof ClassificationResultSchema>;
+
+/** Ticketisation / extraction of the real sender and request from a message. */
+export const ExtractionResultSchema = z.object({
+  contact: z.object({
+    name: z.string().nullable(),
+    email: z.string().nullable(),
+    phone: z.string().nullable(),
+  }),
+  subject: z.string(),
+  description: z.string(),
+  category: z.string(),
+  missing_fields: z.array(z.string()),
+  questions: z.array(z.string()).max(3),
+  confidence: z.number().min(0).max(1),
+});
+export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
+
+/**
+ * RAG answer draft produced by the draft model. `confidence` is intentionally
+ * an unbounded number here: the draft is defensively parsed from plain text, and
+ * a slightly out-of-range confidence should be clamped into 0..1 (see
+ * parseDraftResponse) rather than discarding an otherwise-valid reply.
+ */
+export const DraftResultSchema = z.object({
+  reply: z.string(),
+  confidence: z.number(),
+  used_source_ids: z.array(z.string()),
+});
+export type DraftResult = z.infer<typeof DraftResultSchema>;
+
+/** A knowledge-base chunk returned by the match_kb_chunks RPC. */
+export const KbChunkMatchSchema = z.object({
+  id: z.string(),
+  source_id: z.string(),
+  content: z.string(),
+  similarity: z.number(),
+});
+export type KbChunkMatch = z.infer<typeof KbChunkMatchSchema>;

@@ -2,6 +2,10 @@
 // and confidence scoring are implemented in Phase 4; the constants below are the
 // binding model/config decisions from CLAUDE.md §3 and are already referenced by
 // docs and env validation.
+//
+// NOTE: the re-exports at the bottom of this file import these constants back
+// (chunking/embeddings/anthropic). Keep the constant declarations above the
+// `export *` lines so they are initialised before the cycle resolves.
 
 export const AI_MODELS = {
   /** Classification + extraction/ticketization. */
@@ -22,3 +26,10 @@ export const CHUNKING = {
 
 /** Steps logged to ai_runs. */
 export type AiRunStep = 'classify' | 'extract' | 'retrieve' | 'draft';
+
+export * from './schemas.js';
+export * from './prompts.js';
+export * from './cost.js';
+export * from './chunking.js';
+export * from './embeddings.js';
+export * from './anthropic.js';
