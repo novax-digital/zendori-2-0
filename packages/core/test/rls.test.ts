@@ -50,12 +50,19 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
   });
 
   it('creator becomes owner of a new org via trigger', async () => {
-    const { data, error } = await alice
-      .from('organizations')
-      .insert({ name: 'Org A', slug: `org-a-${randomUUID().slice(0, 8)}` })
-      .select()
-      .single();
+    // Insert WITHOUT .select(): INSERT ... RETURNING evaluates the SELECT
+    // policy before the AFTER trigger grants membership, so returning the
+    // row in the same statement fails RLS. The app inserts the same way.
+    const slug = `org-a-${randomUUID().slice(0, 8)}`;
+    const { error } = await alice.from('organizations').insert({ name: 'Org A', slug });
     expect(error).toBeNull();
+
+    const { data, error: selectError } = await alice
+      .from('organizations')
+      .select()
+      .eq('slug', slug)
+      .single();
+    expect(selectError).toBeNull();
     orgAId = data!.id;
 
     const { data: members } = await alice.from('org_members').select('*').eq('org_id', orgAId);
