@@ -9,18 +9,30 @@ import { getServiceClient, toErrorInfo } from './db.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
+export const HUBSPOT_SYNC_QUEUE = 'hubspot.sync-conversation';
 export const PROCESS_MESSAGE_RETRY_LIMIT = 3;
 export const INDEX_SOURCE_RETRY_LIMIT = 2;
+export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
 
 const SCAN_INTERVAL_MS = 3_000;
 const MESSAGE_BATCH = 20;
 const SOURCE_BATCH = 10;
+const HUBSPOT_SYNC_BATCH = 20;
+// Ordered-by-requested_at window scanned each tick before the JS due-filter (see
+// enqueueDueHubspotSyncs): PostgREST cannot compare two columns, so we over-fetch
+// the most-recently-requested conversations and filter locally. A freshly-armed
+// conversation always has the newest requested_at, so it sits at the front of the
+// window and is never starved by older, already-synced rows.
+const HUBSPOT_SYNC_CANDIDATES = 100;
 
 export interface ProcessMessageJob {
   messageId: string;
 }
 export interface IndexSourceJob {
   sourceId: string;
+}
+export interface HubspotSyncJob {
+  conversationId: string;
 }
 
 /**
@@ -37,6 +49,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
     try {
       await enqueuePendingMessages(boss, supabase);
       await enqueuePendingSources(boss, supabase);
+      await enqueueDueHubspotSyncs(boss, supabase);
     } catch (err) {
       logger.error({ err: toErrorInfo(err) }, 'scan tick failed');
     } finally {
@@ -86,5 +99,43 @@ async function enqueuePendingSources(boss: PgBoss, supabase: SupabaseClient): Pr
       retryLimit: INDEX_SOURCE_RETRY_LIMIT,
       retryBackoff: true,
     });
+  }
+}
+
+/**
+ * Enqueue conversations whose HubSpot sync is "due" (§ Phase 6): a sync was
+ * requested and not yet reflected — hubspot_sync_requested_at is set AND
+ * (hubspot_synced_at is null OR hubspot_synced_at < hubspot_sync_requested_at).
+ * PostgREST cannot compare two columns, so we fetch the most-recently-requested
+ * candidates (index-backed) and apply the timestamp comparison in JS.
+ */
+async function enqueueDueHubspotSyncs(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('conversations')
+    .select('id, hubspot_sync_requested_at, hubspot_synced_at')
+    .not('hubspot_sync_requested_at', 'is', null)
+    .order('hubspot_sync_requested_at', { ascending: false })
+    .limit(HUBSPOT_SYNC_CANDIDATES);
+  if (error) throw error;
+
+  const rows = (data ?? []) as {
+    id: string;
+    hubspot_sync_requested_at: string;
+    hubspot_synced_at: string | null;
+  }[];
+
+  let enqueued = 0;
+  for (const row of rows) {
+    if (enqueued >= HUBSPOT_SYNC_BATCH) break;
+    const requestedMs = Date.parse(row.hubspot_sync_requested_at);
+    const syncedMs = row.hubspot_synced_at !== null ? Date.parse(row.hubspot_synced_at) : null;
+    const isDue = syncedMs === null || syncedMs < requestedMs;
+    if (!isDue) continue;
+    await boss.send(HUBSPOT_SYNC_QUEUE, { conversationId: row.id } satisfies HubspotSyncJob, {
+      singletonKey: row.id,
+      retryLimit: HUBSPOT_SYNC_RETRY_LIMIT,
+      retryBackoff: true,
+    });
+    enqueued += 1;
   }
 }

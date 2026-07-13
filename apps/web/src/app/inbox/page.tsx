@@ -4,6 +4,7 @@ import { signOut } from '@/app/actions';
 import { requireActiveOrg } from '@/lib/org';
 import {
   getConversationDetail,
+  getHubspotSidebarInfo,
   listCannedResponses,
   listChannels,
   listConversations,
@@ -44,12 +45,13 @@ export default async function InboxPage({
   const filters = parseFilters(params.status, params.channel);
   const selectedId = params.c;
 
-  const [conversations, channels, members, cannedResponses, detail] = await Promise.all([
+  const [conversations, channels, members, cannedResponses, detail, hubspot] = await Promise.all([
     listConversations(orgId, filters),
     listChannels(orgId),
     listMembers(orgId),
     listCannedResponses(orgId),
     selectedId ? getConversationDetail(orgId, selectedId) : Promise.resolve(null),
+    getHubspotSidebarInfo(orgId),
   ]);
 
   const activeOrg = orgs.find((org) => org.id === orgId);
@@ -67,6 +69,7 @@ export default async function InboxPage({
           <Link href={`/settings/channels?org=${orgId}`}>Kanäle</Link>
           <Link href={`/settings/knowledge?org=${orgId}`}>Wissensdatenbank</Link>
           <Link href={`/settings/ai?org=${orgId}`}>KI &amp; Autopilot</Link>
+          <Link href={`/settings/integrations?org=${orgId}`}>Integrationen</Link>
           <Link href={`/settings/members?org=${orgId}`}>Mitglieder</Link>
         </nav>
         <div className="inbox-header-spacer" />
@@ -158,6 +161,7 @@ export default async function InboxPage({
               orgId={orgId}
               detail={detail}
               members={members}
+              hubspot={hubspot}
               filterStatus={filters.status}
               filterChannel={filters.channelId}
             />

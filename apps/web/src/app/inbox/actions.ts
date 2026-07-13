@@ -221,9 +221,27 @@ export async function setConversationStatus(formData: FormData): Promise<void> {
   };
 
   const supabase = await createSupabaseServerClient();
+
+  // Resolving a conversation should push the closing state to HubSpot (stage
+  // change / follow-up note). Only mark it "due" when the org actually has an
+  // active HubSpot integration, so non-HubSpot orgs never accumulate due rows.
+  const updatePayload: { status: typeof status; hubspot_sync_requested_at?: string } = { status };
+  if (status === 'resolved') {
+    const { data: integration } = await supabase
+      .from('integrations')
+      .select('id')
+      .eq('org_id', org)
+      .eq('type', 'hubspot')
+      .eq('is_active', true)
+      .maybeSingle();
+    if (integration) {
+      updatePayload.hubspot_sync_requested_at = new Date().toISOString();
+    }
+  }
+
   const { data, error } = await supabase
     .from('conversations')
-    .update({ status })
+    .update(updatePayload)
     .eq('org_id', org)
     .eq('id', conversationId)
     .select('id');
@@ -1049,4 +1067,44 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
 
   revalidatePath('/inbox');
   redirect(inboxUrl({ ...base, notice: 'Bearbeitete Antwort gesendet.' }));
+}
+
+// --- Phase 6: manual HubSpot sync --------------------------------------------
+
+/**
+ * „An HubSpot senden" (§11 Phase 6): marks the conversation due for a one-way
+ * HubSpot sync by bumping hubspot_sync_requested_at. The worker picks it up and
+ * no-ops harmlessly if the org has no active HubSpot integration. User-scoped
+ * (RLS restricts to org members); never logs conversation content.
+ */
+export async function syncToHubspot(formData: FormData): Promise<void> {
+  const errorText = 'An HubSpot senden fehlgeschlagen.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+  };
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('conversations')
+    .update({ hubspot_sync_requested_at: new Date().toISOString() })
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+
+  revalidatePath('/inbox');
+  redirect(inboxUrl({ ...base, notice: 'Konversation zum HubSpot-Sync vorgemerkt.' }));
 }

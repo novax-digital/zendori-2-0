@@ -6,7 +6,10 @@ import { writeHeartbeat } from './heartbeat.js';
 import { toErrorInfo } from './db.js';
 import { handlePipelineFailure, processMessage } from './pipeline/process-message.js';
 import { indexSource, markIndexSourceFailed } from './pipeline/index-source.js';
+import { markHubspotSyncTerminal, syncConversation } from './pipeline/hubspot-sync.js';
 import {
+  HUBSPOT_SYNC_QUEUE,
+  HUBSPOT_SYNC_RETRY_LIMIT,
   INDEX_SOURCE_QUEUE,
   INDEX_SOURCE_RETRY_LIMIT,
   PROCESS_MESSAGE_QUEUE,
@@ -20,6 +23,7 @@ const HEARTBEAT_QUEUE = 'worker.heartbeat';
 
 const processMessageJobSchema = z.object({ messageId: z.uuid() });
 const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
+const hubspotSyncJobSchema = z.object({ conversationId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -66,6 +70,7 @@ async function main(): Promise<void> {
   // re-check row state / claim before external side effects (belt and braces).
   await ensureQueuePolicy(boss, PROCESS_MESSAGE_QUEUE);
   await ensureQueuePolicy(boss, INDEX_SOURCE_QUEUE);
+  await ensureQueuePolicy(boss, HUBSPOT_SYNC_QUEUE);
 
   await boss.work(
     PROCESS_MESSAGE_QUEUE,
@@ -107,6 +112,31 @@ async function main(): Promise<void> {
           );
           if (isFinal) {
             await markIndexSourceFailed(sourceId);
+            return; // recorded terminally; do not rethrow
+          }
+          throw err; // let pg-boss retry
+        }
+      }
+    }
+  );
+
+  await boss.work(
+    HUBSPOT_SYNC_QUEUE,
+    { includeMetadata: true },
+    async (jobs: JobWithMetadata<{ conversationId: string }>[]) => {
+      for (const job of jobs) {
+        const { conversationId } = hubspotSyncJobSchema.parse(job.data);
+        try {
+          await syncConversation(conversationId);
+        } catch (err) {
+          const isFinal = job.retryCount >= HUBSPOT_SYNC_RETRY_LIMIT;
+          logger.error(
+            { err: toErrorInfo(err), conversationId, retryCount: job.retryCount, final: isFinal },
+            'hubspot-sync failed'
+          );
+          if (isFinal) {
+            // Stamp synced so the scan stops re-picking; a new request re-arms it.
+            await markHubspotSyncTerminal(conversationId);
             return; // recorded terminally; do not rethrow
           }
           throw err; // let pg-boss retry

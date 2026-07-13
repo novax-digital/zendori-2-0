@@ -7,6 +7,7 @@ import type {
   ConversationListItem,
   DraftItem,
   DraftSource,
+  HubspotSidebarInfo,
   InboxFilters,
   MemberOption,
   MessageAttachment,
@@ -288,6 +289,31 @@ export async function listMembers(orgId: string): Promise<MemberOption[]> {
     email: emailByUserId.get(r.user_id) ?? null,
     role: r.role,
   }));
+}
+
+/**
+ * Loads the org's HubSpot deep-link info for the inbox sidebar. Reads the
+ * integration row (member-scoped RLS) and extracts only ui_domain/portal_id +
+ * the active flag — the encrypted token is never returned to the caller/client.
+ */
+export async function getHubspotSidebarInfo(orgId: string): Promise<HubspotSidebarInfo> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('integrations')
+    .select('is_active, config')
+    .eq('org_id', orgId)
+    .eq('type', 'hubspot')
+    .maybeSingle();
+  if (!data) return { connected: false, active: false, ui_domain: null, portal_id: null };
+
+  const row = data as { is_active: boolean; config: Record<string, unknown> | null };
+  const config = row.config ?? {};
+  return {
+    connected: true, // a row exists (may be paused)
+    active: row.is_active === true,
+    ui_domain: typeof config.ui_domain === 'string' ? config.ui_domain : null,
+    portal_id: typeof config.portal_id === 'string' ? config.portal_id : null,
+  };
 }
 
 export async function listCannedResponses(orgId: string): Promise<CannedResponseItem[]> {

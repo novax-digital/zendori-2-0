@@ -7,10 +7,11 @@ import {
   returnToBot,
   setConversationAssignee,
   setConversationStatus,
+  syncToHubspot,
   takeOverConversation,
   updateContact,
 } from '@/app/inbox/actions';
-import type { ConversationDetail, MemberOption } from '@/lib/inbox/types';
+import type { ConversationDetail, HubspotSidebarInfo, MemberOption } from '@/lib/inbox/types';
 
 const statusOptions: { value: ConversationStatus; label: string }[] = [
   { value: 'open', label: 'Offen' },
@@ -43,6 +44,7 @@ type ContextSidebarProps = {
   orgId: string;
   detail: ConversationDetail;
   members: MemberOption[];
+  hubspot: HubspotSidebarInfo;
   filterStatus: string;
   filterChannel: string;
 };
@@ -51,10 +53,22 @@ export default function ContextSidebar({
   orgId,
   detail,
   members,
+  hubspot,
   filterStatus,
   filterChannel,
 }: ContextSidebarProps) {
   const { conversation, contact, channel, notes } = detail;
+
+  // HubSpot ticket id lives in conversation.external_refs (§5); deep link needs
+  // the org's ui_domain + portal_id from the integration config.
+  const rawTicketId = conversation.external_refs.hubspot_ticket_id;
+  const hubspotTicketId = typeof rawTicketId === 'string' ? rawTicketId : null;
+  const hubspotTicketUrl =
+    hubspotTicketId && hubspot.ui_domain && hubspot.portal_id
+      ? `https://${hubspot.ui_domain}/contacts/${hubspot.portal_id}/ticket/${encodeURIComponent(
+          hubspotTicketId
+        )}`
+      : null;
 
   const hiddenFields = (
     <>
@@ -189,6 +203,35 @@ export default function ContextSidebar({
             </>
           )}
         </div>
+      </section>
+
+      <section>
+        <h3>HubSpot</h3>
+        {!hubspot.connected ? (
+          <p className="inbox-sidebar-empty">
+            Nicht verbunden — unter Einstellungen → Integrationen einrichten.
+          </p>
+        ) : !hubspot.active ? (
+          <p className="inbox-sidebar-empty">Verbunden, aber deaktiviert — Sync ist pausiert.</p>
+        ) : null}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <form action={syncToHubspot}>
+            {hiddenFields}
+            <button className="ghost" type="submit">
+              An HubSpot senden
+            </button>
+          </form>
+        </div>
+        {hubspotTicketUrl ? (
+          <a
+            href={hubspotTicketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ display: 'inline-block', marginTop: '0.6rem', fontSize: '0.9rem' }}
+          >
+            In HubSpot öffnen
+          </a>
+        ) : null}
       </section>
 
       <section>

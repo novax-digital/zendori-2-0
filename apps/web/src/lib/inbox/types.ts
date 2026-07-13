@@ -72,3 +72,16 @@ export type InboxFilters = {
   status: ConversationStatus | 'all';
   channelId: string | 'all';
 };
+
+/**
+ * Org-level HubSpot info for the inbox sidebar. `ui_domain`/`portal_id` build the
+ * ticket deep link; the encrypted token never reaches this type or the client.
+ */
+export type HubspotSidebarInfo = {
+  /** An integration row exists (regardless of whether it is currently active). */
+  connected: boolean;
+  /** The integration is connected AND active (syncs run). */
+  active: boolean;
+  ui_domain: string | null;
+  portal_id: string | null;
+};

@@ -18,6 +18,7 @@
     "@upstash/redis": "^1.38.0",
     "@zendori/channels": "workspace:*",
     "@zendori/core": "workspace:*",
+    "@zendori/integrations": "workspace:*",
     "next": "15.5.20",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

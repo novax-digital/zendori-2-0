@@ -13,6 +13,7 @@
     "@zendori/ai": "workspace:*",
     "@zendori/channels": "workspace:*",
     "@zendori/core": "workspace:*",
+    "@zendori/integrations": "workspace:*",
     "mammoth": "^1.9.0",
     "pdf-parse": "^1.1.1",
     "pg-boss": "^12.26.0",

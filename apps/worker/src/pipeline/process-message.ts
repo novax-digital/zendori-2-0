@@ -36,7 +36,9 @@ import type {
   ProcessingState,
   SenderType,
   SupabaseClient,
+  SyncRules,
 } from '@zendori/core';
+import { syncRulesSchema } from '@zendori/core';
 import { getServiceClient } from '../db.js';
 import {
   decideDraftAction,
@@ -391,6 +393,7 @@ export async function processMessage(messageId: string): Promise<void> {
         content: draftResult.reply,
         senderType: 'bot',
       });
+      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
       return; // message already marked done by the claim
     } else if (action === 'handoff' && detection.reason) {
       // Keep the draft as a suggestion for the agent, then hand off (§6).
@@ -410,9 +413,68 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 6. done -------------------------------------------------------------
     await finishMessage(supabase, message.id, updatedMetadata);
+    await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
   } catch (err) {
     if (err instanceof PipelineError) throw err;
     throw new PipelineError(currentStep, orgId, conv.id, err);
+  }
+}
+
+/**
+ * After a message is processed normally, request a HubSpot sync when an active
+ * hubspot integration's rules apply to this channel (§ Phase 6). This is a single
+ * conversations.hubspot_sync_requested_at column bump; the worker's scan picks it
+ * up and runs the actual sync. Rule mode 'manual' never auto-requests (the
+ * per-conversation button covers that). Best-effort: a failure here must never
+ * fail the pipeline (the customer may already have been replied to), so errors
+ * are swallowed — a missed request is recovered by a later status change /
+ * manual button. Never logs content.
+ */
+async function maybeRequestHubspotSync(
+  supabase: SupabaseClient,
+  orgId: string,
+  channelId: string,
+  conversationId: string
+): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('integrations')
+      .select('rules')
+      .eq('org_id', orgId)
+      .eq('type', 'hubspot')
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return; // no active hubspot integration
+    const rules = syncRulesSchema.safeParse((data as { rules: unknown }).rules);
+    if (!rules.success) return; // malformed rules — nothing to do
+    if (!hubspotRuleApplies(rules.data, channelId)) return; // manual / channel not covered
+    await supabase
+      .from('conversations')
+      .update({ hubspot_sync_requested_at: new Date().toISOString() })
+      .eq('id', conversationId)
+      .eq('org_id', orgId);
+  } catch {
+    // best-effort: a sync request must never break the message pipeline
+  }
+}
+
+/**
+ * Whether an active HubSpot integration's sync rules apply to a conversation on
+ * the given channel (§ Phase 6):
+ *   - all      → always sync
+ *   - channels → only when channel_ids contains this channel
+ *   - manual   → never automatically (the "An HubSpot senden" button is separate)
+ * Pure; exported for unit tests.
+ */
+export function hubspotRuleApplies(rules: SyncRules, channelId: string): boolean {
+  switch (rules.mode) {
+    case 'all':
+      return true;
+    case 'channels':
+      return rules.channel_ids.includes(channelId);
+    case 'manual':
+      return false;
   }
 }
 
