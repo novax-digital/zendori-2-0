@@ -28,7 +28,9 @@ export default async function InvitePage({
       <div className="card">
         <h1>Einladung</h1>
         {!invite ? (
-          <p className="error">Diese Einladung ist ungültig, abgelaufen oder wurde bereits verwendet.</p>
+          <p className="error">
+            Diese Einladung ist ungültig, abgelaufen oder wurde bereits verwendet.
+          </p>
         ) : (
           <>
             <p className="sub">

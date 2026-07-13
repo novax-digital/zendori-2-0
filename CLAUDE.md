@@ -6,6 +6,7 @@ Zendori v2 ist eine eigenständige, mandantenfähige Multichannel-Kundensupport-
 Kein Chatwoot, kein Fremd-Helpdesk — alles eigene Lösung. Ziel aller Kanäle ist immer die eigene Shared Inbox.
 
 Kern-Features:
+
 - **Kanäle:** Website-Chat-Widget, E-Mail (Inbound-Adressen als universeller Intake + später angebundene Postfächer), WhatsApp, Telefon (Voice, letzte Phase)
 - **Universeller Formular-Intake:** Kontaktformulare beliebiger Websites senden einfach an eine generierte Zendori-Inbound-Adresse (Empfänger oder CC) — kein Code auf der Kundenseite nötig
 - **Shared Inbox:** ein Posteingang für alle Kanäle, Team-Zuweisung, interne Notizen, Status
@@ -111,6 +112,7 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 ## 6. Human-Handoff-Logik (verbindlich)
 
 Default: `mode = 'bot'`. Handoff-Trigger:
+
 1. `confidence < threshold` (org-konfigurierbar)
 2. Kunde verlangt explizit einen Menschen (Klassifikations-Flag)
 3. Eskalations-Keywords (Kündigung, Beschwerde, Anwalt, Datenschutz — org-konfigurierbar)
@@ -157,16 +159,18 @@ Damit bleibt der Kern identisch: Anrufe erscheinen als ganz normale Konversation
 ## 10. Legacy-Import (Teil von Phase 0)
 
 Drei Referenz-Ordner im Repo, alle READ-ONLY, nie direkt importieren:
+
 - `old-app/` — alte Zendori-App (Lovable)
 - `old-n8n-flows/` — n8n-Workflow-JSONs
 - `old-bridge/` — Zendori-Bridge (Kontaktformular + E-Mail → KI-Ticketisierung → HubSpot), **läuft aktuell produktiv für einen Bestandskunden**. Der hardcodierte Formular-Pfad in der Strong-Energy-Website wird in v2 durch eine Inbound-Adresse ersetzt (Formular-Empfänger umstellen).
 
 Erstelle `docs/legacy-analysis.md`:
+
 - Welche Business-Logik existiert (Extraktion, Dedupe-Regeln, Prompts, Routing, Zuordnungen)?
 - Aus der Bridge besonders sichern: KI-Prompts für Ticketisierung/Extraktion, Dedupe-Logik, Formular-Feld-Mapping und das komplette HubSpot-Property-Mapping (wird 1:1 für den Sync in Phase 6 gebraucht).
 - Welche Prompts/Regeln übernehmen wir inhaltlich (neu implementiert, nicht kopiert)?
 - Was wird bewusst NICHT übernommen (Chatwoot-Anbindung, n8n-Glue; HubSpot wandert vom Kernpfad zur optionalen Integration).
-Kein Copy-Paste von Legacy-Code ohne mein Review.
+  Kein Copy-Paste von Legacy-Code ohne mein Review.
 
 ## 11. Phasenplan
 
@@ -177,12 +181,13 @@ Kein Copy-Paste von Legacy-Code ohne mein Review.
 **Phase 2 — Chat-Widget:** Embeddable Script (ein Tag, Shadow DOM), anonyme Sessions + optionale Kontaktdaten-Abfrage, Realtime beidseitig, Theming pro Org (Farbe, Begrüßung), Offline-Verhalten. **STOP.**
 
 **Phase 3 — E-Mail über Resend (Inbound + Versand):**
+
 - Receiving-Subdomain einrichten (MX → Resend, nur Subdomain!), Webhook-Route mit Svix-Verify.
 - Adress-Provisionierung im UI: „Neue Intake-Adresse" pro Org → generiert `{{slug}}-{{zweck}}-{{token}}@in.zendori.de`, legt Channel mit sprechendem Namen an (z. B. „Kontaktformular strong-energy.eu").
 - Ingest: Routing über `to` → Channel-Lookup (unbekannte Adresse: verwerfen), Body + Anhänge über Receiving-/Attachments-API nachladen → Storage, Idempotenz via Resend-`email_id`, Threading via In-Reply-To/References.
 - Versand über Resend-API; Reply-To auf die Intake-Adresse, damit Kundenantworten wieder eingehen. Verifizierte Kundendomain optional pro Org.
 - Kontakt in dieser Phase = Envelope-Absender (die KI-Extraktion des echten Formular-Absenders kommt in Phase 4 und korrigiert Contact + Conversation).
-**STOP.**
+  **STOP.**
 
 **Phase 4 — Wissensdatenbank + KI (nur Drafts):** kb_sources (URL-Crawl mit Sitemap-Support, Datei-Upload PDF/DOCX→Text, manuelle Einträge), Chunking (~500 Token, 50 Overlap) + Embeddings + Re-Index-Job, Klassifikation (Sprache, Intent, Priorität, „will Mensch"-Flag, Spam), **Ticketisierung mit den Bridge-Prompts: echten Absender (Name/E-Mail/Telefon) und Anliegen aus Formular-Mails extrahieren, Contact/Conversation korrigieren, Dedupe**, RAG-Draft mit Quellenangabe, Confidence-Score, `suggested_reply` in der Inbox mit Übernehmen/Bearbeiten/Verwerfen. **Noch KEIN Auto-Send.** ai_runs-Logging inkl. Kosten. **STOP.**
 
@@ -199,6 +204,7 @@ Kein Copy-Paste von Legacy-Code ohne mein Review.
 ## 12. Deployment
 
 ### apps/web → Vercel
+
 - Monorepo-Setup: Root Directory `apps/web`, pnpm, Next.js-15-Preset. Function-Region `fra1` (Frankfurt, nah an Supabase EU).
 - Env-Variablen in Vercel, Production/Preview strikt getrennt. Preview-Deploys bekommen NIE produktive Resend-/WhatsApp-/Voice-/Service-Role-Keys.
 - Webhooks (Resend, WhatsApp, Voice, Widget) sind Route Handler; schnell antworten (persistieren + `processing_state='pending'` setzen), schwere Arbeit macht der Worker. Für KI-nahe Routen `maxDuration` explizit setzen.
@@ -206,6 +212,7 @@ Kein Copy-Paste von Legacy-Code ohne mein Review.
 - Öffentliche Hooks/Widget-Routen mit Rate Limit (z. B. Upstash Ratelimit oder eigener Supabase-Counter — Entscheidung mit mir in Phase 2).
 
 ### apps/worker → Hetzner (Docker)
+
 - Einzelner Container **ohne Ingress**: kein Traefik, keine Domain, keine offenen Ports — nur ausgehende Verbindungen (Supabase, Anthropic/OpenAI, Resend, Meta Graph API, HubSpot; IMAP/SMTP erst ab Phase 8). Dadurch unabhängig von der restlichen Server-Infrastruktur.
 - Immer `sudo docker compose` (v2, mit Leerzeichen), niemals `docker-compose`.
 - **Image-Tags pinnen** (feste Node-Version). Keine Auto-Updates/`:latest` — ein Docker-Auto-Update hat auf diesem Server schon mal einen Ausfall verursacht.

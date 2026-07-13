@@ -29,7 +29,9 @@ export async function signIn(formData: FormData) {
   });
   const next = typeof formData.get('next') === 'string' ? String(formData.get('next')) : '/';
   if (!parsed.success) {
-    redirect(`/login?error=${encodeURIComponent('Bitte E-Mail und Passwort (min. 8 Zeichen) angeben.')}`);
+    redirect(
+      `/login?error=${encodeURIComponent('Bitte E-Mail und Passwort (min. 8 Zeichen) angeben.')}`
+    );
   }
 
   const supabase = await createSupabaseServerClient();
@@ -37,7 +39,8 @@ export async function signIn(formData: FormData) {
   if (error) {
     redirect(`/login?error=${encodeURIComponent('E-Mail oder Passwort ist falsch.')}`);
   }
-  redirect(next.startsWith('/') ? next : '/');
+  // only same-origin paths — '//evil.example' would be an open redirect
+  redirect(next.startsWith('/') && !next.startsWith('//') ? next : '/');
 }
 
 export async function signUp(formData: FormData) {
@@ -88,7 +91,9 @@ export async function createOrganization(formData: FormData) {
       redirect('/');
     }
     if (error.code !== '23505') {
-      redirect(`/onboarding?error=${encodeURIComponent('Organisation konnte nicht angelegt werden.')}`);
+      redirect(
+        `/onboarding?error=${encodeURIComponent('Organisation konnte nicht angelegt werden.')}`
+      );
     }
   }
   redirect(`/onboarding?error=${encodeURIComponent('Organisation konnte nicht angelegt werden.')}`);

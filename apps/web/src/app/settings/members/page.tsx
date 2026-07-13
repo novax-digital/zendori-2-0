@@ -21,9 +21,11 @@ export default async function MembersPage({
   } = await supabase.auth.getUser();
   if (!user) redirect('/login');
 
+  // RLS shows fellow members' rows too — filter to the signed-in user
   const { data: membershipData } = await supabase
     .from('org_members')
     .select('org_id, role, organizations(id, name)')
+    .eq('user_id', user.id)
     .order('created_at', { ascending: true })
     .limit(1);
   const membership = membershipData?.[0] as

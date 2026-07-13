@@ -16,9 +16,11 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect('/login');
 
+  // RLS shows fellow members' rows too — filter to the signed-in user
   const { data } = await supabase
     .from('org_members')
     .select('role, organizations(id, name, slug)')
+    .eq('user_id', user.id)
     .order('created_at', { ascending: true });
   const memberships = (data ?? []) as unknown as Membership[];
 
@@ -56,7 +58,11 @@ export default async function DashboardPage() {
                     <span className="badge">{m.role === 'owner' ? 'Owner' : 'Agent'}</span>
                   </td>
                   <td>
-                    <Link href="/settings/members">Mitglieder verwalten</Link>
+                    <Link href={`/inbox?org=${m.organizations.id}`}>Inbox öffnen</Link>
+                    {' · '}
+                    <Link href={`/settings/members?org=${m.organizations.id}`}>
+                      Mitglieder verwalten
+                    </Link>
                   </td>
                 </tr>
               ) : null
@@ -68,8 +74,9 @@ export default async function DashboardPage() {
       <div className="panel">
         <h2>Nächste Schritte</h2>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Die Inbox, Kanäle und die Wissensdatenbank folgen in den nächsten Ausbauphasen. Aktuell
-          kannst du deine Organisation verwalten und Teammitglieder einladen.
+          Die Shared Inbox ist bereit: Lege unter „Einstellungen → Kanäle" einen Test-Channel an und
+          speise über „Test-Channel" Nachrichten ein. Weitere Kanäle (Chat-Widget, E-Mail, WhatsApp)
+          folgen in den nächsten Ausbauphasen.
         </p>
       </div>
     </div>

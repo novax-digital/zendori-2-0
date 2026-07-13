@@ -13,7 +13,10 @@
     "format:check": "prettier --check ."
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "sharp"]
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ]
   },
   "devDependencies": {
     "@next/eslint-plugin-next": "15.5.20",
