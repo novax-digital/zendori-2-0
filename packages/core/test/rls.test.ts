@@ -397,6 +397,74 @@ describe.skipIf(!enabled)('RLS: agents (0011)', () => {
     expect(ownerAssign).toBeNull();
   });
 
+  it('knowledge bases: members manage content, foreign orgs are blind (0012)', async () => {
+    // content management is member-level (like kb_sources)
+    const { data: kb, error: memberCreate } = await member
+      .from('knowledge_bases')
+      .insert({ org_id: orgId, name: 'Website-FAQ' })
+      .select('id')
+      .single();
+    expect(memberCreate).toBeNull();
+
+    await admin.from('knowledge_bases').insert({ org_id: foreignOrgId, name: 'Fremdes Wissen' });
+    const { data: foreign } = await owner
+      .from('knowledge_bases')
+      .select('id')
+      .eq('org_id', foreignOrgId);
+    expect(foreign).toHaveLength(0);
+
+    // linking to an agent is owner-only (it changes bot behavior)
+    const { data: agentRow } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'KB-Link-Agent' })
+      .select('id')
+      .single();
+    const { error: memberLink } = await member
+      .from('agent_knowledge_bases')
+      .insert({ org_id: orgId, agent_id: agentRow!.id, knowledge_base_id: kb!.id });
+    expect(memberLink).not.toBeNull();
+    const { error: ownerLink } = await owner
+      .from('agent_knowledge_bases')
+      .insert({ org_id: orgId, agent_id: agentRow!.id, knowledge_base_id: kb!.id });
+    expect(ownerLink).toBeNull();
+
+    // ...and unlinking is owner-only too (a member silently unlinking every
+    // base would make an autopilot agent "know nothing")
+    const { data: memberUnlink } = await member
+      .from('agent_knowledge_bases')
+      .delete()
+      .eq('agent_id', agentRow!.id)
+      .eq('knowledge_base_id', kb!.id)
+      .select('agent_id');
+    expect(memberUnlink ?? []).toHaveLength(0);
+    const { data: stillLinked } = await owner
+      .from('agent_knowledge_bases')
+      .select('agent_id')
+      .eq('agent_id', agentRow!.id);
+    expect(stillLinked).toHaveLength(1);
+
+    // deleting the base cascades the link and its sources
+    const { data: src } = await admin
+      .from('kb_sources')
+      .insert({
+        org_id: orgId,
+        knowledge_base_id: kb!.id,
+        type: 'text',
+        uri: 'text',
+        status: 'pending',
+      })
+      .select('id')
+      .single();
+    await admin.from('knowledge_bases').delete().eq('id', kb!.id);
+    const { data: linkGone } = await admin
+      .from('agent_knowledge_bases')
+      .select('agent_id')
+      .eq('knowledge_base_id', kb!.id);
+    expect(linkGone).toHaveLength(0);
+    const { data: srcGone } = await admin.from('kb_sources').select('id').eq('id', src!.id);
+    expect(srcGone).toHaveLength(0);
+  });
+
   it('channels.agent_id rejects a cross-org agent (composite FK)', async () => {
     const { data: channel } = await admin
       .from('channels')

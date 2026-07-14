@@ -3,10 +3,26 @@ import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import KnowledgeTabs, { type KbTabKey } from '@/components/KnowledgeTabs';
-import { addFileSource, addTextSource, addUrlSource, deleteSource, reindexSource } from './actions';
+import KbGallery, { type KbTileMeta } from '@/components/KbGallery';
+import {
+  addFileSource,
+  addTextSource,
+  addUrlSource,
+  createKnowledgeBase,
+  deleteKnowledgeBase,
+  deleteSource,
+  reindexSource,
+} from './actions';
+
+type KbRow = {
+  id: string;
+  name: string;
+  description: string | null;
+};
 
 type KbSourceRow = {
   id: string;
+  knowledge_base_id: string;
   type: KbSourceType;
   uri: string | null;
   status: KbSourceStatus;
@@ -78,16 +94,6 @@ function formatRelative(iso: string | null): string {
   return `vor ${diffDays} ${diffDays === 1 ? 'Tag' : 'Tagen'}`;
 }
 
-async function listKbSources(orgId: string): Promise<KbSourceRow[]> {
-  const supabase = await createSupabaseServerClient();
-  const { data } = await supabase
-    .from('kb_sources')
-    .select('id, type, uri, status, last_indexed_at, created_at')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false });
-  return (data ?? []) as unknown as KbSourceRow[];
-}
-
 export default async function KnowledgePage({
   searchParams,
 }: {
@@ -96,90 +102,273 @@ export default async function KnowledgePage({
   const { org, error, notice } = await searchParams;
   const { orgId, orgs } = await requireActiveOrg(org);
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const sources = await listKbSources(orgId);
 
-  const urlPanel: ReactNode = (
-    <>
-      <p style={helpStyle}>
-        Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
-        eingelesen.
-      </p>
-      <form className="stack" action={addUrlSource} style={{ maxWidth: '32rem' }}>
-        <input type="hidden" name="org" value={orgId} />
-        <div>
-          <label htmlFor="url">URL</label>
-          <input id="url" name="url" type="url" required placeholder="https://www.beispiel.de/hilfe" />
+  const supabase = await createSupabaseServerClient();
+  const [{ data: kbData }, { data: sourceData }, { data: linkData }] = await Promise.all([
+    supabase
+      .from('knowledge_bases')
+      .select('id, name, description')
+      .eq('org_id', orgId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('kb_sources')
+      .select('id, knowledge_base_id, type, uri, status, last_indexed_at, created_at')
+      .eq('org_id', orgId)
+      .order('created_at', { ascending: false }),
+    supabase.from('agent_knowledge_bases').select('knowledge_base_id').eq('org_id', orgId),
+  ]);
+  const kbs = (kbData ?? []) as KbRow[];
+  const sources = (sourceData ?? []) as unknown as KbSourceRow[];
+  const agentLinks = (linkData ?? []) as { knowledge_base_id: string }[];
+
+  const sourcesByKb = new Map<string, KbSourceRow[]>();
+  for (const source of sources) {
+    const list = sourcesByKb.get(source.knowledge_base_id) ?? [];
+    list.push(source);
+    sourcesByKb.set(source.knowledge_base_id, list);
+  }
+  const agentCountByKb = new Map<string, number>();
+  for (const link of agentLinks) {
+    agentCountByKb.set(
+      link.knowledge_base_id,
+      (agentCountByKb.get(link.knowledge_base_id) ?? 0) + 1
+    );
+  }
+
+  const tiles: KbTileMeta[] = kbs.map((kb) => ({
+    id: kb.id,
+    name: kb.name,
+    description: kb.description,
+    sourceCount: sourcesByKb.get(kb.id)?.length ?? 0,
+    agentCount: agentCountByKb.get(kb.id) ?? 0,
+  }));
+
+  const addTabsFor = (kb: KbRow): { key: KbTabKey; label: string; panel: ReactNode }[] => [
+    {
+      key: 'url',
+      label: 'URL',
+      panel: (
+        <>
+          <p style={helpStyle}>
+            Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
+            eingelesen.
+          </p>
+          <form className="stack" action={addUrlSource} style={{ maxWidth: '32rem' }}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
+            <div>
+              <label htmlFor={`url-${kb.id}`}>URL</label>
+              <input
+                id={`url-${kb.id}`}
+                name="url"
+                type="url"
+                required
+                placeholder="https://www.beispiel.de/hilfe"
+              />
+            </div>
+            <button className="primary" type="submit">
+              URL hinzufügen
+            </button>
+          </form>
+        </>
+      ),
+    },
+    {
+      key: 'file',
+      label: 'Datei',
+      panel: (
+        <>
+          <p style={helpStyle}>
+            PDF, DOCX, TXT oder MD, maximal 15 MB. Der Text wird aus der Datei extrahiert und
+            indiziert.
+          </p>
+          <form className="stack" action={addFileSource} style={{ maxWidth: '32rem' }}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
+            <div>
+              <label htmlFor={`file-${kb.id}`}>Datei</label>
+              <input
+                id={`file-${kb.id}`}
+                name="file"
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                required
+              />
+            </div>
+            <button className="primary" type="submit">
+              Datei hochladen
+            </button>
+          </form>
+        </>
+      ),
+    },
+    {
+      key: 'text',
+      label: 'Text',
+      panel: (
+        <>
+          <p style={helpStyle}>
+            Ein manuell gepflegter Text — z. B. Rückgabebedingungen, FAQ-Antworten oder interne
+            Hinweise, die der KI-Agent kennen soll.
+          </p>
+          <form className="stack" action={addTextSource} style={{ maxWidth: '32rem' }}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
+            <div>
+              <label htmlFor={`title-${kb.id}`}>Titel</label>
+              <input
+                id={`title-${kb.id}`}
+                name="title"
+                type="text"
+                required
+                minLength={1}
+                maxLength={200}
+                placeholder="z. B. Rückgabebedingungen"
+              />
+            </div>
+            <div>
+              <label htmlFor={`text-${kb.id}`}>Text</label>
+              <textarea id={`text-${kb.id}`} name="text" rows={6} required style={textareaStyle} />
+            </div>
+            <button className="primary" type="submit">
+              Text hinzufügen
+            </button>
+          </form>
+        </>
+      ),
+    },
+  ];
+
+  const panels: Record<string, ReactNode> = {};
+  for (const kb of kbs) {
+    const kbSources = sourcesByKb.get(kb.id) ?? [];
+    const agentCount = agentCountByKb.get(kb.id) ?? 0;
+    panels[kb.id] = (
+      <div key={kb.id}>
+        <div className="panel">
+          <h2>Quellen — {kb.name}</h2>
+          {agentCount === 0 ? (
+            <p className="notice" style={{ marginBottom: '1rem' }}>
+              Diese Wissensdatenbank ist mit keinem Agenten verknüpft — ihr Inhalt wird aktuell
+              von keiner KI genutzt. Verknüpfen unter Einstellungen → Agenten.
+            </p>
+          ) : null}
+          {kbSources.length === 0 ? (
+            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+              Noch keine Quellen vorhanden. Füge unten eine URL, eine Datei oder einen Text hinzu.
+            </p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Typ</th>
+                  <th>Quelle</th>
+                  <th>Status</th>
+                  <th>Zuletzt indiziert</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {kbSources.map((source) => (
+                  <tr key={source.id}>
+                    <td>{typeLabels[source.type]}</td>
+                    <td style={{ wordBreak: 'break-all' }}>{sourceLabel(source)}</td>
+                    <td>{statusBadge(source.status)}</td>
+                    <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      {formatRelative(source.last_indexed_at)}
+                    </td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <form
+                        action={reindexSource}
+                        style={{ display: 'inline-block', marginRight: '0.4rem' }}
+                      >
+                        <input type="hidden" name="org" value={orgId} />
+                        <input type="hidden" name="id" value={source.id} />
+                        <button className="ghost" type="submit">
+                          Neu indizieren
+                        </button>
+                      </form>
+                      <form action={deleteSource} style={{ display: 'inline-block' }}>
+                        <input type="hidden" name="org" value={orgId} />
+                        <input type="hidden" name="id" value={source.id} />
+                        <button className="ghost" type="submit">
+                          Löschen
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-        <button className="primary" type="submit">
-          URL hinzufügen
-        </button>
-      </form>
-    </>
-  );
 
-  const filePanel: ReactNode = (
-    <>
-      <p style={helpStyle}>
-        PDF, DOCX, TXT oder MD, maximal 15 MB. Der Text wird aus der Datei extrahiert und indiziert.
-      </p>
-      <form className="stack" action={addFileSource} style={{ maxWidth: '32rem' }}>
-        <input type="hidden" name="org" value={orgId} />
-        <div>
-          <label htmlFor="file">Datei</label>
-          <input id="file" name="file" type="file" accept=".pdf,.docx,.txt,.md" required />
+        <KnowledgeTabs tabs={addTabsFor(kb)} />
+
+        <div className="panel">
+          <h2>Wissensdatenbank löschen</h2>
+          <p style={helpStyle}>
+            Löscht „{kb.name}" mitsamt {kbSources.length === 1 ? 'ihrer Quelle' : 'allen Quellen'}{' '}
+            und deren Index — Agenten verlieren die Verknüpfung. Nicht rückgängig machbar.
+          </p>
+          <form action={deleteKnowledgeBase}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="id" value={kb.id} />
+            <button className="ghost" type="submit">
+              „{kb.name}" löschen
+            </button>
+          </form>
         </div>
-        <button className="primary" type="submit">
-          Datei hochladen
-        </button>
-      </form>
-    </>
-  );
+      </div>
+    );
+  }
 
-  const textPanel: ReactNode = (
-    <>
+  const newPanel: ReactNode = (
+    <div className="panel">
+      <h2>Neue Wissensdatenbank</h2>
       <p style={helpStyle}>
-        Ein manuell gepflegter Text — z. B. Rückgabebedingungen, FAQ-Antworten oder interne
-        Hinweise, die der KI-Agent kennen soll.
+        Bündle Quellen thematisch (z. B. „Website-FAQ", „Interne Doku", „Produktkatalog") und
+        verknüpfe sie gezielt mit Agenten — so weiß jeder Agent nur, was er wissen soll.
       </p>
-      <form className="stack" action={addTextSource} style={{ maxWidth: '32rem' }}>
+      <form className="stack" action={createKnowledgeBase} style={{ maxWidth: '28rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
-          <label htmlFor="title">Titel</label>
+          <label htmlFor="kb-name">Name</label>
           <input
-            id="title"
-            name="title"
+            id="kb-name"
+            name="name"
             type="text"
             required
-            minLength={1}
-            maxLength={200}
-            placeholder="z. B. Rückgabebedingungen"
+            minLength={2}
+            maxLength={80}
+            placeholder="z. B. Website-FAQ"
           />
         </div>
         <div>
-          <label htmlFor="text">Text</label>
-          <textarea id="text" name="text" rows={6} required style={textareaStyle} />
+          <label htmlFor="kb-description">Beschreibung (optional)</label>
+          <input
+            id="kb-description"
+            name="description"
+            type="text"
+            maxLength={300}
+            placeholder="Was liegt hier drin?"
+          />
         </div>
         <button className="primary" type="submit">
-          Text hinzufügen
+          Wissensdatenbank anlegen
         </button>
       </form>
-    </>
+    </div>
   );
-
-  const tabs: { key: KbTabKey; label: string; panel: ReactNode }[] = [
-    { key: 'url', label: 'URL', panel: urlPanel },
-    { key: 'file', label: 'Datei', panel: filePanel },
-    { key: 'text', label: 'Text', panel: textPanel },
-  ];
 
   return (
     <div className="shell">
       <div className="page-head">
         <h1>Wissensdatenbank</h1>
         <p>
-          Quellen von {orgName} werden im Hintergrund verarbeitet (Zerlegung in Abschnitte,
-          Embeddings) und dienen dem KI-Agenten als Grundlage für Antwortvorschläge. Neue Quellen
-          starten als „Ausstehend" und wechseln nach der Indizierung auf „Indiziert".
+          Das Wissen von {orgName}, gebündelt in Datenbanken: Quellen werden im Hintergrund
+          zerlegt und als Embeddings indiziert. Welche Datenbanken ein Agent nutzt, legst du unter
+          Einstellungen → Agenten fest.
         </p>
       </div>
 
@@ -194,59 +383,7 @@ export default async function KnowledgePage({
         </p>
       ) : null}
 
-      <div className="panel">
-        <h2>Quellen</h2>
-        {sources.length === 0 ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Noch keine Quellen vorhanden. Füge unten eine URL, eine Datei oder einen Text hinzu.
-          </p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Typ</th>
-                <th>Quelle</th>
-                <th>Status</th>
-                <th>Zuletzt indiziert</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((source) => (
-                <tr key={source.id}>
-                  <td>{typeLabels[source.type]}</td>
-                  <td style={{ wordBreak: 'break-all' }}>{sourceLabel(source)}</td>
-                  <td>{statusBadge(source.status)}</td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    {formatRelative(source.last_indexed_at)}
-                  </td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <form
-                      action={reindexSource}
-                      style={{ display: 'inline-block', marginRight: '0.4rem' }}
-                    >
-                      <input type="hidden" name="org" value={orgId} />
-                      <input type="hidden" name="id" value={source.id} />
-                      <button className="ghost" type="submit">
-                        Neu indizieren
-                      </button>
-                    </form>
-                    <form action={deleteSource} style={{ display: 'inline-block' }}>
-                      <input type="hidden" name="org" value={orgId} />
-                      <input type="hidden" name="id" value={source.id} />
-                      <button className="ghost" type="submit">
-                        Löschen
-                      </button>
-                    </form>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <KnowledgeTabs tabs={tabs} />
+      <KbGallery tiles={tiles} panels={panels} newPanel={newPanel} />
     </div>
   );
 }

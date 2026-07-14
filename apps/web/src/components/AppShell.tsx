@@ -286,13 +286,13 @@ function Sidebar() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           className="app-brand-wordmark app-brand-wordmark--onlight"
-          src="/brand/wordmark-onlight.svg"
+          src="/brand/logo-onlight.svg"
           alt="Zendori"
         />
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           className="app-brand-wordmark app-brand-wordmark--ondark"
-          src="/brand/wordmark-ondark.svg"
+          src="/brand/logo-ondark.svg"
           alt="Zendori"
         />
         {/* eslint-disable-next-line @next/next/no-img-element */}

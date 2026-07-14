@@ -53,6 +53,23 @@ const checkboxRowStyle: CSSProperties = {
   marginBottom: '0.4rem',
 };
 
+async function supabaseForKbs(orgId: string) {
+  const supabase = await createSupabaseServerClient();
+  return supabase
+    .from('knowledge_bases')
+    .select('id, name')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: true });
+}
+
+async function supabaseForLinks(orgId: string) {
+  const supabase = await createSupabaseServerClient();
+  return supabase
+    .from('agent_knowledge_bases')
+    .select('agent_id, knowledge_base_id')
+    .eq('org_id', orgId);
+}
+
 async function listAgents(orgId: string): Promise<AgentRow[]> {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
@@ -144,6 +161,18 @@ export default async function AgentsPage({
   const disabled = !isOwner;
 
   const [agents, channels] = await Promise.all([listAgents(orgId), listChannels(orgId)]);
+  const [{ data: kbData }, { data: linkData }] = await Promise.all([
+    supabaseForKbs(orgId),
+    supabaseForLinks(orgId),
+  ]);
+  const kbs = (kbData ?? []) as { id: string; name: string }[];
+  const links = (linkData ?? []) as { agent_id: string; knowledge_base_id: string }[];
+  const kbsByAgent = new Map<string, Set<string>>();
+  for (const link of links) {
+    const set = kbsByAgent.get(link.agent_id) ?? new Set<string>();
+    set.add(link.knowledge_base_id);
+    kbsByAgent.set(link.agent_id, set);
+  }
   const channelsByAgent = new Map<string, number>();
   for (const channel of channels) {
     if (channel.agent_id) {
@@ -217,10 +246,40 @@ export default async function AgentsPage({
             Agent aktiv (pausiert = verhält sich wie „kein Agent")
           </label>
           {channelChecklist(agent)}
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', margin: 0 }}>
-            Wissensdatenbank-Verknüpfung pro Agent folgt in Kürze — aktuell nutzen alle Agenten die
-            gesamte Wissensdatenbank der Organisation.
-          </p>
+          <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+            <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+              Wissensdatenbanken
+            </legend>
+            <p style={{ ...helpStyle, marginBottom: '0.75rem' }}>
+              Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung
+              kennt er keine Inhalte und übergibt inhaltliche Fragen an das Team.
+            </p>
+            {kbs.length === 0 ? (
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen →
+                Wissensdatenbank.
+              </p>
+            ) : (
+              kbs.map((kb) => {
+                const isLinked = kbsByAgent.get(agent.id)?.has(kb.id) ?? false;
+                return (
+                  <label key={kb.id} style={checkboxRowStyle}>
+                    {isLinked ? (
+                      <input type="hidden" name="renderedLinkedKbs" value={kb.id} />
+                    ) : null}
+                    <input
+                      type="checkbox"
+                      name="kbs"
+                      value={kb.id}
+                      defaultChecked={isLinked}
+                      disabled={disabled}
+                    />
+                    {kb.name}
+                  </label>
+                );
+              })
+            )}
+          </fieldset>
           {isOwner ? (
             <button className="primary" type="submit">
               Agent speichern
@@ -245,7 +304,8 @@ export default async function AgentsPage({
       <h2>Neuen Agenten anlegen</h2>
       <p style={helpStyle}>
         Ein Agent bündelt Identität (Prompt), Verhalten und Schwellwert. Nach dem Anlegen weist du
-        ihm Kanäle zu — so kann der Chat anders auftreten als E-Mail oder Telefon.
+        ihm Kanäle zu — so kann der Chat anders auftreten als E-Mail oder Telefon. Neue Agenten
+        werden automatisch mit allen Wissensdatenbanken verknüpft (danach anpassbar).
       </p>
       {isOwner ? (
         <form className="stack" action={createAgent} style={{ maxWidth: '34rem' }}>

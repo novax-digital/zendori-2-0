@@ -40,12 +40,14 @@ function fileExtension(name: string): string {
 
 const addUrlSchema = z.object({
   org: z.uuid(),
+  knowledgeBaseId: z.uuid(),
   url: z.url().max(2000),
 });
 
 export async function addUrlSource(formData: FormData): Promise<void> {
   const parsed = addUrlSchema.safeParse({
     org: formData.get('org'),
+    knowledgeBaseId: formData.get('knowledgeBaseId'),
     url: textField(formData.get('url')),
   });
   if (!parsed.success) {
@@ -55,16 +57,17 @@ export async function addUrlSource(formData: FormData): Promise<void> {
       })
     );
   }
-  const { org, url } = parsed.data;
+  const { org, knowledgeBaseId, url } = parsed.data;
   // reject non-web schemes (javascript:, data:, file: …) before we ever crawl it
   if (!/^https?:\/\//i.test(url)) {
     redirect(knowledgeUrl(org, { error: 'Bitte eine gültige URL (http/https) angeben.' }));
   }
 
   const supabase = await createSupabaseServerClient();
+  // the composite FK rejects a knowledgeBaseId belonging to another org
   const { error } = await supabase
     .from('kb_sources')
-    .insert({ org_id: org, type: 'url', uri: url, status: 'pending' });
+    .insert({ org_id: org, knowledge_base_id: knowledgeBaseId, type: 'url', uri: url, status: 'pending' });
   if (error) {
     redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
   }
@@ -79,6 +82,7 @@ export async function addUrlSource(formData: FormData): Promise<void> {
 
 const addTextSchema = z.object({
   org: z.uuid(),
+  knowledgeBaseId: z.uuid(),
   title: z.string().min(1).max(200),
   text: z.string().min(1).max(MAX_TEXT_LENGTH),
 });
@@ -92,6 +96,7 @@ export async function addTextSource(formData: FormData): Promise<void> {
   const rawText = formData.get('text');
   const parsed = addTextSchema.safeParse({
     org: formData.get('org'),
+    knowledgeBaseId: formData.get('knowledgeBaseId'),
     title: textField(formData.get('title')),
     text: typeof rawText === 'string' ? rawText : '',
   });
@@ -102,7 +107,7 @@ export async function addTextSource(formData: FormData): Promise<void> {
       })
     );
   }
-  const { org, title, text } = parsed.data;
+  const { org, knowledgeBaseId, title, text } = parsed.data;
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
@@ -112,7 +117,13 @@ export async function addTextSource(formData: FormData): Promise<void> {
   const supabase = await createSupabaseServerClient();
   const { data: inserted, error } = await supabase
     .from('kb_sources')
-    .insert({ org_id: org, type: 'text', uri: 'text', status: 'pending' })
+    .insert({
+      org_id: org,
+      knowledge_base_id: knowledgeBaseId,
+      type: 'text',
+      uri: 'text',
+      status: 'pending',
+    })
     .select('id')
     .single();
   if (error || !inserted) {
@@ -133,6 +144,19 @@ export async function addTextSource(formData: FormData): Promise<void> {
     redirect(knowledgeUrl(org, { error: 'Text konnte nicht gespeichert werden.' }));
   }
 
+  // TOCTOU vs deleteKnowledgeBase: if the base (and via cascade this row) was
+  // deleted mid-upload, remove the just-uploaded file instead of orphaning it.
+  const { data: stillThere } = await supabase
+    .from('kb_sources')
+    .select('id')
+    .eq('org_id', org)
+    .eq('id', sourceId)
+    .maybeSingle();
+  if (!stillThere) {
+    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/text.txt`]);
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+  }
+
   revalidatePath('/settings/knowledge');
   redirect(
     knowledgeUrl(org, { notice: 'Text-Quelle angelegt — die Indizierung startet in Kürze.' })
@@ -141,10 +165,13 @@ export async function addTextSource(formData: FormData): Promise<void> {
 
 // --- add file source -------------------------------------------------------------
 
-const addFileMetaSchema = z.object({ org: z.uuid() });
+const addFileMetaSchema = z.object({ org: z.uuid(), knowledgeBaseId: z.uuid() });
 
 export async function addFileSource(formData: FormData): Promise<void> {
-  const parsedMeta = addFileMetaSchema.safeParse({ org: formData.get('org') });
+  const parsedMeta = addFileMetaSchema.safeParse({
+    org: formData.get('org'),
+    knowledgeBaseId: formData.get('knowledgeBaseId'),
+  });
   if (!parsedMeta.success) {
     redirect(
       knowledgeUrl(textField(formData.get('org')), {
@@ -152,7 +179,7 @@ export async function addFileSource(formData: FormData): Promise<void> {
       })
     );
   }
-  const { org } = parsedMeta.data;
+  const { org, knowledgeBaseId } = parsedMeta.data;
 
   const file = formData.get('file');
   if (!(file instanceof File) || file.size === 0) {
@@ -177,7 +204,13 @@ export async function addFileSource(formData: FormData): Promise<void> {
   const supabase = await createSupabaseServerClient();
   const { data: inserted, error } = await supabase
     .from('kb_sources')
-    .insert({ org_id: org, type: 'file', uri: filename, status: 'pending' })
+    .insert({
+      org_id: org,
+      knowledge_base_id: knowledgeBaseId,
+      type: 'file',
+      uri: filename,
+      status: 'pending',
+    })
     .select('id')
     .single();
   if (error || !inserted) {
@@ -197,8 +230,118 @@ export async function addFileSource(formData: FormData): Promise<void> {
     redirect(knowledgeUrl(org, { error: 'Datei konnte nicht hochgeladen werden.' }));
   }
 
+  // TOCTOU vs deleteKnowledgeBase (see addTextSource).
+  const { data: stillThere } = await supabase
+    .from('kb_sources')
+    .select('id')
+    .eq('org_id', org)
+    .eq('id', sourceId)
+    .maybeSingle();
+  if (!stillThere) {
+    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+  }
+
   revalidatePath('/settings/knowledge');
   redirect(knowledgeUrl(org, { notice: 'Datei hochgeladen — die Indizierung startet in Kürze.' }));
+}
+
+// --- knowledge bases (0012) --------------------------------------------------------
+
+const createKbSchema = z.object({
+  org: z.uuid(),
+  name: z.string().min(2).max(80),
+  description: z.string().max(300),
+});
+
+/** Creates a knowledge base (member-level content management, like sources). */
+export async function createKnowledgeBase(formData: FormData): Promise<void> {
+  const parsed = createKbSchema.safeParse({
+    org: formData.get('org'),
+    name: textField(formData.get('name')),
+    description: textField(formData.get('description')),
+  });
+  if (!parsed.success) {
+    redirect(
+      knowledgeUrl(textField(formData.get('org')), {
+        error: 'Bitte einen Namen (2–80 Zeichen) angeben.',
+      })
+    );
+  }
+  const { org, name, description } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.from('knowledge_bases').insert({
+    org_id: org,
+    name,
+    description: description === '' ? null : description,
+  });
+  if (error) {
+    redirect(knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht angelegt werden.' }));
+  }
+
+  revalidatePath('/settings/knowledge');
+  redirect(knowledgeUrl(org, { notice: `Wissensdatenbank „${name}" angelegt.` }));
+}
+
+const deleteKbSchema = z.object({ org: z.uuid(), id: z.uuid() });
+
+/**
+ * Deletes a knowledge base INCLUDING all its sources and chunks (FK cascade).
+ * Mirrors deleteSource's isolation pattern: the user-scoped delete proves
+ * membership before any service-role storage cleanup runs (§7).
+ */
+export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
+  const parsed = deleteKbSchema.safeParse({
+    org: formData.get('org'),
+    id: formData.get('id'),
+  });
+  if (!parsed.success) {
+    redirect(
+      knowledgeUrl(textField(formData.get('org')), {
+        error: 'Wissensdatenbank konnte nicht gelöscht werden.',
+      })
+    );
+  }
+  const { org, id } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+
+  // Collect the source ids BEFORE the cascade removes them (user-scoped: RLS
+  // proves membership; a foreign org/id yields zero rows and a harmless no-op).
+  const { data: sourceRows } = await supabase
+    .from('kb_sources')
+    .select('id')
+    .eq('org_id', org)
+    .eq('knowledge_base_id', id);
+  const sourceIds = ((sourceRows ?? []) as { id: string }[]).map((r) => r.id);
+
+  const { data: deleted, error } = await supabase
+    .from('knowledge_bases')
+    .delete()
+    .eq('org_id', org)
+    .eq('id', id)
+    .select('id');
+  if (error || !deleted || deleted.length === 0) {
+    redirect(knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht gelöscht werden.' }));
+  }
+
+  // Membership proven → best-effort cleanup of stored files per source.
+  const admin = createSupabaseAdminClient();
+  if (admin) {
+    for (const sourceId of sourceIds) {
+      const { data: listed } = await admin.storage.from(KB_BUCKET).list(`${org}/${sourceId}`);
+      if (listed && listed.length > 0) {
+        await admin.storage
+          .from(KB_BUCKET)
+          .remove(listed.map((entry) => `${org}/${sourceId}/${entry.name}`));
+      }
+    }
+  }
+
+  revalidatePath('/settings/knowledge');
+  revalidatePath('/settings/agents');
+  redirect(knowledgeUrl(org, { notice: 'Wissensdatenbank samt Quellen gelöscht.' }));
 }
 
 // --- reindex / delete ------------------------------------------------------------

@@ -321,9 +321,17 @@ export async function processMessage(messageId: string): Promise<void> {
     }
 
     // --- 4. retrieve (RAG, shared with the voice kb_search tool) --------------
+    // Scoped to the agent's linked knowledge bases (0012). No agent (force-draft
+    // path) = all org knowledge; an agent with zero linked bases finds nothing.
     currentStep = 'retrieve';
+    // force-draft deliberately bypasses the agent — a human asked for a draft,
+    // so search ALL org knowledge, not the agent's (possibly empty) base set.
+    const knowledgeBaseIds =
+      activeAgent && !forceDraft ? await loadAgentKbIds(supabase, activeAgent.id) : null;
     const retrieveStart = Date.now();
-    const { matches, costUsd: embedCost } = await retrieveKbChunks(supabase, orgId, cleanBody);
+    const { matches, costUsd: embedCost } = await retrieveKbChunks(supabase, orgId, cleanBody, {
+      knowledgeBaseIds,
+    });
     const retrieveLatency = Date.now() - retrieveStart;
     await logAiRun(supabase, {
       orgId,
@@ -716,6 +724,25 @@ function parseThreshold(value: number | string | null | undefined): number {
   const n = typeof value === 'string' ? Number.parseFloat(value) : value;
   if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n;
   return 0.7; // agents.confidence_threshold default
+}
+
+/**
+ * Knowledge bases linked to the agent (0012). Missing table (pre-0012 schema
+ * skew) degrades to null = all org knowledge — the pre-0012 behavior.
+ */
+async function loadAgentKbIds(
+  supabase: SupabaseClient,
+  agentId: string
+): Promise<string[] | null> {
+  const { data, error } = await supabase
+    .from('agent_knowledge_bases')
+    .select('knowledge_base_id')
+    .eq('agent_id', agentId);
+  if (error) {
+    if ((error as { code?: string }).code === '42P01') return null;
+    throw error;
+  }
+  return ((data ?? []) as { knowledge_base_id: string }[]).map((r) => r.knowledge_base_id);
 }
 
 /** Load the channel's assigned agent (0011). Unknown mode values → draft_only. */

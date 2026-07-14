@@ -385,6 +385,7 @@ export class CallSession {
       channelId: this.p.channelId,
       channelConfig: this.p.channelConfig,
       agentMode: this.p.agent.mode,
+      knowledgeBaseIds: this.p.agent.knowledgeBaseIds,
     };
     try {
       switch (name) {

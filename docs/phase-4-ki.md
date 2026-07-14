@@ -20,7 +20,9 @@ process-message:
   2. classification in message.metadata; conversation.priority setzen
   3. extract (Haiku) NUR bei E-Mail/Formular → echten Absender (Name/E-Mail/Telefon) + Anliegen
      → Contact-Korrektur: find-or-create by email, conversation.contact_id umhängen, Name/Telefon ergänzen
-  4. retrieve (RAG): embed(query) → rpc match_kb_chunks (org-scoped, Schwelle 0.3, top 6)
+  4. retrieve (RAG): embed(query) → rpc match_kb_chunks (org-scoped + gefiltert auf die
+     Wissensdatenbanken des zugewiesenen Agenten [0012, agent_knowledge_bases]; Agent ohne
+     verknüpfte Datenbank findet nichts — gewollt; force_draft sucht org-weit; Schwelle 0.3, top 6)
   5. draft (Sonnet): Kontext = Top-Chunks + tone_instructions → { reply, confidence, used_source_ids }
   6. ai_drafts: alten pending-Draft verwerfen, neuen pending-Draft speichern (Quellen + Confidence)
   7. message 'done'; jeder Schritt in ai_runs (Modell, Confidence, latency, cost_usd)
@@ -45,7 +47,7 @@ index-source:
 
 ## Datenmodell (Migration 0005)
 
-- `match_kb_chunks(p_org_id, p_embedding, p_match_threshold, p_match_count)` → Top-Chunks per Cosinus (hnsw-Index), org-gefiltert.
+- `match_kb_chunks(p_org_id, p_embedding, p_match_threshold, p_match_count, p_knowledge_base_ids uuid[] default null)` → Top-Chunks per Cosinus (hnsw-Index + iterative_scan), org-gefiltert; `null` = alle Datenbanken der Org, `[]` = keine Treffer (Migration 0012 — die alte 4-Parameter-Signatur wurde ersetzt).
 - `ai_drafts` (org_id, conversation_id, message_id, content, confidence, sources jsonb, model, status pending|accepted|edited|discarded). RLS: Member lesen/Status ändern, Worker (Service Role) schreibt. Unique-Index: max. 1 pending pro Konversation. In Realtime-Publication.
 - Bucket `kb-files` (privat, Org-Member-Read, Service-Role-Write).
 
@@ -56,7 +58,7 @@ Pro Anthropic-/Embedding-Call aus `usage` berechnet und in `ai_runs.cost_usd` ge
 ## Manueller Test
 
 1. Worker starten (`pnpm --filter @zendori/worker start`, braucht die Env inkl. AI-Keys).
-2. Einstellungen → Wissensdatenbank → Text/URL/Datei hinzufügen → Status wird `indexed`.
+2. Einstellungen → Wissensdatenbank → Datenbank-Kachel wählen (oder anlegen) → Text/URL/Datei hinzufügen → Status wird `indexed`. Die Datenbank muss beim Agenten des Kanals angehakt sein (Einstellungen → Agenten), sonst nutzt die KI sie nicht.
 3. Über den Test-Channel/das Widget eine Frage einspeisen, die die KB beantwortet.
 4. Inbox → Konversation öffnen: der Antwort-Vorschlag erscheint mit Confidence + Quelle.
 5. Übernehmen/Bearbeiten/Verwerfen testen.

@@ -73,15 +73,47 @@ export async function createAgent(formData: FormData): Promise<void> {
   await requireOwner(org);
 
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.from('agents').insert({
-    org_id: org,
-    name,
-    identity: identity === '' ? null : identity,
-    mode,
-    confidence_threshold: confidenceThreshold,
-  });
-  if (error) {
+  const { data: created, error } = await supabase
+    .from('agents')
+    .insert({
+      org_id: org,
+      name,
+      identity: identity === '' ? null : identity,
+      mode,
+      confidence_threshold: confidenceThreshold,
+    })
+    .select('id')
+    .single();
+  if (error || !created) {
     redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }));
+  }
+
+  // Default: link ALL current knowledge bases (least surprise — matches the
+  // pre-0012 behavior where every agent searched everything; owner can unlink).
+  const { data: kbData, error: kbLoadError } = await supabase
+    .from('knowledge_bases')
+    .select('id')
+    .eq('org_id', org);
+  const kbIds = ((kbData ?? []) as { id: string }[]).map((r) => r.id);
+  let linkError: unknown = kbLoadError;
+  if (!linkError && kbIds.length > 0) {
+    const { error } = await supabase.from('agent_knowledge_bases').insert(
+      kbIds.map((kbId) => ({
+        org_id: org,
+        agent_id: (created as { id: string }).id,
+        knowledge_base_id: kbId,
+      }))
+    );
+    linkError = error;
+  }
+  if (linkError) {
+    // The agent exists but has no knowledge — say so instead of faking success
+    // (per []-semantics it would silently answer nothing).
+    redirect(
+      agentsUrl(org, {
+        error: `Agent „${name}" angelegt, aber Wissensdatenbanken konnten nicht verknüpft werden — bitte im Agenten manuell anhaken.`,
+      })
+    );
   }
 
   revalidatePath('/settings/agents');
@@ -171,8 +203,56 @@ export async function updateAgent(formData: FormData): Promise<void> {
     }
   }
 
+  // Knowledge-base links (0012): same render-scoped semantics as channels —
+  // only unlink bases the form actually showed as linked.
+  const selectedKbs = new Set(uuidStrings(formData.getAll('kbs')));
+  const renderedLinkedKbs = new Set(uuidStrings(formData.getAll('renderedLinkedKbs')));
+  const { data: linkData, error: linkLoadError } = await supabase
+    .from('agent_knowledge_bases')
+    .select('knowledge_base_id')
+    .eq('org_id', org)
+    .eq('agent_id', agentId);
+  if (linkLoadError) {
+    redirect(agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' }));
+  }
+  const linked = new Set(
+    ((linkData ?? []) as { knowledge_base_id: string }[]).map((r) => r.knowledge_base_id)
+  );
+  // Stale checkbox for a meanwhile-deleted base must not fail the whole batch:
+  // only link bases that still exist (mirrors the channels handling).
+  const { data: kbRows } = await supabase.from('knowledge_bases').select('id').eq('org_id', org);
+  const existingKbs = new Set(((kbRows ?? []) as { id: string }[]).map((r) => r.id));
+  const kbsToLink = [...selectedKbs].filter((id) => existingKbs.has(id) && !linked.has(id));
+  const kbsToUnlink = [...linked].filter(
+    (id) => !selectedKbs.has(id) && renderedLinkedKbs.has(id)
+  );
+  if (kbsToLink.length > 0) {
+    const { error } = await supabase.from('agent_knowledge_bases').insert(
+      kbsToLink.map((kbId) => ({ org_id: org, agent_id: agentId, knowledge_base_id: kbId }))
+    );
+    if (error) {
+      redirect(
+        agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
+      );
+    }
+  }
+  if (kbsToUnlink.length > 0) {
+    const { error } = await supabase
+      .from('agent_knowledge_bases')
+      .delete()
+      .eq('org_id', org)
+      .eq('agent_id', agentId)
+      .in('knowledge_base_id', kbsToUnlink);
+    if (error) {
+      redirect(
+        agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
+      );
+    }
+  }
+
   revalidatePath('/settings/agents');
   revalidatePath('/settings/channels');
+  revalidatePath('/settings/knowledge');
   redirect(agentsUrl(org, { notice: 'Agent gespeichert.' }));
 }
 

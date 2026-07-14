@@ -173,7 +173,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
     // so a missing/paused agent falls back to safe intake mode (take the case,
     // no RAG answers) with a warning; transient load errors release the claim.
     const agentId = (channelRes.data as { agent_id?: string | null }).agent_id ?? null;
-    let agent: VoiceAgentBehavior = { mode: 'intake_only', identity: null };
+    let agent: VoiceAgentBehavior = { mode: 'intake_only', identity: null, knowledgeBaseIds: null };
     if (agentId) {
       const agentRes = await supabase
         .from('agents')
@@ -199,10 +199,30 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       } | null;
       if (row && row.is_active) {
         // autopilot → live answering; draft_only/intake_only → intake (a call
-        // cannot present a draft for human review first).
+        // cannot present a draft for human review first). kb_search is scoped
+        // to the agent's linked bases (0012); pre-0012 table → null = all.
+        let knowledgeBaseIds: string[] | null = null;
+        const kbRes = await supabase
+          .from('agent_knowledge_bases')
+          .select('knowledge_base_id')
+          .eq('agent_id', agentId);
+        if (kbRes.error && !isMissingTable(kbRes.error)) {
+          logger.warn(
+            { voiceCallId, err: toErrorInfo(kbRes.error) },
+            'voice agent kb-link load failed — releasing back to ringing'
+          );
+          await releaseClaim(call.id);
+          return;
+        }
+        if (!kbRes.error) {
+          knowledgeBaseIds = ((kbRes.data ?? []) as { knowledge_base_id: string }[]).map(
+            (r) => r.knowledge_base_id
+          );
+        }
         agent = {
           mode: row.mode === 'autopilot' ? 'answer' : 'intake_only',
           identity: row.identity ?? null,
+          knowledgeBaseIds,
         };
       } else {
         logger.warn({ voiceCallId }, 'voice agent missing/paused — falling back to intake mode');

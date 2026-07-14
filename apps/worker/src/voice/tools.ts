@@ -17,6 +17,8 @@ export interface ToolContext {
   channelConfig: VoiceChannelConfig;
   /** Resolved from the assigned agent (0011): gates kb_search in intake mode. */
   agentMode: 'answer' | 'intake_only';
+  /** Agent's linked knowledge bases (0012): null = all, [] = none. */
+  knowledgeBaseIds: string[] | null;
 }
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
@@ -33,7 +35,9 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
   }
 
   const start = Date.now();
-  const { matches, costUsd } = await retrieveKbChunks(ctx.supabase, ctx.orgId, parsed.data.query);
+  const { matches, costUsd } = await retrieveKbChunks(ctx.supabase, ctx.orgId, parsed.data.query, {
+    knowledgeBaseIds: ctx.knowledgeBaseIds,
+  });
   await ctx.supabase.from('ai_runs').insert({
     org_id: ctx.orgId,
     conversation_id: ctx.conversationId,

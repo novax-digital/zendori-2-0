@@ -107,7 +107,9 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `attachments` (message_id, storage_path, mime, size)
 - `notes` (conversation_id, author_id, content) — intern, nie an Kunden
 - `canned_responses` (org_id, shortcut, content)
-- `kb_sources` (org_id, type: url|file|text, uri, status: pending|indexed|error, last_indexed_at)
+- `knowledge_bases` (org_id, name, description) — mehrere Wissensdatenbanken pro Org (0012); Inhalte member-verwaltet
+- `kb_sources` (org_id, knowledge_base_id → knowledge_bases, type: url|file|text, uri, status: pending|indexed|error, last_indexed_at) — jede Quelle gehört zu genau einer Wissensdatenbank
+- `agent_knowledge_bases` (org_id, agent_id, knowledge_base_id) — n:m: welche Datenbanken ein Agent nutzt (owner-only; RAG-Suche filtert darauf, Agent ohne Verknüpfung findet nichts)
 - `kb_chunks` (source_id, org_id, content, embedding vector(1536), token_count)
 - `ai_runs` (conversation_id, step, model, input_summary, output_summary, confidence, latency_ms, cost_usd)
 - `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, triggered_by)

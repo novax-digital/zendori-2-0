@@ -101,6 +101,11 @@ export interface VoiceAgentBehavior {
   mode: 'answer' | 'intake_only';
   /** agents.identity — persona/system prompt appended to the mode template. */
   identity: string | null;
+  /**
+   * Linked knowledge bases for kb_search (0012). null = all org knowledge
+   * (fallback contexts); [] = the agent knows nothing.
+   */
+  knowledgeBaseIds: string[] | null;
 }
 
 /** Builds the session.update payload from channel config + assigned agent. */

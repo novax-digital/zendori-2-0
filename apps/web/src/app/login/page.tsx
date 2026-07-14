@@ -12,9 +12,9 @@ export default async function LoginPage({
       <div className="auth-wrap">
         <div className="auth-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="onlight" src="/brand/wordmark-onlight.svg" alt="Zendori" />
+          <img className="onlight" src="/brand/logo-onlight.svg" alt="Zendori" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="ondark" src="/brand/wordmark-ondark.svg" alt="Zendori" />
+          <img className="ondark" src="/brand/logo-ondark.svg" alt="Zendori" />
         </div>
         <div className="card">
           <h1>Willkommen zurück</h1>
