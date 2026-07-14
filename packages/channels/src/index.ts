@@ -6,6 +6,7 @@ export * from './email/mail-text.js';
 export * from './email/normalize.js';
 export * from './email/send.js';
 export * from './email/dispatch.js';
+export * from './voice/schemas.js';
 export * from './whatsapp/service-window.js';
 export * from './whatsapp/dispatch.js';
 export * from './whatsapp/twilio/schemas.js';

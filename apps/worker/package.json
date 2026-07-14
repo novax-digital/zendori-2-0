@@ -18,10 +18,12 @@
     "pdf-parse": "^1.1.1",
     "pg-boss": "^12.26.0",
     "tsx": "^4.20.0",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
     "vitest": "^3.2.7"
   }
 }

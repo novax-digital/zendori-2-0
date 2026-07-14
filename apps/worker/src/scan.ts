@@ -6,6 +6,7 @@
 import type { PgBoss } from 'pg-boss';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from './db.js';
+import { POST_CALL_QUEUE, POST_CALL_RETRY_LIMIT } from './pipeline/post-call.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -13,6 +14,7 @@ export const HUBSPOT_SYNC_QUEUE = 'hubspot.sync-conversation';
 export const PROCESS_MESSAGE_RETRY_LIMIT = 3;
 export const INDEX_SOURCE_RETRY_LIMIT = 2;
 export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
+const POST_CALL_BATCH = 10;
 
 const SCAN_INTERVAL_MS = 3_000;
 const MESSAGE_BATCH = 20;
@@ -50,6 +52,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueuePendingMessages(boss, supabase);
       await enqueuePendingSources(boss, supabase);
       await enqueueDueHubspotSyncs(boss, supabase);
+      await enqueueDuePostCalls(boss, supabase);
     } catch (err) {
       logger.error({ err: toErrorInfo(err) }, 'scan tick failed');
     } finally {
@@ -137,5 +140,33 @@ async function enqueueDueHubspotSyncs(boss: PgBoss, supabase: SupabaseClient): P
       retryBackoff: true,
     });
     enqueued += 1;
+  }
+}
+
+/** Enqueue ended voice calls that still need the post-call AI (Phase 9). */
+async function enqueueDuePostCalls(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('voice_calls')
+    .select('id')
+    .is('post_processed_at', null)
+    .not('ended_at', 'is', null)
+    .order('ended_at', { ascending: true })
+    .limit(POST_CALL_BATCH);
+  if (error) {
+    // voice_calls does not exist until migration 0009 is applied — stay silent.
+    if ((error as { code?: string }).code === '42P01') return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(
+      POST_CALL_QUEUE,
+      { voiceCallId: row.id },
+      {
+        singletonKey: row.id,
+        retryLimit: POST_CALL_RETRY_LIMIT,
+        retryBackoff: true,
+      }
+    );
   }
 }

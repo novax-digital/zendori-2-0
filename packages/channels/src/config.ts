@@ -93,12 +93,38 @@ export type WhatsAppChannelConfig = z.infer<typeof whatsappChannelConfigSchema>;
 export type WhatsAppTwilioConfig = z.infer<typeof whatsappTwilioConfigSchema>;
 export type WhatsAppMetaConfig = z.infer<typeof whatsappMetaConfigSchema>;
 
+/** Voice via xAI Grok Voice + Twilio SIP (Phase 9). One Twilio number per org. */
 export const voiceChannelConfigSchema = z.object({
   type: z.literal('voice'),
-  /** Encrypted per-org voice API key ("v1:…"). */
-  apiKeyEncrypted: z.string(),
+  provider: z.literal('xai'),
+  /** ROUTING KEY (plaintext, queried in SQL): E.164 of the Twilio number registered at xAI. */
+  phoneNumber: z.string().min(1),
+  /** xAI phone-number resource id (POST /v2/phone-numbers) — for teardown/update. */
+  xaiPhoneNumberId: z.string().optional(),
+  /** Twilio provisioning bookkeeping. */
+  twilioPhoneNumberSid: z.string().optional(),
+  twilioTrunkSid: z.string().optional(),
+  /** One-time Standard-Webhooks signing secret from xAI registration, encrypted ("v1:…"). */
+  dispatchSigningSecretEncrypted: z.string(),
+  /** answer = RAG-backed replies; intake_only = only take the case → ticket, no kb_search. */
+  agentMode: z.enum(['answer', 'intake_only']).default('answer'),
+  /** Persona/system prompt (German, org-edited); merged with the mode template. */
+  instructions: z.string().optional(),
+  greeting: z.string().optional(),
+  /** eve|ara|rex|sal|leo or a custom voice id. */
+  voice: z.string().default('eve'),
+  /** BCP-47 ASR language hint. */
+  languageHint: z.string().default('de'),
+  /** Brand/product names improving German ASR (xAI: max 100 × 50 chars). */
+  keyterms: z.array(z.string().max(50)).max(100).default([]),
+  speechSpeed: z.number().min(0.7).max(1.5).default(1.0),
+  /** tel:+E164 live-transfer target; absent ⇒ callback-ticket handoff only. */
   transferNumber: z.string().optional(),
+  maxCallSeconds: z.number().int().positive().default(900),
+  connectionState: z.enum(['active', 'needs_reconnect']).default('active'),
 });
+
+export type VoiceChannelConfig = z.infer<typeof voiceChannelConfigSchema>;
 
 export const channelConfigSchema = z.union([
   chatChannelConfigSchema,

@@ -43,7 +43,7 @@ Kern-Features:
 - **WhatsApp (provider-agnostisch, pro Org eigene Nummer):** ein Kanaltyp `whatsapp`, Backend pro Channel über `config.provider`:
   - **Twilio** — Operator (Novax) besitzt die WhatsApp-Sender, eine Nummer je Kunde; Routing über die `To`-Nummer, Verify `X-Twilio-Signature`.
   - **Meta WhatsApp Cloud API direkt** — Kunde besitzt seine eigene Nummer/WABA, verbunden per **Embedded Signup (Tech Provider)**; Routing über `phone_number_id`, Verify `X-Hub-Signature-256`.
-  - Beide hinter *einem* Adapter (`packages/channels/whatsapp`, dispatch auf `provider`), gleiche `UnifiedInboundMessage`/`OutboundMessage`; Credentials pro Org verschlüsselt in `channels.config`. Twilio ist hier bewusst erlaubt — die frühere „kein Twilio"-Regel ist damit aufgehoben.
+  - Beide hinter _einem_ Adapter (`packages/channels/whatsapp`, dispatch auf `provider`), gleiche `UnifiedInboundMessage`/`OutboundMessage`; Credentials pro Org verschlüsselt in `channels.config`. Twilio ist hier bewusst erlaubt — die frühere „kein Twilio"-Regel ist damit aufgehoben.
 - **Chat:** eigenes Embeddable Widget (ein Script-Tag) + Supabase Realtime.
 - **HubSpot (optional, Phase 6):** einseitiger Ticket-Sync pro Org mit Sync-Regeln (alle Konversationen | nur ausgewählte Kanäle | nur manuell). Kein Kern-Bestandteil.
 - **Voice (Phase 9): xAI Voice API + Twilio als reiner Nummern-/SIP-Trunk-Lieferant** (Entscheidung getroffen; ElevenLabs verworfen). Formaler Go/No-Go bleibt der deutsche Testanruf vor Phasenstart. API ist OpenAI-Realtime-kompatibel → Plan B OpenAI Realtime mit fast gleichem Code. NICHT vorab implementieren. Details §9.

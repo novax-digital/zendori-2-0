@@ -3,7 +3,11 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { emailInboundConfigSchema, whatsappTwilioConfigSchema } from '@zendori/channels';
+import {
+  emailInboundConfigSchema,
+  voiceChannelConfigSchema,
+  whatsappTwilioConfigSchema,
+} from '@zendori/channels';
 import { encryptSecret } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, generatePublicToken } from '@/lib/widget/session';
@@ -255,7 +259,142 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
   revalidatePath('/settings/channels');
   redirect(
     channelsUrl(org, {
-      notice: 'WhatsApp-Kanal (Twilio) angelegt. Bitte die Webhook-URL im Twilio-Console eintragen.',
+      notice:
+        'WhatsApp-Kanal (Twilio) angelegt. Bitte die Webhook-URL im Twilio-Console eintragen.',
     })
   );
+}
+
+// --- voice channel agent settings (Phase 9) --------------------------------------
+
+const updateVoiceSettingsSchema = z.object({
+  org: z.uuid(),
+  channelId: z.uuid(),
+  agentMode: z.enum(['answer', 'intake_only']),
+  instructions: z.string().max(4000),
+  greeting: z.string().max(500),
+  voice: z.string().min(1).max(80),
+  keyterms: z.string().max(4000),
+  speechSpeed: z.coerce.number().min(0.7).max(1.5),
+  transferNumber: z
+    .string()
+    .regex(/^\+[1-9]\d{6,15}$/)
+    .or(z.literal('')),
+});
+
+/**
+ * Updates the voice agent settings of an existing voice channel. The
+ * provisioning fields (phoneNumber, signing secret, SIDs) are operator-managed
+ * and preserved via read-modify-write; only the agent config is editable here.
+ */
+export async function updateVoiceChannelSettings(formData: FormData): Promise<void> {
+  const errorText = 'Voice-Einstellungen konnten nicht gespeichert werden.';
+  const parsed = updateVoiceSettingsSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+    agentMode: formData.get('agentMode'),
+    instructions: textField(formData.get('instructions')),
+    greeting: textField(formData.get('greeting')),
+    voice: textField(formData.get('voice')),
+    keyterms: textField(formData.get('keyterms')),
+    speechSpeed: textField(formData.get('speechSpeed')) || '1.0',
+    transferNumber: textField(formData.get('transferNumber')),
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(textField(formData.get('org')), {
+        error:
+          'Bitte Eingaben prüfen (Transfer-Nummer als +49…, Sprechtempo zwischen 0,7 und 1,5).',
+      })
+    );
+  }
+  const {
+    org,
+    channelId,
+    agentMode,
+    instructions,
+    greeting,
+    voice,
+    keyterms,
+    speechSpeed,
+    transferNumber,
+  } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+
+  // Owner-only (like org_settings): transferNumber redirects live calls and
+  // instructions steer the bot — too sensitive for the agent role.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  const { data: memberRow } = await supabase
+    .from('org_members')
+    .select('role')
+    .eq('org_id', org)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if ((memberRow as { role: string } | null)?.role !== 'owner') {
+    redirect(
+      channelsUrl(org, { error: 'Nur Inhaber können die Voice-Einstellungen ändern.' })
+    );
+  }
+
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('id, type, config')
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .maybeSingle();
+  const channel = channelRow as { id: string; type: string; config: unknown } | null;
+  if (!channel || channel.type !== 'voice') {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+  const existing = voiceChannelConfigSchema.safeParse(channel.config);
+  if (!existing.success) {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+
+  const keytermList = keyterms
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0 && k.length <= 50)
+    .slice(0, 100);
+
+  const overrides = {
+    agentMode,
+    instructions: instructions || undefined,
+    greeting: greeting || undefined,
+    voice,
+    keyterms: keytermList,
+    speechSpeed,
+    transferNumber: transferNumber || undefined,
+  };
+  // Validate the merged shape, but PERSIST raw-config + overrides so unknown
+  // keys a newer worker/provisioning version wrote are preserved (zod strips).
+  const validation = voiceChannelConfigSchema.safeParse({ ...existing.data, ...overrides });
+  if (!validation.success) {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+  const nextConfig: Record<string, unknown> = {
+    ...(channel.config as Record<string, unknown>),
+    ...overrides,
+  };
+  // Explicitly clear optional fields the form emptied (spread keeps old values).
+  if (!overrides.instructions) delete nextConfig.instructions;
+  if (!overrides.greeting) delete nextConfig.greeting;
+  if (!overrides.transferNumber) delete nextConfig.transferNumber;
+
+  const { data, error } = await supabase
+    .from('channels')
+    .update({ config: nextConfig })
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(channelsUrl(org, { notice: 'Voice-Einstellungen gespeichert.' }));
 }

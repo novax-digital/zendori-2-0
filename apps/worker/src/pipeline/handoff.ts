@@ -157,6 +157,10 @@ export async function deliverBotReply(
   }
 
   if (metadata) {
-    await supabase.from('messages').update({ metadata }).eq('org_id', conv.org_id).eq('id', outboundId);
+    await supabase
+      .from('messages')
+      .update({ metadata })
+      .eq('org_id', conv.org_id)
+      .eq('id', outboundId);
   }
 }

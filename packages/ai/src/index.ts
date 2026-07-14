@@ -32,4 +32,5 @@ export * from './prompts.js';
 export * from './cost.js';
 export * from './chunking.js';
 export * from './embeddings.js';
+export * from './retrieve.js';
 export * from './anthropic.js';

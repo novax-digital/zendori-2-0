@@ -8,9 +8,7 @@ import { sendTwilioWhatsApp } from './twilio/send.js';
 // dispatches to the provider backend. Never throws to the caller and never logs
 // the token, recipient or content (§7).
 
-export type WhatsAppDeliverResult =
-  | { ok: true; externalId: string }
-  | { ok: false; error: string };
+export type WhatsAppDeliverResult = { ok: true; externalId: string } | { ok: false; error: string };
 
 export interface DeliverOutboundWhatsAppParams {
   conversationId: string;

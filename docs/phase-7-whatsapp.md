@@ -45,24 +45,24 @@ für die KI-Pipeline/Auto-Send.
 
 1. **Kanal anlegen.** Web → Einstellungen → Kanäle → „WhatsApp (Twilio)": Name, Absendernummer
    (+E164), Account SID (AC…), Auth Token, optional Messaging Service SID → „WhatsApp-Nummer
-   verbinden". *Erwartet:* Kanal erscheint in der Liste; die **Webhook-URL** wird angezeigt.
+   verbinden". _Erwartet:_ Kanal erscheint in der Liste; die **Webhook-URL** wird angezeigt.
 2. **Webhook in Twilio eintragen.** Twilio-Console → die Nummer (oder der Messaging Service) →
    „A message comes in" = die angezeigte URL (`https://<APP_URL>/api/hooks/whatsapp/twilio`),
    Methode **POST**. (Bei `APP_URL=localhost` einen Tunnel wie ngrok verwenden.)
 3. **Inbound.** Von einem WhatsApp-Handy eine Nachricht an die Nummer senden.
-   *Erwartet:* neue Konversation in der Inbox, Kontakt mit der Telefonnummer, Nachricht mit Text
+   _Erwartet:_ neue Konversation in der Inbox, Kontakt mit der Telefonnummer, Nachricht mit Text
    (bei Bild/Datei zusätzlich ein Anhang).
 4. **Idempotenz.** (Twilio stellt bei Timeout erneut zu.) Manuell prüfbar über den Stub-Test unten:
    dieselbe `MessageSid` zweimal → nur **eine** Nachricht.
 5. **Agentenantwort (im Fenster).** Innerhalb von 24 h nach der Kundennachricht in der Inbox
-   antworten. *Erwartet:* Antwort kommt als WhatsApp beim Handy an; die Nachricht trägt
+   antworten. _Erwartet:_ Antwort kommt als WhatsApp beim Handy an; die Nachricht trägt
    `metadata.whatsapp.message_sid`.
 6. **Außerhalb des Fensters.** Später als 24 h nach der letzten Kundennachricht antworten.
-   *Erwartet:* Hinweis „…außerhalb des 24-Stunden-Fensters…"; die Antwort ist gespeichert, aber als
+   _Erwartet:_ Hinweis „…außerhalb des 24-Stunden-Fensters…"; die Antwort ist gespeichert, aber als
    nicht zugestellt markiert (freier Text ist regelkonform nicht zustellbar — dafür braucht es ein
    genehmigtes Template).
 7. **Signatur.** Einen POST ohne/mit falschem `X-Twilio-Signature` an die Route senden.
-   *Erwartet:* `403`, keine Nachricht angelegt.
+   _Erwartet:_ `403`, keine Nachricht angelegt.
 
 ## Lokaler End-to-End-Test ohne Twilio (Stub)
 

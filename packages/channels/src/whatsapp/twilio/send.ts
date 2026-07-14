@@ -45,7 +45,9 @@ export interface SendTwilioWhatsAppParams {
  * Sends a WhatsApp message via Twilio's Messages API. Returns the message SID
  * (used as the outbound external id + to match delivery-status callbacks).
  */
-export async function sendTwilioWhatsApp(params: SendTwilioWhatsAppParams): Promise<{ sid: string }> {
+export async function sendTwilioWhatsApp(
+  params: SendTwilioWhatsAppParams
+): Promise<{ sid: string }> {
   const { accountSid, authToken, sender, messagingServiceSid, to, body, contentSid } = params;
 
   const form = new URLSearchParams();
@@ -91,7 +93,9 @@ export async function sendTwilioWhatsApp(params: SendTwilioWhatsAppParams): Prom
     } catch {
       /* ignore parse failure */
     }
-    throw new TwilioApiError(`twilio send returned status ${res.status}${code ? ` (code ${code})` : ''}`);
+    throw new TwilioApiError(
+      `twilio send returned status ${res.status}${code ? ` (code ${code})` : ''}`
+    );
   }
 
   let json: unknown;

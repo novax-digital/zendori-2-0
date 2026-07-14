@@ -13,8 +13,8 @@ import {
   EMBEDDING_MODEL,
   classify,
   draft,
-  embed,
   extract,
+  retrieveKbChunks,
   type AiRunStep,
   type ClassificationResult,
   type KbChunkMatch,
@@ -55,13 +55,6 @@ const DEFAULT_CATEGORIES = ['Frage', 'Störung', 'Reklamation', 'Bestellung', 'S
 
 /** Max characters of a chunk kept as a provenance snippet in ai_drafts.sources. */
 const SNIPPET_MAX_CHARS = 200;
-
-/**
- * Character cap for the embedding query. OpenAI rejects inputs over ~8192 tokens
- * with HTTP 400, which would fail the retrieve step on every retry and stall the
- * pipeline permanently. ~24k chars stays well under that (token-safety margin).
- */
-const MAX_EMBED_QUERY_CHARS = 24_000;
 
 // --- loaded row shapes (DB boundary, cast via `as unknown as`) ----------------
 
@@ -277,22 +270,10 @@ export async function processMessage(messageId: string): Promise<void> {
       });
     }
 
-    // --- 3. retrieve (RAG) ---------------------------------------------------
+    // --- 3. retrieve (RAG, shared with the voice kb_search tool) --------------
     currentStep = 'retrieve';
     const retrieveStart = Date.now();
-    const { vectors, costUsd: embedCost } = await embed([
-      cleanBody.slice(0, MAX_EMBED_QUERY_CHARS),
-    ]);
-    const queryVector = vectors[0];
-    if (!queryVector) throw new Error('embedding returned no vector for the query');
-    const { data: matchData, error: matchError } = await supabase.rpc('match_kb_chunks', {
-      p_org_id: orgId,
-      p_embedding: queryVector,
-      p_match_threshold: 0.3,
-      p_match_count: 6,
-    });
-    if (matchError) throw matchError;
-    const matches = (matchData ?? []) as unknown as KbChunkMatch[];
+    const { matches, costUsd: embedCost } = await retrieveKbChunks(supabase, orgId, cleanBody);
     const retrieveLatency = Date.now() - retrieveStart;
     await logAiRun(supabase, {
       orgId,

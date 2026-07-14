@@ -9,6 +9,7 @@ import {
   updateWidgetTheme,
   createIntakeAddress,
   createWhatsappTwilioChannel,
+  updateVoiceChannelSettings,
 } from './actions';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
@@ -88,6 +89,52 @@ function toWhatsappChannelView(channel: Channel): WhatsappChannelView | null {
   };
 }
 
+type VoiceChannelView = {
+  id: string;
+  name: string;
+  phoneNumber: string;
+  agentMode: 'answer' | 'intake_only';
+  instructions: string;
+  greeting: string;
+  voice: string;
+  keyterms: string;
+  speechSpeed: number;
+  transferNumber: string;
+  isActive: boolean;
+};
+
+/** Extracts a voice channel for the agent-settings card; null for other channels. */
+function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
+  if (channel.type !== 'voice') return null;
+  const config = channel.config as {
+    provider?: unknown;
+    phoneNumber?: unknown;
+    agentMode?: unknown;
+    instructions?: unknown;
+    greeting?: unknown;
+    voice?: unknown;
+    keyterms?: unknown;
+    speechSpeed?: unknown;
+    transferNumber?: unknown;
+  };
+  if (config.provider !== 'xai' || typeof config.phoneNumber !== 'string') return null;
+  return {
+    id: channel.id,
+    name: channel.name,
+    phoneNumber: config.phoneNumber,
+    agentMode: config.agentMode === 'intake_only' ? 'intake_only' : 'answer',
+    instructions: typeof config.instructions === 'string' ? config.instructions : '',
+    greeting: typeof config.greeting === 'string' ? config.greeting : '',
+    voice: typeof config.voice === 'string' ? config.voice : 'eve',
+    keyterms: Array.isArray(config.keyterms)
+      ? config.keyterms.filter((k): k is string => typeof k === 'string').join(', ')
+      : '',
+    speechSpeed: typeof config.speechSpeed === 'number' ? config.speechSpeed : 1.0,
+    transferNumber: typeof config.transferNumber === 'string' ? config.transferNumber : '',
+    isActive: channel.is_active,
+  };
+}
+
 const textareaStyle: CSSProperties = {
   width: '100%',
   padding: '0.55rem 0.75rem',
@@ -117,6 +164,9 @@ export default async function ChannelsPage({
   const whatsappChannels = channels
     .map(toWhatsappChannelView)
     .filter((view): view is WhatsappChannelView => view !== null);
+  const voiceChannels = channels
+    .map(toVoiceChannelView)
+    .filter((view): view is VoiceChannelView => view !== null);
   // strip a trailing slash so the displayed URL matches what the route reconstructs
   const whatsappTwilioWebhookUrl = `${appUrl().replace(/\/+$/, '')}/api/hooks/whatsapp/twilio`;
 
@@ -336,8 +386,8 @@ export default async function ChannelsPage({
         >
           Eine Twilio-WhatsApp-Nummer je Kunde. Nachrichten an diese Nummer landen in der Inbox,
           Antworten gehen über Twilio zurück. Nach dem Anlegen die unten angezeigte Webhook-URL im
-          Twilio-Console bei der Nummer (oder Messaging Service) unter „A message comes in"
-          (Methode POST) eintragen.
+          Twilio-Console bei der Nummer (oder Messaging Service) unter „A message comes in" (Methode
+          POST) eintragen.
         </p>
         {whatsappChannels.length === 0 ? (
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
@@ -357,7 +407,9 @@ export default async function ChannelsPage({
           </div>
         )}
         <div style={{ marginBottom: '1.25rem' }}>
-          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Webhook-URL (in Twilio eintragen)</span>
+          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+            Webhook-URL (in Twilio eintragen)
+          </span>
           <code className="invite-link">{whatsappTwilioWebhookUrl}</code>
         </div>
         <form className="stack" action={createWhatsappTwilioChannel} style={{ maxWidth: '26rem' }}>
@@ -376,13 +428,7 @@ export default async function ChannelsPage({
           </div>
           <div>
             <label htmlFor="wa-sender">Absendernummer (+E164)</label>
-            <input
-              id="wa-sender"
-              name="sender"
-              type="text"
-              required
-              placeholder="+493012345678"
-            />
+            <input id="wa-sender" name="sender" type="text" required placeholder="+493012345678" />
           </div>
           <div>
             <label htmlFor="wa-account-sid">Twilio Account SID</label>
@@ -413,6 +459,121 @@ export default async function ChannelsPage({
           </button>
         </form>
       </div>
+
+      {voiceChannels.length > 0 ? (
+        <div className="panel">
+          <h2>Telefon (Voice-Agent)</h2>
+          <p
+            style={{
+              fontSize: '0.9rem',
+              color: 'var(--text-muted)',
+              marginBottom: '1rem',
+            }}
+          >
+            Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Gespräche erscheinen
+            als Konversationen in der Inbox. Die Nummer wird vom Betreiber eingerichtet; hier
+            konfigurierst du das Verhalten des Agenten.
+          </p>
+          {voiceChannels.map((vc) => (
+            <form
+              key={vc.id}
+              className="stack"
+              action={updateVoiceChannelSettings}
+              style={{ maxWidth: '30rem', marginBottom: '1.5rem' }}
+            >
+              <input type="hidden" name="org" value={orgId} />
+              <input type="hidden" name="channelId" value={vc.id} />
+              <div>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                  {vc.name}
+                  {vc.isActive ? '' : ' (inaktiv)'}
+                </span>
+                <code className="invite-link">{vc.phoneNumber}</code>
+              </div>
+              <div>
+                <label htmlFor={`voice-mode-${vc.id}`}>Agent-Verhalten</label>
+                <select id={`voice-mode-${vc.id}`} name="agentMode" defaultValue={vc.agentMode}>
+                  <option value="answer">Beantworten (mit Wissensdatenbank)</option>
+                  <option value="intake_only">Nur Anliegen aufnehmen (reine Annahme)</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor={`voice-greeting-${vc.id}`}>Begrüßung</label>
+                <input
+                  id={`voice-greeting-${vc.id}`}
+                  name="greeting"
+                  type="text"
+                  maxLength={500}
+                  defaultValue={vc.greeting}
+                  placeholder="z. B. Willkommen bei Strong Energy, was kann ich für Sie tun?"
+                />
+              </div>
+              <div>
+                <label htmlFor={`voice-instructions-${vc.id}`}>Zusätzliche Anweisungen</label>
+                <textarea
+                  id={`voice-instructions-${vc.id}`}
+                  name="instructions"
+                  rows={4}
+                  maxLength={4000}
+                  defaultValue={vc.instructions}
+                  style={textareaStyle}
+                  placeholder="Tonalität, Besonderheiten, was der Agent wissen soll …"
+                />
+              </div>
+              <div>
+                <label htmlFor={`voice-voice-${vc.id}`}>Stimme</label>
+                <select id={`voice-voice-${vc.id}`} name="voice" defaultValue={vc.voice}>
+                  <option value="eve">Eve</option>
+                  <option value="ara">Ara</option>
+                  <option value="rex">Rex</option>
+                  <option value="sal">Sal</option>
+                  <option value="leo">Leo</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor={`voice-keyterms-${vc.id}`}>
+                  Fachbegriffe (kommagetrennt, verbessern die Erkennung)
+                </label>
+                <input
+                  id={`voice-keyterms-${vc.id}`}
+                  name="keyterms"
+                  type="text"
+                  maxLength={4000}
+                  defaultValue={vc.keyterms}
+                  placeholder="z. B. Produktnamen, Markennamen"
+                />
+              </div>
+              <div>
+                <label htmlFor={`voice-speed-${vc.id}`}>Sprechtempo (0,7–1,5)</label>
+                <input
+                  id={`voice-speed-${vc.id}`}
+                  name="speechSpeed"
+                  type="number"
+                  step="0.05"
+                  min="0.7"
+                  max="1.5"
+                  defaultValue={vc.speechSpeed}
+                />
+              </div>
+              <div>
+                <label htmlFor={`voice-transfer-${vc.id}`}>
+                  Transfer-Nummer (optional, für Live-Weiterleitung an einen Menschen)
+                </label>
+                <input
+                  id={`voice-transfer-${vc.id}`}
+                  name="transferNumber"
+                  type="text"
+                  defaultValue={vc.transferNumber}
+                  placeholder="+49301234567 (leer = Rückruf-Ticket)"
+                />
+              </div>
+              <button className="primary" type="submit">
+                Voice-Einstellungen speichern
+              </button>
+            </form>
+          ))}
+        </div>
+      ) : null}
 
       <div className="panel">
         <h2>Test-Channel anlegen</h2>

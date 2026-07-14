@@ -14,6 +14,10 @@ export const workerEnvSchema = z.object({
   SUPABASE_URL: z.url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   MASTER_ENCRYPTION_KEY: z.string().min(1).optional(),
+  /** xAI voice (Phase 9) — absent disables the voice dispatch entirely. */
+  XAI_API_KEY: z.string().min(1).optional(),
+  XAI_API_BASE: z.string().optional(),
+  VOICE_MAX_CONCURRENT_CALLS: z.coerce.number().int().positive().optional(),
   LOG_LEVEL: z.string().optional(),
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

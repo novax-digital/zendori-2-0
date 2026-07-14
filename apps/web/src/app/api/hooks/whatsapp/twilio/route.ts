@@ -65,7 +65,10 @@ function advanceStatus(existing: string | undefined, incoming: string): string {
 
 /** Makes a media filename safe for a storage object key. */
 function safeFilename(name: string): string {
-  const cleaned = name.replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/^\.+/, '').slice(0, 120);
+  const cleaned = name
+    .replace(/[^\p{L}\p{N}._-]+/gu, '_')
+    .replace(/^\.+/, '')
+    .slice(0, 120);
   return cleaned.length > 0 ? cleaned : 'medien';
 }
 
@@ -412,7 +415,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!conversationId) {
     const { data: convo, error: convError } = await admin
       .from('conversations')
-      .insert({ org_id: orgId, channel_id: channelId, contact_id: contactId, status: 'open', mode: 'bot' })
+      .insert({
+        org_id: orgId,
+        channel_id: channelId,
+        contact_id: contactId,
+        status: 'open',
+        mode: 'bot',
+      })
       .select('id')
       .single();
     if (convError || !convo) {
@@ -442,7 +451,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (messageError) {
     if (messageError.code === '23505') {
       if (createdConversationId) {
-        await admin.from('conversations').delete().eq('id', createdConversationId).eq('org_id', orgId);
+        await admin
+          .from('conversations')
+          .delete()
+          .eq('id', createdConversationId)
+          .eq('org_id', orgId);
       }
       return json({ ok: true, deduped: true }, 200);
     }

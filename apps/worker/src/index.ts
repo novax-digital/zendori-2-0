@@ -16,6 +16,13 @@ import {
   PROCESS_MESSAGE_RETRY_LIMIT,
   startScan,
 } from './scan.js';
+import { startVoiceDispatch } from './voice/dispatch.js';
+import {
+  POST_CALL_QUEUE,
+  POST_CALL_RETRY_LIMIT,
+  markPostCallTerminal,
+  processPostCall,
+} from './pipeline/post-call.js';
 
 const logger = createLogger('worker');
 
@@ -24,6 +31,7 @@ const HEARTBEAT_QUEUE = 'worker.heartbeat';
 const processMessageJobSchema = z.object({ messageId: z.uuid() });
 const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
 const hubspotSyncJobSchema = z.object({ conversationId: z.uuid() });
+const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -145,7 +153,36 @@ async function main(): Promise<void> {
     }
   );
 
+  // --- Phase-9 voice post-call pipeline ---------------------------------------
+  await ensureQueuePolicy(boss, POST_CALL_QUEUE);
+  await boss.work(
+    POST_CALL_QUEUE,
+    { includeMetadata: true },
+    async (jobs: JobWithMetadata<{ voiceCallId: string }>[]) => {
+      for (const job of jobs) {
+        const { voiceCallId } = postCallJobSchema.parse(job.data);
+        try {
+          await processPostCall(voiceCallId);
+        } catch (err) {
+          const isFinal = job.retryCount >= POST_CALL_RETRY_LIMIT;
+          logger.error(
+            { err: toErrorInfo(err), voiceCallId, retryCount: job.retryCount, final: isFinal },
+            'voice post-call failed'
+          );
+          if (isFinal) {
+            // Stamp so the scan stops re-enqueuing (no infinite paid LLM loop).
+            await markPostCallTerminal(voiceCallId);
+            return;
+          }
+          throw err; // let pg-boss retry
+        }
+      }
+    }
+  );
+
   const stopScan = startScan(boss, logger);
+  // Voice dispatch: Realtime-subscribed call intake + WS sessions (Phase 9).
+  const voice = startVoiceDispatch(logger);
 
   // initial heartbeat so the container reports healthy right after boot
   await writeHeartbeat();
@@ -154,8 +191,12 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
     stopScan();
-    void boss
+    void voice
       .stop()
+      .catch((err: unknown) =>
+        logger.error({ err: toErrorInfo(err) }, 'error during voice dispatch stop')
+      )
+      .then(() => boss.stop())
       .catch((err: unknown) => logger.error({ err: toErrorInfo(err) }, 'error during pg-boss stop'))
       .finally(() => process.exit(0));
   };

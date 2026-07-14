@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  computeTwilioSignature,
-  verifyTwilioSignature,
-} from '../src/whatsapp/twilio/signature.js';
+import { computeTwilioSignature, verifyTwilioSignature } from '../src/whatsapp/twilio/signature.js';
 import { parseTwilioInbound } from '../src/whatsapp/twilio/schemas.js';
 import { normalizeWhatsAppTwilio, stripWhatsappPrefix } from '../src/whatsapp/twilio/normalize.js';
 import { isWithinServiceWindow } from '../src/whatsapp/service-window.js';
@@ -37,9 +34,9 @@ describe('twilio signature', () => {
   });
 
   it('rejects when a param is tampered with', () => {
-    expect(
-      verifyTwilioSignature(authToken, url, { ...params, Digits: '9999' }, expected)
-    ).toBe(false);
+    expect(verifyTwilioSignature(authToken, url, { ...params, Digits: '9999' }, expected)).toBe(
+      false
+    );
   });
 
   it('is order-independent (params sorted by name)', () => {
