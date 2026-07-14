@@ -42,7 +42,15 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
     ctx.supabase,
     ctx.orgId,
     parsed.data.query,
-    { knowledgeBaseIds: ctx.knowledgeBaseIds, poolCount: 12, finalCount: 6, rerank: false }
+    // minSimilarity 0.3: without the rerank noise filter, voice keeps the
+    // legacy vector cutoff (0014) — the 0.15 gate is only safe WITH reranking.
+    {
+      knowledgeBaseIds: ctx.knowledgeBaseIds,
+      poolCount: 12,
+      finalCount: 6,
+      rerank: false,
+      minSimilarity: 0.3,
+    }
   );
   await ctx.supabase.from('ai_runs').insert({
     org_id: ctx.orgId,

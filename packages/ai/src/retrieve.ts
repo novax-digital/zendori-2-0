@@ -132,6 +132,12 @@ export async function retrieveRelevantChunks(
     poolCount?: number;
     /** Disable stage 2 (voice: latency-sensitive live calls). Default true. */
     rerank?: boolean;
+    /**
+     * Vector-leg noise gate (0014). Leave unset for the default 0.15 — safe
+     * ONLY together with the rerank stage. Callers that disable reranking
+     * (voice) MUST pass 0.3 to restore the legacy cutoff.
+     */
+    minSimilarity?: number;
     /** Company name for the rerank prompt. */
     companyName?: string;
   } = {}
@@ -156,6 +162,9 @@ export async function retrieveRelevantChunks(
     p_match_count: poolCount,
   };
   if (options.knowledgeBaseIds != null) hybridArgs.p_knowledge_base_ids = options.knowledgeBaseIds;
+  // Omitted unless set: a 6-key body against the pre-0014 function 404s into
+  // the legacy fallback below — which already enforces the 0.3 cutoff.
+  if (options.minSimilarity != null) hybridArgs.p_min_similarity = options.minSimilarity;
   const { data, error } = await supabase.rpc('hybrid_kb_search', hybridArgs);
   if (error) {
     if (!isMissingFunction(error)) throw new Error(`hybrid_kb_search failed: ${error.message}`);
@@ -180,9 +189,10 @@ export async function retrieveRelevantChunks(
   const pool = (data ?? []) as KbChunkMatch[];
 
   // --- stage 2: rerank --------------------------------------------------------
-  // Skip when disabled or when there is nothing to cut (reordering ≤ finalCount
-  // candidates is not worth an extra model call).
-  if (options.rerank === false || pool.length <= finalCount) {
+  // Runs whenever there are candidates: the reranker does not just reorder, it
+  // FILTERS — that filtering is what makes the loosened 0.15 vector gate safe.
+  // Only rerank:false callers (voice, which passes minSimilarity 0.3) skip it.
+  if (options.rerank === false || pool.length === 0) {
     return { matches: pool.slice(0, finalCount), embedCostUsd, searchMode: 'hybrid' };
   }
 
@@ -194,7 +204,21 @@ export async function retrieveRelevantChunks(
       candidates: pool.map((m) => m.content.slice(0, RERANK_CANDIDATE_CHARS)),
       topK: finalCount,
     });
+    const rerankInfo = {
+      costUsd,
+      latencyMs: Date.now() - started,
+      poolSize: pool.length,
+      model: 'claude-haiku-4-5',
+    };
+    // An EMPTY ranking is a legitimate verdict ("none of these help" — the
+    // prompt explicitly allows it): trust it, hand the draft zero sources
+    // (→ honest low-confidence answer → handoff) and log the billed call.
+    if (result.ranking.length === 0) {
+      return { matches: [], embedCostUsd, searchMode: 'hybrid', rerank: rerankInfo };
+    }
     const reranked = applyRanking(pool, result.ranking, finalCount);
+    // A NON-empty ranking that maps to nothing is garbage (invalid indices):
+    // treat as failure and fall back to fusion order.
     if (reranked.length === 0) {
       return {
         matches: pool.slice(0, finalCount),
@@ -203,17 +227,7 @@ export async function retrieveRelevantChunks(
         rerankFailed: true,
       };
     }
-    return {
-      matches: reranked,
-      embedCostUsd,
-      searchMode: 'hybrid',
-      rerank: {
-        costUsd,
-        latencyMs: Date.now() - started,
-        poolSize: pool.length,
-        model: 'claude-haiku-4-5',
-      },
-    };
+    return { matches: reranked, embedCostUsd, searchMode: 'hybrid', rerank: rerankInfo };
   } catch {
     // Reranking is an optimisation — never fail retrieval because of it.
     return {
