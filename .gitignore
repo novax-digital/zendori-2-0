@@ -27,6 +27,8 @@ coverage/
 old-app/
 old-bridge/
 old-n8n-flows/
+# reference marketing site (separate Astro project, design reference only)
+Zendori-Website/
 
 # supabase local dev
 supabase/.temp/

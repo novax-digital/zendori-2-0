@@ -19,6 +19,13 @@ export const emailInboundConfigSchema = z.object({
   mode: z.literal('inbound'),
   /** Generated, non-guessable intake address, e.g. strongenergy-kf-x7k2m9@in.zendori.de */
   address: z.email(),
+  /**
+   * What feeds this intake address (Phase 8). 'form' = a website contact form
+   * posts here; the real sender is extracted from the form block. 'forwarded_email'
+   * = a mailbox forwards here; the real sender comes from the forwarding header.
+   * Absent on legacy rows ⇒ treated as 'form'.
+   */
+  purpose: z.enum(['form', 'forwarded_email']).default('form'),
   /** Optional verified sender domain for outbound mail. */
   senderDomain: z.string().optional(),
 });

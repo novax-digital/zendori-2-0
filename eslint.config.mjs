@@ -12,6 +12,8 @@ export default tseslint.config(
       'old-app/**',
       'old-bridge/**',
       'old-n8n-flows/**',
+      // reference marketing site (separate Astro project, not part of this app)
+      'Zendori-Website/**',
       'apps/web/next-env.d.ts',
       // generated widget bundle (esbuild output, see apps/web/scripts/build-widget.mjs)
       'apps/web/public/widget.js',

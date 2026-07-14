@@ -1,0 +1,161 @@
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import type { CSSProperties } from 'react';
+import { requirePlatformAdmin } from '@/lib/admin-auth';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { addMember } from '../actions';
+
+type MemberRow = { user_id: string; role: string; created_at: string };
+
+const helpStyle: CSSProperties = {
+  fontSize: '0.9rem',
+  color: 'var(--text-muted)',
+  marginBottom: '1.25rem',
+};
+
+export default async function AdminOrgPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ orgId: string }>;
+  searchParams: Promise<{ error?: string; notice?: string }>;
+}) {
+  await requirePlatformAdmin();
+  const { orgId } = await params;
+  const { error, notice } = await searchParams;
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    return (
+      <div className="shell">
+        <div className="page-head">
+          <h1>Nutzer</h1>
+        </div>
+        <p className="error">Service-Role ist serverseitig nicht konfiguriert.</p>
+      </div>
+    );
+  }
+
+  const { data: orgRow } = await admin
+    .from('organizations')
+    .select('id, name, slug')
+    .eq('id', orgId)
+    .maybeSingle();
+  if (!orgRow) notFound();
+  const org = orgRow as { id: string; name: string; slug: string };
+
+  const { data: memberData } = await admin
+    .from('org_members')
+    .select('user_id, role, created_at')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: true });
+  const members = (memberData ?? []) as MemberRow[];
+
+  const emailByUserId = new Map<string, string>();
+  await Promise.all(
+    members.map(async (m) => {
+      const { data } = await admin.auth.admin.getUserById(m.user_id);
+      if (data.user?.email) emailByUserId.set(m.user_id, data.user.email);
+    })
+  );
+
+  return (
+    <div className="shell">
+      <div className="page-head">
+        <p style={{ marginBottom: '0.35rem' }}>
+          <Link href="/admin/users" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            Nutzer
+          </Link>
+          <span style={{ color: 'var(--text-subtle)' }}> / {org.name}</span>
+        </p>
+        <h1>{org.name}</h1>
+        <p>
+          Team dieser Organisation. Hier legst du weitere Zugänge an (Owner oder Agent).
+        </p>
+      </div>
+
+      {error ? (
+        <p className="error" style={{ marginBottom: '1.5rem' }}>
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="notice" style={{ marginBottom: '1.5rem' }}>
+          {notice}
+        </p>
+      ) : null}
+
+      <div className="panel">
+        <h2>Mitglieder</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Mitglied</th>
+              <th>Rolle</th>
+              <th>Dabei seit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.map((m) => (
+              <tr key={m.user_id}>
+                <td style={{ wordBreak: 'break-all' }}>
+                  {emailByUserId.get(m.user_id) ?? `${m.user_id.slice(0, 8)}…`}
+                </td>
+                <td>
+                  <span className="badge">{m.role === 'owner' ? 'Owner' : 'Agent'}</span>
+                </td>
+                <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  {new Date(m.created_at).toLocaleDateString('de-DE')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <h2>Mitglied hinzufügen</h2>
+        <p style={helpStyle}>
+          Erstellt ein neues Konto und fügt es dieser Organisation hinzu. Das Konto ist sofort aktiv.
+        </p>
+        <form className="stack" action={addMember} style={{ maxWidth: '28rem' }}>
+          <input type="hidden" name="orgId" value={org.id} />
+          <div>
+            <label htmlFor="mem-email">E-Mail</label>
+            <input
+              id="mem-email"
+              name="email"
+              type="email"
+              required
+              autoComplete="off"
+              placeholder="mitarbeiter@kunde.de"
+            />
+          </div>
+          <div>
+            <label htmlFor="mem-password">Initial-Passwort</label>
+            <input
+              id="mem-password"
+              name="password"
+              type="text"
+              required
+              minLength={8}
+              maxLength={200}
+              autoComplete="off"
+              placeholder="min. 8 Zeichen"
+            />
+          </div>
+          <div>
+            <label htmlFor="mem-role">Rolle</label>
+            <select id="mem-role" name="role" defaultValue="agent">
+              <option value="agent">Agent</option>
+              <option value="owner">Owner</option>
+            </select>
+          </div>
+          <button className="primary" type="submit">
+            Mitglied anlegen
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}

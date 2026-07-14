@@ -1,26 +1,513 @@
-* {
+/* ============================================================================
+   Zendori app design system — matches the Zendori website
+   Light · Inter · teal brand (#0bb8ba/#0895a1) with a teal→blue signature
+   gradient · slate neutrals · very rounded · soft teal-tinted shadows
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
 :root {
-  --bg: #f6f7f9;
+  color-scheme: light;
+
+  /* --- brand (teal ramp, from the website) --- */
+  --brand-50: #e8fffb;
+  --brand-100: #c8fff6;
+  --brand-200: #8df4eb;
+  --brand-300: #47e3dc;
+  --brand-400: #18d0cc;
+  --brand-500: #0bb8ba;
+  --brand-600: #0895a1;
+  --brand-700: #0b7480;
+  --brand-800: #105e69;
+  --brand-900: #124f58;
+  --blue-600: #2563eb;
+  --brand-gradient: linear-gradient(100deg, var(--brand-500) 0%, var(--blue-600) 100%);
+
+  /* --- neutrals (slate) --- */
+  --bg: #f8fafc;
   --surface: #ffffff;
-  --border: #e2e5ea;
-  --text: #1a1d23;
-  --text-muted: #6b7280;
-  --primary: #4f46e5;
-  --primary-hover: #4338ca;
-  --danger: #dc2626;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --ink: #0f172a;
+  --text: #334155;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+
+  /* --- semantic --- */
+  --primary: var(--brand-500);
+  --primary-strong: var(--brand-600);
+  --link: var(--brand-700);
+  --success: #059669;
+  --success-tint: #ecfdf5;
+  --success-ink: #047857;
+  --info: var(--blue-600);
+  --info-tint: #eff6ff;
+  --info-ink: #1d4ed8;
+  --warn: #c2680a;
+  --warn-tint: #fff7ed;
+  --danger: #e11d48;
+  --danger-tint: #fff1f2;
+  --danger-border: #fecdd3;
+
+  /* --- shape / depth --- */
+  --r-sm: 10px;
+  --r: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 14px 32px rgb(15 23 42 / 0.05);
+  --shadow-soft: 0 24px 80px rgb(8 149 161 / 0.14);
+  --ring: 0 0 0 4px rgb(11 184 186 / 0.16);
+
+  /* --- typography (next/font sets --font-inter on <html>) --- */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-display: var(--font-sans);
+
+  /* --- sidebar (light) --- */
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #475569;
+  --sidebar-text-strong: #0f172a;
+  --sidebar-hover: #f1f5f9;
+  --sidebar-active-bg: var(--brand-50);
+  --sidebar-active-text: var(--brand-700);
+  --sidebar-border: #e2e8f0;
+  --sidebar-w: 250px;
+  --sidebar-w-collapsed: 74px;
+}
+
+/* ---------------------------------------------------------------------------
+   Dark theme. A no-flash inline script (see layout.tsx) resolves the stored
+   preference ('auto' | 'light' | 'dark') to an explicit data-theme before
+   paint, so only this one dark override block is needed. 'auto' follows the OS.
+   Brand teal/blue stay; neutrals + tints + shadows flip.
+   --------------------------------------------------------------------------- */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* neutrals */
+  --bg: #0b1220;
+  --surface: #121c2e;
+  --surface-2: #1a2540;
+  --border: #263349;
+  --border-strong: #35435f;
+  --ink: #f1f5f9;
+  --text: #cbd5e1;
+  --text-muted: #93a3b8;
+  --text-subtle: #6b7a91;
+
+  /* accent tints (used as active/selected/badge backgrounds) → dark teal wash */
+  --brand-50: rgba(20, 212, 208, 0.13);
+  --brand-100: rgba(20, 212, 208, 0.2);
+  --brand-200: #1c5f63;
+  --brand-500: #16cfca;
+  --brand-600: #2ad6d0;
+  --brand-700: #5eead4;
+  --link: #5eead4;
+
+  /* semantic */
+  --success-tint: rgba(5, 150, 105, 0.16);
+  --success-ink: #6ee7b7;
+  --info-tint: rgba(37, 99, 235, 0.18);
+  --info-ink: #93c5fd;
+  --warn-tint: rgba(194, 104, 10, 0.2);
+  --warn: #fbbf24;
+  --danger: #fca5a5;
+  --danger-tint: rgba(225, 29, 72, 0.16);
+  --danger-border: #7f1d2b;
+
+  /* depth: shadows read as darkness, not light bloom */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 32px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 24px 80px rgba(0, 0, 0, 0.55);
+  --ring: 0 0 0 4px rgba(20, 212, 208, 0.32);
+
+  /* sidebar */
+  --sidebar-bg: #0d1626;
+  --sidebar-text: #93a3b8;
+  --sidebar-text-strong: #f1f5f9;
+  --sidebar-hover: #1a2540;
+  --sidebar-active-bg: rgba(20, 212, 208, 0.15);
+  --sidebar-active-text: #5eead4;
+  --sidebar-border: #263349;
+}
+
+/* Class-level dark tweaks for a few hard-coded light values. */
+:root[data-theme='dark'] main.centered {
+  background:
+    linear-gradient(135deg, rgba(11, 116, 128, 0.28), rgba(11, 18, 32, 0.6) 44%, rgba(37, 99, 235, 0.22)),
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px), var(--bg);
+  background-size: auto, 44px 44px, 44px 44px;
+}
+:root[data-theme='dark'] .inbox-note {
+  background: rgba(202, 138, 4, 0.13);
+  border-color: rgba(202, 138, 4, 0.35);
+  color: #fde68a;
+}
+
+html {
+  font-family: var(--font-sans);
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  line-height: 1.25;
+  letter-spacing: -0.011em;
+  text-wrap: balance;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+::selection {
+  background: rgb(71 227 220 / 0.35);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r-sm);
+}
+
+/* ============================================================================
+   App shell — collapsible left navigation (light)
+   ========================================================================== */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-sidebar {
+  flex-shrink: 0;
+  width: var(--sidebar-w);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--sidebar-border);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+.app-sidebar--collapsed {
+  width: var(--sidebar-w-collapsed);
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  height: 68px;
+  padding: 0 1.15rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+.app-brand img.app-brand-wordmark {
+  height: 26px;
+  width: auto;
+}
+.app-brand img.app-brand-icon {
+  height: 30px;
+  width: 30px;
+}
+.app-sidebar:not(.app-sidebar--collapsed) .app-brand-icon {
+  display: none;
+}
+.app-sidebar--collapsed .app-brand {
+  justify-content: center;
+  padding: 0;
+}
+.app-sidebar--collapsed .app-brand-wordmark {
+  display: none;
+}
+/* Wordmark ink must contrast with the sidebar ground: dark-ink mark on the
+   light theme, white mark on the dark theme. Show exactly one per theme. */
+.app-brand-wordmark--ondark {
+  display: none;
+}
+:root[data-theme='dark'] .app-brand-wordmark--onlight {
+  display: none;
+}
+:root[data-theme='dark'] .app-sidebar:not(.app-sidebar--collapsed) .app-brand-wordmark--ondark {
+  display: block;
+}
+
+.app-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.app-nav::-webkit-scrollbar {
+  width: 6px;
+}
+.app-nav::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.app-nav-section {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-subtle);
+  padding: 1rem 0.75rem 0.4rem;
+  white-space: nowrap;
+}
+.app-sidebar--collapsed .app-nav-section {
+  text-align: center;
+  padding: 0.85rem 0 0.2rem;
+  font-size: 0.58rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.58rem 0.75rem;
+  border-radius: var(--r);
+  color: var(--sidebar-text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.app-nav-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-strong);
+  text-decoration: none;
+}
+.app-nav-item--active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+}
+.app-nav-item--active .app-nav-icon {
+  color: var(--brand-600);
+}
+.app-nav-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--text-subtle);
+}
+.app-nav-item:hover .app-nav-icon {
+  color: var(--sidebar-text-strong);
+}
+.app-nav-icon svg {
+  width: 19px;
+  height: 19px;
+}
+.app-sidebar--collapsed .app-nav-item {
+  justify-content: center;
+  padding: 0.58rem 0;
+}
+.app-sidebar--collapsed .app-nav-label {
+  display: none;
+}
+
+.app-sidebar-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--sidebar-border);
+  padding: 0.7rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.app-account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  min-width: 0;
+}
+.app-account-avatar {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-pill);
+  background: var(--brand-gradient);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.app-account-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.app-account-email {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-account-org {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-sidebar--collapsed .app-account-meta,
+.app-sidebar--collapsed .app-orgswitch,
+.app-sidebar--collapsed .app-signout-label {
+  display: none;
+}
+.app-sidebar--collapsed .app-account {
+  justify-content: center;
+  padding: 0.35rem 0;
+}
+
+.app-orgswitch {
+  width: 100%;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 0.45rem 0.55rem;
+  font-size: 0.82rem;
+  font-family: inherit;
+}
+
+.app-footer-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.app-signout,
+.app-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0.5rem 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.app-signout {
+  flex: 1;
+}
+.app-signout:hover,
+.app-collapse-btn:hover {
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border-color: var(--brand-200);
+}
+.app-collapse-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.18s ease;
+}
+.app-sidebar--collapsed .app-collapse-btn svg {
+  transform: rotate(180deg);
+}
+.app-sidebar--collapsed .app-footer-actions {
+  flex-direction: column;
+}
+
+/* theme toggle (auto / light / dark segmented control) */
+.theme-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 3px;
+}
+.theme-opt {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--r-pill);
+  padding: 0.35rem;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.theme-opt:hover {
+  color: var(--sidebar-text-strong);
+}
+.theme-opt--active {
+  background: var(--surface);
+  color: var(--brand-600);
+  box-shadow: var(--shadow-sm);
+}
+.theme-opt svg {
+  width: 16px;
+  height: 16px;
+}
+.app-sidebar--collapsed .theme-toggle {
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================================
+   Auth / centered cards
+   ========================================================================== */
 
 main.centered {
   min-height: 100vh;
@@ -28,143 +515,498 @@ main.centered {
   align-items: center;
   justify-content: center;
   padding: 2rem 1rem;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(232, 255, 251, 0.9),
+      rgba(255, 255, 255, 0.72) 44%,
+      rgba(239, 246, 255, 0.85)
+    ),
+    linear-gradient(rgba(8, 149, 161, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 149, 161, 0.06) 1px, transparent 1px);
+  background-size:
+    auto,
+    44px 44px,
+    44px 44px;
+}
+
+.auth-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 26rem;
+}
+.auth-brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+.auth-brand img {
+  height: 34px;
+}
+.auth-brand img.ondark {
+  display: none;
+}
+:root[data-theme='dark'] .auth-brand img.onlight {
+  display: none;
+}
+:root[data-theme='dark'] .auth-brand img.ondark {
+  display: inline;
 }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--r-xl);
   padding: 2rem;
   width: 100%;
   max-width: 26rem;
+  box-shadow: var(--shadow-card);
 }
-
 .card h1 {
-  font-size: 1.4rem;
-  margin-bottom: 0.25rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
 }
-
 .card p.sub {
   color: var(--text-muted);
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   margin-bottom: 1.5rem;
 }
+
+/* ============================================================================
+   Forms & controls
+   ========================================================================== */
 
 form.stack {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: 0.9rem;
 }
 
 label {
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 700;
+  color: var(--ink);
   display: block;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.35rem;
 }
 
 input[type='text'],
 input[type='email'],
-input[type='password'] {
+input[type='password'],
+input[type='tel'],
+input[type='url'],
+input[type='search'],
+select,
+textarea {
   width: 100%;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
   font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--ink);
   background: var(--surface);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-
-input:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-  border-color: transparent;
+textarea {
+  resize: vertical;
 }
-
-select {
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.95rem;
-  background: var(--surface);
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-subtle);
 }
-
-button.primary {
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 0.6rem 1rem;
-  font-size: 0.95rem;
-  font-weight: 600;
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: var(--ring);
+}
+input[type='color'] {
+  padding: 0.2rem;
+  height: 2.5rem;
   cursor: pointer;
 }
 
-button.primary:hover {
-  background: var(--primary-hover);
+button {
+  font-family: inherit;
+}
+
+button.primary,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: var(--brand-gradient);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 0.65rem 1.3rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgb(11 184 186 / 0.22);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+button.primary:hover,
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgb(11 184 186 / 0.3);
+}
+button.primary:active {
+  transform: translateY(0);
+}
+button.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
 }
 
 button.ghost {
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.4rem 0.8rem;
-  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--r-pill);
+  padding: 0.55rem 1.1rem;
+  font-size: 0.88rem;
+  font-weight: 600;
   cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease;
+}
+button.ghost:hover {
+  background: var(--brand-50);
+  border-color: var(--brand-300);
+  transform: translateY(-1px);
 }
 
 .error {
-  background: #fef2f2;
+  background: var(--danger-tint);
   color: var(--danger);
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  padding: 0.6rem 0.8rem;
-  font-size: 0.85rem;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r);
+  padding: 0.75rem 0.95rem;
+  font-size: 0.88rem;
 }
-
 .notice {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  padding: 0.6rem 0.8rem;
-  font-size: 0.85rem;
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--r);
+  padding: 0.75rem 0.95rem;
+  font-size: 0.88rem;
 }
 
-a {
-  color: var(--primary);
-}
+/* ============================================================================
+   Content pages (.shell) & panels
+   ========================================================================== */
 
-/* app shell */
 .shell {
-  max-width: 60rem;
+  width: 100%;
+  max-width: 64rem;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 2rem 2rem 3rem;
 }
-
-.shell header {
+.shell > header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 2rem;
+  justify-content: flex-end;
+  min-height: 1rem;
+  margin-bottom: 1.5rem;
 }
-
-.shell header .brand {
-  font-weight: 700;
-  font-size: 1.1rem;
+.shell > header .brand {
+  display: none;
+}
+.shell > header a {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.shell > header a:hover {
+  color: var(--brand-700);
+  text-decoration: none;
+  border-color: var(--brand-200);
+  background: var(--brand-50);
 }
 
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.5rem;
+  border-radius: var(--r-xl);
+  padding: 1.75rem;
   margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-card);
+}
+.panel h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
 }
 
-.panel h2 {
-  font-size: 1.05rem;
-  margin-bottom: 1rem;
+/* ============================================================================
+   Settings page head + channel/integration tile gallery
+   ========================================================================== */
+
+.page-head {
+  margin-bottom: 1.75rem;
+}
+.page-head h1 {
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.page-head p {
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  max-width: 44rem;
+}
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1.75rem;
+}
+
+.channel-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  text-align: left;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.1rem 1.15rem 1.2rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease;
+}
+.channel-tile:hover {
+  border-color: var(--brand-300);
+  box-shadow: var(--shadow-card);
+}
+.channel-tile:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+}
+.channel-tile--selected {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px var(--brand-100);
+}
+.channel-tile--off {
+  opacity: 0.72;
+}
+.channel-tile--off:hover {
+  opacity: 1;
+}
+
+.tile-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  flex-shrink: 0;
+}
+.tile-icon svg {
+  width: 22px;
+  height: 22px;
+}
+/* per-channel accents — transparent tints adapt to light & dark surfaces */
+.tile-icon--form {
+  background: color-mix(in srgb, #2563eb 14%, transparent);
+  color: #2563eb;
+}
+.tile-icon--email {
+  background: color-mix(in srgb, var(--brand-600) 16%, transparent);
+  color: var(--brand-600);
+}
+.tile-icon--whatsapp {
+  background: color-mix(in srgb, #16a34a 15%, transparent);
+  color: #16a34a;
+}
+.tile-icon--voice {
+  background: color-mix(in srgb, #7c3aed 15%, transparent);
+  color: #7c3aed;
+}
+.tile-icon--chat {
+  background: color-mix(in srgb, #ea580c 14%, transparent);
+  color: #ea580c;
+}
+.tile-icon--test {
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  color: var(--text-muted);
+}
+.tile-icon--hubspot {
+  background: color-mix(in srgb, #ff7a59 16%, transparent);
+  color: #e8623b;
+}
+
+.tile-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.tile-desc {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.tile-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+.tile-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tile-status--active {
+  background: var(--success-tint);
+  color: var(--success-ink);
+}
+.tile-status--inactive {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+.tile-status--empty {
+  background: var(--bg);
+  color: var(--text-subtle);
+}
+
+/* tab bar (knowledge base add-methods, and any in-panel tabs) */
+.tabbar {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  margin-bottom: 1.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.45rem 1rem;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab--active {
+  background: var(--surface);
+  color: var(--brand-700);
+  box-shadow: var(--shadow-sm);
+}
+.tab svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* config panel: one row per configured channel instance */
+.chan-instance {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.chan-instance:last-of-type {
+  border-bottom: none;
+}
+.chan-instance-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.chan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.32rem 0.7rem;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.chan-toggle::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.chan-toggle--active {
+  color: var(--success-ink);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  background: var(--success-tint);
+}
+.chan-toggle--active:hover {
+  border-color: var(--success);
+}
+.chan-toggle--inactive {
+  color: var(--text-muted);
+}
+.chan-toggle--inactive:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 table {
@@ -172,122 +1014,63 @@ table {
   border-collapse: collapse;
   font-size: 0.9rem;
 }
-
 th,
 td {
   text-align: left;
-  padding: 0.5rem 0.6rem;
+  padding: 0.7rem 0.7rem;
   border-bottom: 1px solid var(--border);
 }
-
+tr:last-child td {
+  border-bottom: none;
+}
 th {
   color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.8rem;
+  font-weight: 700;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.05em;
 }
 
 .badge {
   display: inline-block;
-  background: #eef2ff;
-  color: var(--primary);
-  border-radius: 999px;
-  padding: 0.1rem 0.6rem;
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border-radius: var(--r-pill);
+  padding: 0.15rem 0.7rem;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 code.invite-link {
   display: block;
-  background: var(--bg);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.5rem 0.7rem;
+  border-radius: var(--r);
+  padding: 0.65rem 0.8rem;
   font-size: 0.8rem;
+  color: var(--ink);
   word-break: break-all;
-  margin-top: 0.4rem;
+  margin-top: 0.45rem;
 }
 
-/* inbox (Phase 1) ------------------------------------------------------- */
+/* ============================================================================
+   Inbox
+   ========================================================================== */
 
 .inbox-shell {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  min-height: 0;
 }
 
+/* legacy top header no longer rendered */
 .inbox-header {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  flex-wrap: wrap;
-  padding: 0.75rem 1.25rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.inbox-header .brand {
-  font-weight: 700;
-  font-size: 1.05rem;
-}
-
-.inbox-header-spacer {
-  flex: 1;
-}
-
-.inbox-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  flex-wrap: wrap;
-  font-size: 0.85rem;
-}
-
-.inbox-nav a {
-  color: var(--text-muted);
-  text-decoration: none;
-}
-
-.inbox-nav a:hover {
-  color: var(--text);
-}
-
-.inbox-nav-group {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.inbox-org-switcher {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.inbox-org-switcher a {
-  color: var(--text-muted);
-  text-decoration: none;
-}
-
-.inbox-org-switcher a:hover {
-  color: var(--text);
-}
-
-.inbox-org-active {
-  background: #eef2ff;
-  color: var(--primary);
-  border-radius: 999px;
-  padding: 0.1rem 0.6rem;
-  font-weight: 600;
+  display: none;
 }
 
 .inbox-banners {
-  padding: 0.75rem 1.25rem 0;
+  padding: 0.9rem 1.25rem 0;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -297,7 +1080,7 @@ code.invite-link {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr) minmax(16rem, 20rem);
+  grid-template-columns: minmax(18rem, 23rem) minmax(0, 1fr) minmax(16rem, 21rem);
   gap: 1rem;
   padding: 1rem 1.25rem;
 }
@@ -308,108 +1091,104 @@ code.invite-link {
   min-height: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 
 /* filter bar */
-
 .inbox-filterbar {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  padding: 0.75rem;
+  padding: 0.9rem;
   border-bottom: 1px solid var(--border);
 }
-
 .inbox-tabs {
   display: flex;
   gap: 0.25rem;
   flex-wrap: wrap;
 }
-
 .inbox-tab {
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  border-radius: var(--r-pill);
   font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-muted);
   text-decoration: none;
 }
-
 .inbox-tab:hover {
-  background: var(--bg);
+  background: var(--surface-2);
+  text-decoration: none;
 }
-
 .inbox-tab-active {
-  background: #eef2ff;
-  color: var(--primary);
-  font-weight: 600;
+  background: var(--brand-50);
+  color: var(--brand-700);
 }
-
+.inbox-tab-active:hover {
+  background: var(--brand-50);
+}
 .inbox-filter-form {
   display: flex;
   gap: 0.5rem;
 }
-
 .inbox-filter-form select {
   flex: 1;
   min-width: 0;
   font-size: 0.85rem;
-  padding: 0.4rem 0.5rem;
+  padding: 0.5rem 0.6rem;
 }
 
 /* conversation list */
-
 .inbox-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
-
 .inbox-list-empty {
-  padding: 1.5rem 1rem;
+  padding: 2rem 1rem;
   color: var(--text-muted);
   font-size: 0.85rem;
   text-align: center;
 }
-
 .inbox-row {
   display: block;
-  padding: 0.75rem 0.9rem;
+  padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   text-decoration: none;
+  border-left: 3px solid transparent;
 }
-
 .inbox-row:hover {
-  background: var(--bg);
+  background: var(--surface-2);
+  text-decoration: none;
 }
-
 .inbox-row-active {
-  background: #eef2ff;
+  background: var(--brand-50);
+  border-left-color: var(--brand-500);
 }
-
+.inbox-row-active:hover {
+  background: var(--brand-50);
+}
 .inbox-row-top {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 0.5rem;
 }
-
 .inbox-row-name {
   font-weight: 600;
   font-size: 0.9rem;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .inbox-row-time {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: 0.74rem;
+  color: var(--text-subtle);
   white-space: nowrap;
 }
-
 .inbox-row-subject {
   font-size: 0.85rem;
   margin-top: 0.15rem;
@@ -417,7 +1196,6 @@ code.invite-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .inbox-row-preview {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -426,134 +1204,114 @@ code.invite-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .inbox-row-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.4rem;
+  margin-top: 0.45rem;
 }
-
 .inbox-row-channel {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: 0.74rem;
+  color: var(--text-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* status / meta badges */
-
 .inbox-badge {
   display: inline-block;
-  border-radius: 999px;
-  padding: 0.1rem 0.55rem;
+  border-radius: var(--r-pill);
+  padding: 0.12rem 0.65rem;
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 700;
 }
-
 .inbox-badge-open {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--info-tint);
+  color: var(--info-ink);
 }
-
 .inbox-badge-pending {
-  background: #fff7ed;
-  color: #c2410c;
+  background: var(--warn-tint);
+  color: var(--warn);
 }
-
 .inbox-badge-resolved {
-  background: #f0fdf4;
-  color: #15803d;
+  background: var(--success-tint);
+  color: var(--success-ink);
 }
-
 .inbox-badge-neutral {
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--text-muted);
 }
-
 .inbox-badge-mode {
-  background: #eef2ff;
-  color: var(--primary);
+  background: var(--brand-50);
+  color: var(--brand-700);
 }
 
 /* conversation view */
-
 .inbox-view-header {
-  padding: 0.85rem 1rem;
+  padding: 1rem 1.15rem;
   border-bottom: 1px solid var(--border);
 }
-
 .inbox-view-subject {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--ink);
 }
-
 .inbox-view-meta {
   font-size: 0.8rem;
   color: var(--text-muted);
-  margin-top: 0.15rem;
+  margin-top: 0.2rem;
 }
-
 .inbox-messages {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 1.15rem;
   display: flex;
-  /* newest message rendered first + column-reverse = scroll starts at the bottom */
   flex-direction: column-reverse;
   gap: 0.75rem;
 }
-
 .inbox-messages-empty {
   margin: auto;
   color: var(--text-muted);
   font-size: 0.85rem;
 }
-
 .inbox-msg {
-  max-width: 75%;
+  max-width: 76%;
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
 }
-
 .inbox-msg-in {
   align-self: flex-start;
 }
-
 .inbox-msg-out {
   align-self: flex-end;
   align-items: flex-end;
 }
-
 .inbox-msg-bubble {
-  padding: 0.6rem 0.8rem;
-  border-radius: 12px;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--r-lg);
   font-size: 0.9rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
-
 .inbox-msg-in .inbox-msg-bubble {
-  background: var(--bg);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+  color: var(--text);
 }
-
 .inbox-msg-out .inbox-msg-bubble {
-  background: #eef2ff;
-  border: 1px solid #dbe2fe;
-  border-top-right-radius: 4px;
+  background: var(--brand-gradient);
+  color: #fff;
+  border-bottom-right-radius: 4px;
 }
-
 .inbox-msg-meta {
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text-subtle);
   padding: 0 0.2rem;
 }
-
 .inbox-placeholder {
   flex: 1;
   display: flex;
@@ -566,214 +1324,214 @@ code.invite-link {
 }
 
 /* composer */
-
 .inbox-composer {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0.75rem;
+  padding: 0.9rem;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
-
 .inbox-composer textarea,
 .inbox-note-form textarea {
-  width: 100%;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
   font-size: 0.9rem;
-  font-family: inherit;
-  background: var(--surface);
-  resize: vertical;
 }
-
-.inbox-composer textarea:focus,
-.inbox-note-form textarea:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-  border-color: transparent;
-}
-
 .inbox-composer-row {
   display: flex;
   justify-content: flex-end;
 }
-
 .inbox-canned-select {
   align-self: flex-start;
   max-width: 100%;
   font-size: 0.85rem;
-  padding: 0.35rem 0.5rem;
+  padding: 0.45rem 0.6rem;
   color: var(--text-muted);
 }
 
 /* context sidebar */
-
 .inbox-sidebar {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 1.15rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1.3rem;
 }
-
 .inbox-sidebar h3 {
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: 0.72rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  margin-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  margin-bottom: 0.6rem;
 }
-
 .inbox-sidebar select {
   width: 100%;
   font-size: 0.85rem;
-  padding: 0.45rem 0.6rem;
+  padding: 0.55rem 0.65rem;
 }
-
 .inbox-sidebar-empty {
   color: var(--text-muted);
   font-size: 0.82rem;
   margin-bottom: 0.5rem;
 }
-
 .inbox-contact-form {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.55rem;
   font-size: 0.85rem;
 }
-
 .inbox-contact-form label {
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.78rem;
 }
-
 .inbox-contact-form input[type='text'] {
-  margin-top: 0.2rem;
-  padding: 0.4rem 0.6rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.65rem;
   font-size: 0.85rem;
 }
-
 .inbox-contact-static {
   display: flex;
   justify-content: space-between;
   gap: 0.5rem;
 }
-
 .inbox-contact-static span:first-child {
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.8rem;
 }
-
 .inbox-contact-static span:last-child {
   word-break: break-word;
 }
-
 .inbox-status-buttons {
   display: flex;
   gap: 0.4rem;
 }
-
 .inbox-status-btn {
   flex: 1;
-  padding: 0.35rem 0.4rem;
+  padding: 0.45rem 0.4rem;
   font-size: 0.78rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
 }
-
 .inbox-status-btn:hover:enabled {
-  background: var(--bg);
+  background: var(--surface-2);
 }
-
 .inbox-status-btn:disabled {
   cursor: default;
 }
-
 .inbox-status-btn-active-open {
-  background: #eff6ff;
+  background: var(--info-tint);
   border-color: #bfdbfe;
-  color: #1d4ed8;
-  font-weight: 600;
+  color: var(--info-ink);
 }
-
 .inbox-status-btn-active-pending {
-  background: #fff7ed;
+  background: var(--warn-tint);
   border-color: #fed7aa;
-  color: #c2410c;
-  font-weight: 600;
+  color: var(--warn);
 }
-
 .inbox-status-btn-active-resolved {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #15803d;
-  font-weight: 600;
+  background: var(--success-tint);
+  border-color: #a7f3d0;
+  color: var(--success-ink);
 }
-
 .inbox-badges-row {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
 }
-
 .inbox-note {
-  background: #fefce8;
+  background: #fffbeb;
   border: 1px solid #fde68a;
-  border-radius: 8px;
-  padding: 0.5rem 0.65rem;
+  border-radius: var(--r);
+  padding: 0.6rem 0.75rem;
   font-size: 0.82rem;
   margin-bottom: 0.5rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
-
 .inbox-note-meta {
   font-size: 0.7rem;
   color: var(--text-muted);
   margin-top: 0.3rem;
 }
-
 .inbox-note-form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
-
 .inbox-note-form button {
   align-self: flex-start;
 }
 
-/* stacked layout on small screens */
+/* ============================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 1000px) {
+  .app-sidebar {
+    width: var(--sidebar-w-collapsed);
+  }
+  .app-sidebar .app-brand-wordmark,
+  .app-sidebar .app-nav-label,
+  .app-sidebar .app-nav-section,
+  .app-sidebar .app-account-meta,
+  .app-sidebar .app-orgswitch,
+  .app-sidebar .app-signout-label {
+    display: none;
+  }
+  .app-sidebar .app-brand-icon {
+    display: block;
+  }
+  .app-sidebar .app-brand {
+    justify-content: center;
+    padding: 0;
+  }
+  .app-sidebar .app-nav-item {
+    justify-content: center;
+    padding: 0.58rem 0;
+  }
+  .app-sidebar .app-account {
+    justify-content: center;
+    padding: 0.35rem 0;
+  }
+  .app-sidebar .app-footer-actions {
+    flex-direction: column;
+  }
+}
 
 @media (max-width: 900px) {
   .inbox-shell {
     height: auto;
     min-height: 100vh;
   }
-
   .inbox-layout {
     grid-template-columns: 1fr;
   }
-
   .inbox-list {
     max-height: 45vh;
   }
-
   .inbox-messages {
     max-height: 55vh;
   }
-
   .inbox-placeholder {
     padding: 3rem 2rem;
+  }
+  .shell {
+    padding: 1.25rem 1rem 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
   }
 }

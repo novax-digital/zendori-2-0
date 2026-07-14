@@ -123,28 +123,31 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
 const createIntakeAddressSchema = z.object({
   org: z.uuid(),
   name: z.string().min(2).max(120),
-  purpose: z.string().min(1).max(40),
+  slugPart: z.string().min(1).max(40),
+  purpose: z.enum(['form', 'forwarded_email']),
 });
 
 /**
  * Provisions a generated, non-guessable inbound e-mail address and creates the
  * matching email/inbound channel. Mails sent to that address (as recipient or
- * CC) reach this org's inbox via the Resend webhook.
+ * CC) reach this org's inbox via the Resend webhook. `purpose` distinguishes a
+ * website contact-form intake from a forwarded-mailbox intake (Phase 8).
  */
 export async function createIntakeAddress(formData: FormData): Promise<void> {
   const parsed = createIntakeAddressSchema.safeParse({
     org: formData.get('org'),
     name: textField(formData.get('name')),
+    slugPart: textField(formData.get('slugPart')),
     purpose: textField(formData.get('purpose')),
   });
   if (!parsed.success) {
     redirect(
       channelsUrl(textField(formData.get('org')), {
-        error: 'Bitte einen Namen (2–120 Zeichen) und einen Zweck (z. B. „kf") angeben.',
+        error: 'Bitte einen Namen (2–120 Zeichen) und ein Kürzel (z. B. „kf") angeben.',
       })
     );
   }
-  const { org, name, purpose } = parsed.data;
+  const { org, name, slugPart, purpose } = parsed.data;
 
   const supabase = await createSupabaseServerClient();
 
@@ -159,9 +162,14 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
     redirect(channelsUrl(org, { error: 'Organisation wurde nicht gefunden.' }));
   }
 
-  const address = generateIntakeAddress(slug, purpose);
+  const address = generateIntakeAddress(slug, slugPart);
   // Validate the channel config against the shared schema before persisting.
-  const config = emailInboundConfigSchema.safeParse({ type: 'email', mode: 'inbound', address });
+  const config = emailInboundConfigSchema.safeParse({
+    type: 'email',
+    mode: 'inbound',
+    address,
+    purpose,
+  });
   if (!config.success) {
     redirect(channelsUrl(org, { error: 'Intake-Adresse konnte nicht angelegt werden.' }));
   }
@@ -177,7 +185,55 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: 'Intake-Adresse angelegt.' }));
+  redirect(
+    channelsUrl(org, {
+      notice: purpose === 'form' ? 'Formular-Adresse angelegt.' : 'E-Mail-Adresse angelegt.',
+    })
+  );
+}
+
+// --- activate / deactivate a channel ---------------------------------------------
+
+const setChannelActiveSchema = z.object({
+  org: z.uuid(),
+  channelId: z.uuid(),
+  active: z.enum(['true', 'false']),
+});
+
+/**
+ * Flips a single channel's is_active flag. Used by the per-channel Aktiv/Inaktiv
+ * toggle in the channel gallery. RLS ensures the caller may only touch channels
+ * of an org they belong to.
+ */
+export async function setChannelActive(formData: FormData): Promise<void> {
+  const parsed = setChannelActiveSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+    active: formData.get('active'),
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(textField(formData.get('org')), {
+        error: 'Kanal-Status konnte nicht geändert werden.',
+      })
+    );
+  }
+  const { org, channelId, active } = parsed.data;
+  const isActive = active === 'true';
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('channels')
+    .update({ is_active: isActive })
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(channelsUrl(org, { error: 'Kanal-Status konnte nicht geändert werden.' }));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(channelsUrl(org, { notice: isActive ? 'Kanal aktiviert.' : 'Kanal deaktiviert.' }));
 }
 
 // --- connect a WhatsApp channel (Twilio, Phase 7a) -------------------------------

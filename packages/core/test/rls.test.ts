@@ -283,6 +283,64 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: platform_admins', () => {
+  let admin: SupabaseClient;
+  let adminUser: SupabaseClient;
+  let plainUser: SupabaseClient;
+  let adminUserId: string;
+  let plainUserId: string;
+  const adminEmail = `padmin-${randomUUID()}@test.zendori.dev`;
+  const plainEmail = `pplain-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [adminEmail, plainEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    adminUserId = created[0]!.data.user!.id;
+    plainUserId = created[1]!.data.user!.id;
+
+    // service role promotes one user to platform admin
+    const { error } = await admin.from('platform_admins').insert({ user_id: adminUserId });
+    expect(error).toBeNull();
+
+    adminUser = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    plainUser = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect(
+      (await adminUser.auth.signInWithPassword({ email: adminEmail, password })).error
+    ).toBeNull();
+    expect(
+      (await plainUser.auth.signInWithPassword({ email: plainEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (adminUserId) await admin.auth.admin.deleteUser(adminUserId);
+    if (plainUserId) await admin.auth.admin.deleteUser(plainUserId);
+  });
+
+  it('a platform admin can read their own row', async () => {
+    const { data } = await adminUser.from('platform_admins').select('user_id');
+    expect(data).toHaveLength(1);
+    expect(data![0]!.user_id).toBe(adminUserId);
+  });
+
+  it('a non-admin sees no rows (not even the admin row)', async () => {
+    const { data } = await plainUser.from('platform_admins').select('user_id');
+    expect(data).toHaveLength(0);
+  });
+
+  it('an authenticated user cannot promote themselves (no insert policy)', async () => {
+    const { error } = await plainUser
+      .from('platform_admins')
+      .insert({ user_id: plainUserId });
+    expect(error).not.toBeNull();
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

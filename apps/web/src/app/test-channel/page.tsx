@@ -32,10 +32,6 @@ export default async function TestChannelPage({
 
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

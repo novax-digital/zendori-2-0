@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { requireActiveOrg } from '@/lib/org';
 import { listCannedResponses } from '@/lib/inbox/queries';
@@ -27,10 +26,6 @@ export default async function CannedResponsesPage({
 
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

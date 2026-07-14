@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { publicSupabaseEnv } from './lib/env';
 
+// Only /login is public — self-registration is disabled (admins create accounts).
+// /register still exists but immediately redirects to /login.
 const PUBLIC_PATHS = ['/login', '/register'];
 
 export async function middleware(request: NextRequest) {

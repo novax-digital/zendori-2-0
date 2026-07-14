@@ -1,19 +1,10 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { createInvite, deleteInvite } from '../../actions';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { appUrl } from '@/lib/env';
 
 type MemberRow = { org_id: string; user_id: string; role: string; created_at: string };
-type InviteRow = { id: string; email: string; role: string; token: string; expires_at: string };
 
-export default async function MembersPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string }>;
-}) {
-  const { error } = await searchParams;
+export default async function MembersPage() {
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -34,7 +25,6 @@ export default async function MembersPage({
   if (!membership) redirect('/onboarding');
 
   const orgId = membership.org_id;
-  const isOwner = membership.role === 'owner';
 
   const { data: memberData } = await supabase
     .from('org_members')
@@ -55,26 +45,10 @@ export default async function MembersPage({
     );
   }
 
-  let invites: InviteRow[] = [];
-  if (isOwner) {
-    const { data: inviteData } = await supabase
-      .from('invites')
-      .select('id, email, role, token, expires_at')
-      .eq('org_id', orgId)
-      .is('accepted_at', null)
-      .order('created_at', { ascending: false });
-    invites = (inviteData ?? []) as InviteRow[];
-  }
-
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href="/">Zurück zur Übersicht</Link>
-      </header>
-
       <div className="panel">
-        <h2>Mitglieder — {membership.organizations?.name ?? 'Organisation'}</h2>
+        <h2>Team — {membership.organizations?.name ?? 'Organisation'}</h2>
         <table>
           <thead>
             <tr>
@@ -95,66 +69,11 @@ export default async function MembersPage({
             ))}
           </tbody>
         </table>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '1rem' }}>
+          Neue Zugänge werden vom Zendori-Team angelegt. Die öffentliche Registrierung ist
+          deaktiviert.
+        </p>
       </div>
-
-      {isOwner ? (
-        <>
-          <div className="panel">
-            <h2>Mitglied einladen</h2>
-            {error ? (
-              <p className="error" style={{ marginBottom: '1rem' }}>
-                {error}
-              </p>
-            ) : null}
-            <form className="stack" action={createInvite} style={{ maxWidth: '26rem' }}>
-              <input type="hidden" name="orgId" value={orgId} />
-              <div>
-                <label htmlFor="email">E-Mail-Adresse</label>
-                <input id="email" name="email" type="email" required />
-              </div>
-              <div>
-                <label htmlFor="role">Rolle</label>
-                <select id="role" name="role" defaultValue="agent">
-                  <option value="agent">Agent</option>
-                  <option value="owner">Owner</option>
-                </select>
-              </div>
-              <button className="primary" type="submit">
-                Einladung erstellen
-              </button>
-            </form>
-          </div>
-
-          {invites.length > 0 ? (
-            <div className="panel">
-              <h2>Offene Einladungen</h2>
-              {invites.map((invite) => (
-                <div key={invite.id} style={{ marginBottom: '1.25rem' }}>
-                  <strong>{invite.email}</strong>{' '}
-                  <span className="badge">{invite.role === 'owner' ? 'Owner' : 'Agent'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    {' '}
-                    — gültig bis {new Date(invite.expires_at).toLocaleDateString('de-DE')}
-                  </span>
-                  <code className="invite-link">
-                    {appUrl()}/invite/{invite.token}
-                  </code>
-                  <form action={deleteInvite} style={{ marginTop: '0.4rem' }}>
-                    <input type="hidden" name="id" value={invite.id} />
-                    <button className="ghost" type="submit">
-                      Einladung zurückziehen
-                    </button>
-                  </form>
-                </div>
-              ))}
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Sende den Link an die eingeladene Person. Sie registriert sich mit genau dieser
-                E-Mail-Adresse und öffnet dann den Link.
-              </p>
-            </div>
-          ) : null}
-        </>
-      ) : null}
     </div>
   );
 }

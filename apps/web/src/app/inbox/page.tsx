@@ -1,6 +1,4 @@
-import Link from 'next/link';
 import { z } from 'zod';
-import { signOut } from '@/app/actions';
 import { requireActiveOrg } from '@/lib/org';
 import {
   getConversationDetail,
@@ -41,7 +39,7 @@ export default async function InboxPage({
   searchParams: Promise<InboxSearchParams>;
 }) {
   const params = await searchParams;
-  const { orgId, orgs } = await requireActiveOrg(params.org);
+  const { orgId } = await requireActiveOrg(params.org);
   const filters = parseFilters(params.status, params.channel);
   const selectedId = params.c;
 
@@ -54,50 +52,8 @@ export default async function InboxPage({
     getHubspotSidebarInfo(orgId),
   ]);
 
-  const activeOrg = orgs.find((org) => org.id === orgId);
-
   return (
     <div className="inbox-shell">
-      <header className="inbox-header">
-        <span className="brand">Zendori</span>
-        <nav className="inbox-nav" aria-label="Hauptnavigation">
-          <Link href={`/inbox?org=${orgId}`}>Inbox</Link>
-          <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>
-          <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo</Link>
-          <span className="inbox-nav-group">Einstellungen:</span>
-          <Link href={`/settings/canned-responses?org=${orgId}`}>Textbausteine</Link>
-          <Link href={`/settings/channels?org=${orgId}`}>Kanäle</Link>
-          <Link href={`/settings/knowledge?org=${orgId}`}>Wissensdatenbank</Link>
-          <Link href={`/settings/ai?org=${orgId}`}>KI &amp; Autopilot</Link>
-          <Link href={`/settings/integrations?org=${orgId}`}>Integrationen</Link>
-          <Link href={`/settings/members?org=${orgId}`}>Mitglieder</Link>
-        </nav>
-        <div className="inbox-header-spacer" />
-        {orgs.length > 1 ? (
-          <nav className="inbox-org-switcher" aria-label="Organisation wechseln">
-            <span>Organisation:</span>
-            {orgs.map((org) =>
-              org.id === orgId ? (
-                <span key={org.id} className="inbox-org-active">
-                  {org.name}
-                </span>
-              ) : (
-                <Link key={org.id} href={`/inbox?org=${org.id}`}>
-                  {org.name}
-                </Link>
-              )
-            )}
-          </nav>
-        ) : (
-          <span className="inbox-org-switcher">{activeOrg?.name}</span>
-        )}
-        <form action={signOut}>
-          <button className="ghost" type="submit">
-            Abmelden
-          </button>
-        </form>
-      </header>
-
       <RealtimeRefresher orgId={orgId} />
 
       {params.error || params.notice ? (

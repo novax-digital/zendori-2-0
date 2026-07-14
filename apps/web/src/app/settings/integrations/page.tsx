@@ -1,5 +1,4 @@
-import Link from 'next/link';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { z } from 'zod';
 import { decryptSecret, syncRulesSchema } from '@zendori/core';
 import type { Channel, SyncRules } from '@zendori/core';
@@ -7,6 +6,10 @@ import { listTicketPipelines } from '@zendori/integrations';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import IntegrationGallery, {
+  type IntegrationKey,
+  type IntegrationTileMeta,
+} from '@/components/IntegrationGallery';
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
 
 const fieldStyle: CSSProperties = {
@@ -125,26 +128,19 @@ export default async function IntegrationsPage({
       ? await loadPipelines(config.token_encrypted)
       : { pipelines: [], failed: false };
 
-  return (
-    <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
+  const tiles: IntegrationTileMeta[] = [
+    {
+      key: 'hubspot',
+      name: 'HubSpot',
+      description: 'Konversationen als HubSpot-Tickets anlegen und aktualisieren.',
+      status: connected ? (isActive ? 'active' : 'inactive') : 'disconnected',
+    },
+  ];
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
-
+  const hubspotPanel: ReactNode = (
+    <>
       <div className="panel">
-        <h2>HubSpot — {orgName}</h2>
+        <h2>HubSpot</h2>
         <p style={helpStyle}>
           Einseitiger Sync: Konversationen werden als HubSpot-Tickets angelegt und aktualisiert. Der
           Private-App-Token wird verschlüsselt gespeichert und nie im Klartext angezeigt.
@@ -344,6 +340,35 @@ export default async function IntegrationsPage({
           </div>
         </>
       )}
+    </>
+  );
+
+  const panels: Record<IntegrationKey, ReactNode> = {
+    hubspot: hubspotPanel,
+  };
+
+  return (
+    <div className="shell">
+      <div className="page-head">
+        <h1>Integrationen</h1>
+        <p>
+          Verbinde {orgName} mit externen Systemen. Wähle eine Integration, um sie zu aktivieren und
+          einzurichten.
+        </p>
+      </div>
+
+      {error ? (
+        <p className="error" style={{ marginBottom: '1.5rem' }}>
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="notice" style={{ marginBottom: '1.5rem' }}>
+          {notice}
+        </p>
+      ) : null}
+
+      <IntegrationGallery tiles={tiles} panels={panels} />
     </div>
   );
 }

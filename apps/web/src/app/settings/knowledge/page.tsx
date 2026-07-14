@@ -1,8 +1,8 @@
-import Link from 'next/link';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import KnowledgeTabs, { type KbTabKey } from '@/components/KnowledgeTabs';
 import { addFileSource, addTextSource, addUrlSource, deleteSource, reindexSource } from './actions';
 
 type KbSourceRow = {
@@ -26,10 +26,11 @@ const statusLabels: Record<KbSourceStatus, string> = {
   error: 'Fehler',
 };
 
+// theme-token backed so the badges stay legible in dark mode
 const statusStyles: Record<KbSourceStatus, CSSProperties> = {
-  pending: { background: '#fef3c7', color: '#92400e' },
-  indexed: { background: '#d1fae5', color: '#065f46' },
-  error: { background: '#fee2e2', color: '#991b1b' },
+  pending: { background: 'var(--warn-tint)', color: 'var(--warn)' },
+  indexed: { background: 'var(--success-tint)', color: 'var(--success-ink)' },
+  error: { background: 'var(--danger-tint)', color: 'var(--danger)' },
 };
 
 const textareaStyle: CSSProperties = {
@@ -41,6 +42,12 @@ const textareaStyle: CSSProperties = {
   fontFamily: 'inherit',
   background: 'var(--surface)',
   resize: 'vertical',
+};
+
+const helpStyle: CSSProperties = {
+  fontSize: '0.9rem',
+  color: 'var(--text-muted)',
+  marginBottom: '1.25rem',
 };
 
 function statusBadge(status: KbSourceStatus) {
@@ -91,12 +98,90 @@ export default async function KnowledgePage({
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const sources = await listKbSources(orgId);
 
+  const urlPanel: ReactNode = (
+    <>
+      <p style={helpStyle}>
+        Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
+        eingelesen.
+      </p>
+      <form className="stack" action={addUrlSource} style={{ maxWidth: '32rem' }}>
+        <input type="hidden" name="org" value={orgId} />
+        <div>
+          <label htmlFor="url">URL</label>
+          <input id="url" name="url" type="url" required placeholder="https://www.beispiel.de/hilfe" />
+        </div>
+        <button className="primary" type="submit">
+          URL hinzufügen
+        </button>
+      </form>
+    </>
+  );
+
+  const filePanel: ReactNode = (
+    <>
+      <p style={helpStyle}>
+        PDF, DOCX, TXT oder MD, maximal 15 MB. Der Text wird aus der Datei extrahiert und indiziert.
+      </p>
+      <form className="stack" action={addFileSource} style={{ maxWidth: '32rem' }}>
+        <input type="hidden" name="org" value={orgId} />
+        <div>
+          <label htmlFor="file">Datei</label>
+          <input id="file" name="file" type="file" accept=".pdf,.docx,.txt,.md" required />
+        </div>
+        <button className="primary" type="submit">
+          Datei hochladen
+        </button>
+      </form>
+    </>
+  );
+
+  const textPanel: ReactNode = (
+    <>
+      <p style={helpStyle}>
+        Ein manuell gepflegter Text — z. B. Rückgabebedingungen, FAQ-Antworten oder interne
+        Hinweise, die der KI-Agent kennen soll.
+      </p>
+      <form className="stack" action={addTextSource} style={{ maxWidth: '32rem' }}>
+        <input type="hidden" name="org" value={orgId} />
+        <div>
+          <label htmlFor="title">Titel</label>
+          <input
+            id="title"
+            name="title"
+            type="text"
+            required
+            minLength={1}
+            maxLength={200}
+            placeholder="z. B. Rückgabebedingungen"
+          />
+        </div>
+        <div>
+          <label htmlFor="text">Text</label>
+          <textarea id="text" name="text" rows={6} required style={textareaStyle} />
+        </div>
+        <button className="primary" type="submit">
+          Text hinzufügen
+        </button>
+      </form>
+    </>
+  );
+
+  const tabs: { key: KbTabKey; label: string; panel: ReactNode }[] = [
+    { key: 'url', label: 'URL', panel: urlPanel },
+    { key: 'file', label: 'Datei', panel: filePanel },
+    { key: 'text', label: 'Text', panel: textPanel },
+  ];
+
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
+      <div className="page-head">
+        <h1>Wissensdatenbank</h1>
+        <p>
+          Quellen von {orgName} werden im Hintergrund verarbeitet (Zerlegung in Abschnitte,
+          Embeddings) und dienen dem KI-Agenten als Grundlage für Antwortvorschläge. Neue Quellen
+          starten als „Ausstehend" und wechseln nach der Indizierung auf „Indiziert".
+        </p>
+      </div>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
@@ -110,15 +195,10 @@ export default async function KnowledgePage({
       ) : null}
 
       <div className="panel">
-        <h2>Wissensdatenbank — {orgName}</h2>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Quellen werden im Hintergrund verarbeitet (Zerlegung in Abschnitte, Embeddings) und dienen
-          dem KI-Agenten als Grundlage für Antwortvorschläge. Neue Quellen starten mit dem Status
-          „Ausstehend" und wechseln nach der Indizierung auf „Indiziert".
-        </p>
+        <h2>Quellen</h2>
         {sources.length === 0 ? (
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Noch keine Quellen vorhanden. Füge unten eine URL, einen Text oder eine Datei hinzu.
+            Noch keine Quellen vorhanden. Füge unten eine URL, eine Datei oder einen Text hinzu.
           </p>
         ) : (
           <table>
@@ -166,73 +246,7 @@ export default async function KnowledgePage({
         )}
       </div>
 
-      <div className="panel">
-        <h2>URL hinzufügen</h2>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
-          eingelesen.
-        </p>
-        <form className="stack" action={addUrlSource} style={{ maxWidth: '32rem' }}>
-          <input type="hidden" name="org" value={orgId} />
-          <div>
-            <label htmlFor="url">URL</label>
-            <input
-              id="url"
-              name="url"
-              type="url"
-              required
-              placeholder="https://www.beispiel.de/hilfe"
-            />
-          </div>
-          <button className="primary" type="submit">
-            URL hinzufügen
-          </button>
-        </form>
-      </div>
-
-      <div className="panel">
-        <h2>Text hinzufügen</h2>
-        <form className="stack" action={addTextSource} style={{ maxWidth: '32rem' }}>
-          <input type="hidden" name="org" value={orgId} />
-          <div>
-            <label htmlFor="title">Titel</label>
-            <input
-              id="title"
-              name="title"
-              type="text"
-              required
-              minLength={1}
-              maxLength={200}
-              placeholder="z. B. Rückgabebedingungen"
-            />
-          </div>
-          <div>
-            <label htmlFor="text">Text</label>
-            <textarea id="text" name="text" rows={6} required style={textareaStyle} />
-          </div>
-          <button className="primary" type="submit">
-            Text hinzufügen
-          </button>
-        </form>
-      </div>
-
-      <div className="panel">
-        <h2>Datei hochladen</h2>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          PDF, DOCX, TXT oder MD, maximal 15 MB. Der Text wird aus der Datei extrahiert und
-          indiziert.
-        </p>
-        <form className="stack" action={addFileSource} style={{ maxWidth: '32rem' }}>
-          <input type="hidden" name="org" value={orgId} />
-          <div>
-            <label htmlFor="file">Datei</label>
-            <input id="file" name="file" type="file" accept=".pdf,.docx,.txt,.md" required />
-          </div>
-          <button className="primary" type="submit">
-            Datei hochladen
-          </button>
-        </form>
-      </div>
+      <KnowledgeTabs tabs={tabs} />
     </div>
   );
 }

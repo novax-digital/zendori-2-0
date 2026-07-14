@@ -36,10 +36,6 @@ export default async function WidgetDemoPage({
 
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
 
       {widget ? (
         <div className="panel">

@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { autoAckTextsSchema, businessHoursSchema } from '@zendori/channels';
 import type { AutoAckTexts, BusinessHours } from '@zendori/channels';
@@ -122,10 +121,6 @@ export default async function AiSettingsPage({
 
   return (
     <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
-        <Link href={`/inbox?org=${orgId}`}>Zurück zur Inbox</Link>
-      </header>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
