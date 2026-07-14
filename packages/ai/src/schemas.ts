@@ -47,6 +47,23 @@ export const DraftResultSchema = z.object({
 });
 export type DraftResult = z.infer<typeof DraftResultSchema>;
 
+/**
+ * Listwise rerank result (Haiku, stage 2 of the retrieval funnel): the indices
+ * of the most relevant candidates, best first. Indices outside the candidate
+ * range or duplicates are dropped defensively by the caller.
+ */
+export const RerankResultSchema = z.object({
+  ranking: z.array(
+    z.object({
+      /** 1-based candidate number as presented in the prompt. */
+      index: z.number().int(),
+      /** Model's relevance judgement 0..1 (informational). */
+      relevance: z.number(),
+    })
+  ),
+});
+export type RerankResult = z.infer<typeof RerankResultSchema>;
+
 /** A knowledge-base chunk returned by the match_kb_chunks RPC. */
 export const KbChunkMatchSchema = z.object({
   id: z.string(),

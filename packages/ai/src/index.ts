@@ -24,8 +24,8 @@ export const CHUNKING = {
   overlapTokens: 50,
 } as const;
 
-/** Steps logged to ai_runs. */
-export type AiRunStep = 'classify' | 'extract' | 'retrieve' | 'draft';
+/** Steps logged to ai_runs ('rerank' since 0013 — stage 2 of retrieval). */
+export type AiRunStep = 'classify' | 'extract' | 'retrieve' | 'rerank' | 'draft';
 
 export * from './schemas.js';
 export * from './prompts.js';

@@ -1,20 +1,36 @@
 import { embed } from './embeddings.js';
+import { rerank } from './anthropic.js';
 import type { KbChunkMatch } from './schemas.js';
 
-// Shared RAG retrieval: embed the query and match org-scoped kb_chunks via the
-// match_kb_chunks RPC (migration 0005). Used identically by the text pipeline
-// (process-message draft step) and the voice kb_search tool (§9: "gleiche
-// RAG-Funktion wie die Text-Pipeline").
+// Shared RAG retrieval (§9: "gleiche RAG-Funktion wie die Text-Pipeline").
+// Two-stage funnel since 0013:
+//   stage 1  hybrid_kb_search — vector + keyword legs fused via RRF (pool)
+//   stage 2  Haiku listwise rerank — cuts the pool to the final top-K
+// retrieveKbChunks stays as the legacy vector-only path AND the fallback when
+// the hybrid function is not migrated yet (worker-ahead-of-db skew).
 
 export const MAX_EMBED_QUERY_CHARS = 24_000;
+/** Keyword leg bound: websearch_to_tsquery over huge bodies is useless anyway. */
+const MAX_KEYWORD_QUERY_CHARS = 1_000;
+/** Per-candidate content cap in the rerank prompt (cost/latency bound). */
+const RERANK_CANDIDATE_CHARS = 700;
 
 /** Minimal client surface so worker/web service-role clients both fit. */
 type RpcClient = {
   rpc: (
     fn: string,
     args: Record<string, unknown>
-  ) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  ) => PromiseLike<{ data: unknown; error: { message: string; code?: string } | null }>;
 };
+
+/** PostgREST "function not found" (pre-0013 schema) / PG undefined function. */
+function isMissingFunction(error: { message: string; code?: string }): boolean {
+  return (
+    error.code === 'PGRST202' ||
+    error.code === '42883' ||
+    error.message.toLowerCase().includes('could not find the function')
+  );
+}
 
 export interface RetrieveResult {
   matches: KbChunkMatch[];
@@ -61,4 +77,150 @@ export async function retrieveKbChunks(
   if (error) throw new Error(`match_kb_chunks failed: ${error.message}`);
 
   return { matches: (data ?? []) as KbChunkMatch[], costUsd };
+}
+
+/**
+ * Defensive mapping of a model ranking onto the candidate pool: 1-based
+ * indices, out-of-range and duplicates dropped, capped at finalCount. Pure.
+ */
+export function applyRanking<T>(
+  pool: T[],
+  ranking: { index: number }[],
+  finalCount: number
+): T[] {
+  const seen = new Set<number>();
+  const result: T[] = [];
+  for (const entry of ranking) {
+    const poolIndex = entry.index - 1;
+    if (!Number.isInteger(poolIndex) || poolIndex < 0 || poolIndex >= pool.length) continue;
+    if (seen.has(poolIndex)) continue;
+    seen.add(poolIndex);
+    result.push(pool[poolIndex]!);
+    if (result.length >= finalCount) break;
+  }
+  return result;
+}
+
+export interface RetrieveRelevantResult {
+  matches: KbChunkMatch[];
+  /** Embedding cost (stage 1) for ai_runs logging. */
+  embedCostUsd: number;
+  /** 'hybrid' (0013) or 'vector' (pre-0013 fallback via match_kb_chunks). */
+  searchMode: 'hybrid' | 'vector';
+  /** Present when the Haiku rerank (stage 2) ran successfully. */
+  rerank?: { costUsd: number; latencyMs: number; poolSize: number; model: string };
+  /** True when reranking was attempted but failed (fusion order used instead). */
+  rerankFailed?: boolean;
+}
+
+/**
+ * Full two-stage retrieval: hybrid candidate pool → Haiku rerank → top-K.
+ * Failure semantics (all non-fatal by design):
+ *   - hybrid function missing (pre-0013) → legacy vector search, no rerank
+ *   - rerank disabled/unneeded (pool ≤ finalCount) → fusion order
+ *   - rerank throws → fusion order + rerankFailed for the caller's logging
+ */
+export async function retrieveRelevantChunks(
+  supabase: RpcClient,
+  orgId: string,
+  query: string,
+  options: {
+    knowledgeBaseIds?: string[] | null;
+    /** Chunks handed to the draft prompt. Default 6 (legacy behavior). */
+    finalCount?: number;
+    /** Stage-1 candidate pool. Default 24. */
+    poolCount?: number;
+    /** Disable stage 2 (voice: latency-sensitive live calls). Default true. */
+    rerank?: boolean;
+    /** Company name for the rerank prompt. */
+    companyName?: string;
+  } = {}
+): Promise<RetrieveRelevantResult> {
+  const finalCount = options.finalCount ?? 6;
+  const poolCount = options.poolCount ?? 24;
+
+  // [] = the agent has no linked bases: knows nothing, costs nothing.
+  if (options.knowledgeBaseIds && options.knowledgeBaseIds.length === 0) {
+    return { matches: [], embedCostUsd: 0, searchMode: 'hybrid' };
+  }
+
+  const { vectors, costUsd: embedCostUsd } = await embed([query.slice(0, MAX_EMBED_QUERY_CHARS)]);
+  const queryVector = vectors[0];
+  if (!queryVector) throw new Error('embedding returned no vector for the query');
+
+  // --- stage 1: hybrid pool -------------------------------------------------
+  const hybridArgs: Record<string, unknown> = {
+    p_org_id: orgId,
+    p_query: query.slice(0, MAX_KEYWORD_QUERY_CHARS),
+    p_embedding: queryVector,
+    p_match_count: poolCount,
+  };
+  if (options.knowledgeBaseIds != null) hybridArgs.p_knowledge_base_ids = options.knowledgeBaseIds;
+  const { data, error } = await supabase.rpc('hybrid_kb_search', hybridArgs);
+  if (error) {
+    if (!isMissingFunction(error)) throw new Error(`hybrid_kb_search failed: ${error.message}`);
+    // Pre-0013 schema: fall back to the legacy vector search — exactly the old
+    // behavior (threshold 0.3, finalCount, no rerank). Costs one extra embed
+    // call? No: reuse the vector we already computed via the legacy RPC args.
+    const legacyArgs: Record<string, unknown> = {
+      p_org_id: orgId,
+      p_embedding: queryVector,
+      p_match_threshold: 0.3,
+      p_match_count: finalCount,
+    };
+    if (options.knowledgeBaseIds != null) legacyArgs.p_knowledge_base_ids = options.knowledgeBaseIds;
+    const legacy = await supabase.rpc('match_kb_chunks', legacyArgs);
+    if (legacy.error) throw new Error(`match_kb_chunks failed: ${legacy.error.message}`);
+    return {
+      matches: (legacy.data ?? []) as KbChunkMatch[],
+      embedCostUsd,
+      searchMode: 'vector',
+    };
+  }
+  const pool = (data ?? []) as KbChunkMatch[];
+
+  // --- stage 2: rerank --------------------------------------------------------
+  // Skip when disabled or when there is nothing to cut (reordering ≤ finalCount
+  // candidates is not worth an extra model call).
+  if (options.rerank === false || pool.length <= finalCount) {
+    return { matches: pool.slice(0, finalCount), embedCostUsd, searchMode: 'hybrid' };
+  }
+
+  const started = Date.now();
+  try {
+    const { result, costUsd } = await rerank({
+      companyName: options.companyName ?? 'unser Unternehmen',
+      query: query.slice(0, MAX_EMBED_QUERY_CHARS),
+      candidates: pool.map((m) => m.content.slice(0, RERANK_CANDIDATE_CHARS)),
+      topK: finalCount,
+    });
+    const reranked = applyRanking(pool, result.ranking, finalCount);
+    if (reranked.length === 0) {
+      return {
+        matches: pool.slice(0, finalCount),
+        embedCostUsd,
+        searchMode: 'hybrid',
+        rerankFailed: true,
+      };
+    }
+    return {
+      matches: reranked,
+      embedCostUsd,
+      searchMode: 'hybrid',
+      rerank: {
+        costUsd,
+        latencyMs: Date.now() - started,
+        poolSize: pool.length,
+        model: 'claude-haiku-4-5',
+      },
+    };
+  } catch {
+    // Reranking is an optimisation — never fail retrieval because of it.
+    return {
+      matches: pool.slice(0, finalCount),
+      embedCostUsd,
+      searchMode: 'hybrid',
+      rerankFailed: true,
+    };
+  }
 }

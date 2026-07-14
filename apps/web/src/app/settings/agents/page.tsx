@@ -143,6 +143,7 @@ function AgentFields({
           step={0.05}
           defaultValue={agent?.confidence_threshold ?? 0.7}
           disabled={disabled}
+          style={{ maxWidth: '10rem' }}
         />
       </div>
     </>
@@ -287,12 +288,22 @@ export default async function AgentsPage({
           ) : null}
         </form>
         {isOwner ? (
-          <form action={deleteAgent} style={{ marginTop: '1rem' }}>
+          <form
+            action={deleteAgent}
+            style={{
+              marginTop: '1.75rem',
+              paddingTop: '1.25rem',
+              borderTop: '1px solid var(--border)',
+            }}
+          >
             <input type="hidden" name="org" value={orgId} />
             <input type="hidden" name="agentId" value={agent.id} />
             <button className="ghost" type="submit">
               Agent löschen
             </button>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.4rem' }}>
+              Zugewiesene Kanäle laufen danach ohne KI-Antworten weiter.
+            </p>
           </form>
         ) : null}
       </div>

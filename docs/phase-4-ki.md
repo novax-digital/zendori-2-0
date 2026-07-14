@@ -20,7 +20,10 @@ process-message:
   2. classification in message.metadata; conversation.priority setzen
   3. extract (Haiku) NUR bei E-Mail/Formular → echten Absender (Name/E-Mail/Telefon) + Anliegen
      → Contact-Korrektur: find-or-create by email, conversation.contact_id umhängen, Name/Telefon ergänzen
-  4. retrieve (RAG): embed(query) → rpc match_kb_chunks (org-scoped + gefiltert auf die
+  4. retrieve (RAG, zweistufig seit 0013): embed(query) → rpc hybrid_kb_search (Vektor- +
+     Keyword-Suche, RRF-fusioniert, Pool 24) → Haiku-Rerank auf Top 6 (Fallbacks: pre-0013 →
+     match_kb_chunks vektor-only; Rerank-Fehler → RRF-Reihenfolge; Voice nutzt Hybrid OHNE
+     Rerank wegen Live-Latenz). Org-scoped + gefiltert auf die
      Wissensdatenbanken des zugewiesenen Agenten [0012, agent_knowledge_bases]; Agent ohne
      verknüpfte Datenbank findet nichts — gewollt; force_draft sucht org-weit; Schwelle 0.3, top 6)
   5. draft (Sonnet): Kontext = Top-Chunks + tone_instructions → { reply, confidence, used_source_ids }
@@ -47,6 +50,7 @@ index-source:
 
 ## Datenmodell (Migration 0005)
 
+- `hybrid_kb_search(p_org_id, p_query, p_embedding, p_match_count, p_knowledge_base_ids)` (0013) → RRF-fusionierte Kandidaten aus Vektor- (Cosinus, Gate 0.15) und Keyword-Zweig (`kb_chunks.fts`, german, GIN); `similarity` = RRF-Score. `ai_runs.step` kennt zusätzlich `rerank`.
 - `match_kb_chunks(p_org_id, p_embedding, p_match_threshold, p_match_count, p_knowledge_base_ids uuid[] default null)` → Top-Chunks per Cosinus (hnsw-Index + iterative_scan), org-gefiltert; `null` = alle Datenbanken der Org, `[]` = keine Treffer (Migration 0012 — die alte 4-Parameter-Signatur wurde ersetzt).
 - `ai_drafts` (org_id, conversation_id, message_id, content, confidence, sources jsonb, model, status pending|accepted|edited|discarded). RLS: Member lesen/Status ändern, Worker (Service Role) schreibt. Unique-Index: max. 1 pending pro Konversation. In Realtime-Publication.
 - Bucket `kb-files` (privat, Org-Member-Read, Service-Role-Write).

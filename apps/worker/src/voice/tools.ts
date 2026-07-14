@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { retrieveKbChunks, EMBEDDING_MODEL } from '@zendori/ai';
+import { retrieveRelevantChunks, EMBEDDING_MODEL } from '@zendori/ai';
 import type { SupabaseClient } from '@zendori/core';
 import type { VoiceChannelConfig } from '@zendori/channels';
 
@@ -35,18 +35,24 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
   }
 
   const start = Date.now();
-  const { matches, costUsd } = await retrieveKbChunks(ctx.supabase, ctx.orgId, parsed.data.query, {
-    knowledgeBaseIds: ctx.knowledgeBaseIds,
-  });
+  // Hybrid stage only — the Haiku rerank would add ~1s of silence to a live
+  // call; the caller's short spoken questions are exactly where the keyword
+  // leg shines anyway. Smaller pool keeps the tool result compact.
+  const { matches, embedCostUsd, searchMode } = await retrieveRelevantChunks(
+    ctx.supabase,
+    ctx.orgId,
+    parsed.data.query,
+    { knowledgeBaseIds: ctx.knowledgeBaseIds, poolCount: 12, finalCount: 6, rerank: false }
+  );
   await ctx.supabase.from('ai_runs').insert({
     org_id: ctx.orgId,
     conversation_id: ctx.conversationId,
     step: 'retrieve',
     model: EMBEDDING_MODEL,
     latency_ms: Date.now() - start,
-    cost_usd: costUsd,
+    cost_usd: embedCostUsd,
     input_summary: 'voice.kb_search',
-    output_summary: `matches=${matches.length}`,
+    output_summary: `matches=${matches.length} mode=${searchMode}`,
   });
 
   return {

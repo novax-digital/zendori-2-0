@@ -13,6 +13,8 @@ import {
   buildClassifyPrompt,
   buildDraftPrompt,
   buildExtractPrompt,
+  buildRerankPrompt,
+  buildRerankUserMessage,
   buildUserMessage,
   type DraftSource,
 } from './prompts.js';
@@ -20,9 +22,11 @@ import {
   ClassificationResultSchema,
   DraftResultSchema,
   ExtractionResultSchema,
+  RerankResultSchema,
   type ClassificationResult,
   type DraftResult,
   type ExtractionResult,
+  type RerankResult,
 } from './schemas.js';
 
 /** Result shape shared by every Anthropic call: parsed result + usage + cost. */
@@ -159,6 +163,42 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
   const result = parseDraftResponse(extractText(message));
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage) };
+}
+
+export interface RerankInput {
+  companyName: string;
+  /** The (clean) customer request. */
+  query: string;
+  /** Candidate chunk contents, in retrieval order. */
+  candidates: string[];
+  /** Keep at most this many. */
+  topK: number;
+}
+
+/**
+ * Listwise rerank (Haiku): reads query + candidates together and returns the
+ * 1-based indices of the passages that actually help, best first. Stage 2 of
+ * the retrieval funnel — callers must treat failures as non-fatal (fall back
+ * to fusion order).
+ */
+export async function rerank(input: RerankInput): Promise<AiCallResult<RerankResult>> {
+  const client = getClient();
+  const message = await client.messages.parse({
+    model: AI_MODELS.classify,
+    max_tokens: 1024,
+    system: buildRerankPrompt({ companyName: input.companyName, topK: input.topK }),
+    messages: [
+      {
+        role: 'user',
+        content: buildRerankUserMessage(input.query, input.candidates),
+      },
+    ],
+    output_config: { format: zodOutputFormat(RerankResultSchema) },
+  });
+  const result = message.parsed_output;
+  if (!result) throw new Error('Das Reranking lieferte kein gültiges Ergebnis.');
+  const usage = toUsage(message.usage);
+  return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
 }
 
 /** Concatenate the text blocks of a message response. */

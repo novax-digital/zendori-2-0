@@ -110,7 +110,7 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `knowledge_bases` (org_id, name, description) — mehrere Wissensdatenbanken pro Org (0012); Inhalte member-verwaltet
 - `kb_sources` (org_id, knowledge_base_id → knowledge_bases, type: url|file|text, uri, status: pending|indexed|error, last_indexed_at) — jede Quelle gehört zu genau einer Wissensdatenbank
 - `agent_knowledge_bases` (org_id, agent_id, knowledge_base_id) — n:m: welche Datenbanken ein Agent nutzt (owner-only; RAG-Suche filtert darauf, Agent ohne Verknüpfung findet nichts)
-- `kb_chunks` (source_id, org_id, content, embedding vector(1536), token_count)
+- `kb_chunks` (source_id, org_id, content, embedding vector(1536), fts tsvector [0013, generiert/german], token_count) — Retrieval zweistufig: hybrid_kb_search (Vektor+Keyword, RRF) → Haiku-Rerank (Text-Pipeline; Voice ohne Rerank wegen Latenz)
 - `ai_runs` (conversation_id, step, model, input_summary, output_summary, confidence, latency_ms, cost_usd)
 - `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, triggered_by)
 - `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)

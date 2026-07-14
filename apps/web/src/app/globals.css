@@ -234,7 +234,7 @@ a:hover {
   border-bottom: 1px solid var(--sidebar-border);
 }
 .app-brand img.app-brand-wordmark {
-  height: 22px;
+  height: 24px;
   width: auto;
 }
 .app-brand img.app-brand-icon {
@@ -543,7 +543,7 @@ main.centered {
   margin-bottom: 1.5rem;
 }
 .auth-brand img {
-  height: 30px;
+  height: 32px;
 }
 .auth-brand img.ondark {
   display: none;
@@ -599,6 +599,7 @@ input[type='password'],
 input[type='tel'],
 input[type='url'],
 input[type='search'],
+input[type='number'],
 select,
 textarea {
   width: 100%;

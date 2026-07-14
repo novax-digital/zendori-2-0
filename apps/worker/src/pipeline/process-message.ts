@@ -16,7 +16,7 @@ import {
   classify,
   draft,
   extract,
-  retrieveKbChunks,
+  retrieveRelevantChunks,
   type AiRunStep,
   type ClassificationResult,
   type KbChunkMatch,
@@ -320,29 +320,47 @@ export async function processMessage(messageId: string): Promise<void> {
       }
     }
 
-    // --- 4. retrieve (RAG, shared with the voice kb_search tool) --------------
+    // --- 4. retrieve (two-stage funnel, shared with the voice kb_search tool) --
     // Scoped to the agent's linked knowledge bases (0012). No agent (force-draft
     // path) = all org knowledge; an agent with zero linked bases finds nothing.
+    // Stage 1 hybrid (vector+keyword RRF, 0013) → stage 2 Haiku rerank; both
+    // degrade gracefully (pre-0013 → legacy vector; rerank failure → RRF order).
     currentStep = 'retrieve';
     // force-draft deliberately bypasses the agent — a human asked for a draft,
     // so search ALL org knowledge, not the agent's (possibly empty) base set.
     const knowledgeBaseIds =
       activeAgent && !forceDraft ? await loadAgentKbIds(supabase, activeAgent.id) : null;
     const retrieveStart = Date.now();
-    const { matches, costUsd: embedCost } = await retrieveKbChunks(supabase, orgId, cleanBody, {
+    const retrieval = await retrieveRelevantChunks(supabase, orgId, cleanBody, {
       knowledgeBaseIds,
+      companyName: orgName,
     });
+    const { matches, embedCostUsd: embedCost } = retrieval;
     const retrieveLatency = Date.now() - retrieveStart;
     await logAiRun(supabase, {
       orgId,
       conversationId: conv.id,
       step: 'retrieve',
       model: EMBEDDING_MODEL,
-      latencyMs: retrieveLatency,
+      latencyMs: retrieveLatency - (retrieval.rerank?.latencyMs ?? 0),
       costUsd: embedCost,
       inputSummary,
-      outputSummary: `matches=${matches.length}`,
+      outputSummary: `matches=${matches.length} mode=${retrieval.searchMode}${
+        retrieval.rerankFailed ? ' rerank=failed' : ''
+      }`,
     });
+    if (retrieval.rerank) {
+      await logAiRun(supabase, {
+        orgId,
+        conversationId: conv.id,
+        step: 'rerank',
+        model: retrieval.rerank.model,
+        latencyMs: retrieval.rerank.latencyMs,
+        costUsd: retrieval.rerank.costUsd,
+        inputSummary: `pool=${retrieval.rerank.poolSize}`,
+        outputSummary: `kept=${matches.length}`,
+      });
+    }
 
     // --- 5. draft (Sonnet) ---------------------------------------------------
     currentStep = 'draft';
@@ -559,6 +577,7 @@ export async function handlePipelineFailure(messageId: string, err: unknown): Pr
 function modelForStep(step: AiRunStep): string {
   if (step === 'draft') return AI_MODELS.draft;
   if (step === 'retrieve') return EMBEDDING_MODEL;
+  // classify / extract / rerank all run on the Haiku tier
   return AI_MODELS.classify;
 }
 
