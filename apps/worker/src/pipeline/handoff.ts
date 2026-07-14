@@ -60,29 +60,13 @@ export type DraftAction = 'handoff' | 'auto_send' | 'pending';
 
 /**
  * Gate the drafted reply (§4 message-flow): a required handoff always wins;
- * otherwise auto-send only when the org enabled autopilot for this channel;
- * else keep the draft as a suggestion (Phase-4 behaviour). Pure.
+ * otherwise auto-send only when the channel's assigned agent runs in autopilot
+ * mode (0011); else keep the draft as a suggestion. Pure.
  */
 export function decideDraftAction(handoff: boolean, autopilotEnabled: boolean): DraftAction {
   if (handoff) return 'handoff';
   if (autopilotEnabled) return 'auto_send';
   return 'pending';
-}
-
-/**
- * Read org_settings.autopilot_enabled ({"chat": true, "email": false, …}) for a
- * channel type. Only a strict boolean true enables it; missing/non-object/other
- * values mean off. Pure.
- */
-export function isAutopilotEnabled(autopilotEnabled: unknown, channelType: ChannelType): boolean {
-  if (
-    autopilotEnabled !== null &&
-    typeof autopilotEnabled === 'object' &&
-    !Array.isArray(autopilotEnabled)
-  ) {
-    return (autopilotEnabled as Record<string, unknown>)[channelType] === true;
-  }
-  return false;
 }
 
 // --- outbound delivery -------------------------------------------------------

@@ -28,6 +28,7 @@ type IconName =
   | 'test'
   | 'widget'
   | 'shield'
+  | 'clock'
   | 'chevron'
   | 'signout';
 
@@ -112,6 +113,13 @@ function Icon({ name }: { name: IconName }) {
           <path d="m9.5 12 1.8 1.8L15 10" />
         </svg>
       );
+    case 'clock':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 7.5V12l3 2" />
+        </svg>
+      );
     case 'chevron':
       return (
         <svg {...common}>
@@ -135,9 +143,10 @@ const NAV: NavSection[] = [
   {
     title: 'Einstellungen',
     items: [
+      { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
-      { href: '/settings/ai', label: 'KI & Autopilot', icon: 'ai' },
+      { href: '/settings/ai', label: 'Übergabe & Zeiten', icon: 'clock' },
       { href: '/settings/canned-responses', label: 'Textbausteine', icon: 'canned' },
       { href: '/settings/members', label: 'Team', icon: 'team' },
       { href: '/settings/integrations', label: 'Integrationen', icon: 'integrations' },

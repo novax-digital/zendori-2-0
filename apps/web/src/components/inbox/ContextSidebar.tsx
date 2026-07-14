@@ -57,7 +57,7 @@ export default function ContextSidebar({
   filterStatus,
   filterChannel,
 }: ContextSidebarProps) {
-  const { conversation, contact, channel, notes } = detail;
+  const { conversation, contact, channel, agent, notes } = detail;
 
   // HubSpot ticket id lives in conversation.external_refs (§5); deep link needs
   // the org's ui_domain + portal_id from the integration config.
@@ -176,6 +176,16 @@ export default function ContextSidebar({
           {channel ? <span className="inbox-badge inbox-badge-neutral">{channel.name}</span> : null}
           <span className="inbox-badge inbox-badge-mode">
             {conversation.mode === 'bot' ? 'Bot' : 'Mensch'}
+          </span>
+          <span
+            className="inbox-badge inbox-badge-neutral"
+            title={
+              agent
+                ? 'Der diesem Kanal zugewiesene KI-Agent'
+                : 'Kein Agent zugewiesen — keine KI-Antworten auf diesem Kanal'
+            }
+          >
+            {agent ? `Agent: ${agent.name}${agent.is_active ? '' : ' (pausiert)'}` : 'Kein Agent'}
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>

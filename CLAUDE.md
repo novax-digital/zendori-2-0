@@ -97,7 +97,8 @@ Kanal-Webhook (Resend / WhatsApp / Widget / Voice, später IMAP)
 Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel (Idempotenz).
 
 - `organizations` (Zendori-Kunden), `org_members` (user_id, role: owner|agent)
-- `channels` (org_id, type: chat|email|whatsapp|voice, name, config jsonb, is_active)
+- `agents` (org_id, name, **identity — der System-Prompt/die Identität des Agenten**, mode: draft_only|autopilot|intake_only, confidence_threshold default 0.7, is_active) — KI-Agenten als eigene Entität (Migration 0011): ein Agent bedient beliebig viele Kanäle; Kanal ohne Agent = keine Drafts/Auto-Sends (Klassifikation+Extraktion laufen immer). Writes owner-only.
+- `channels` (org_id, type: chat|email|whatsapp|voice, name, config jsonb, is_active, agent_id → agents; same-org per Composite-FK, Zuweisung owner-only per DB-Trigger)
   - email-Channel: `config.mode: 'inbound' | 'imap'`; bei inbound: `config.address` (die generierte Adresse), bei imap: verschlüsselte Credentials (§7)
 - `integrations` (org_id, type: hubspot, config jsonb — Token verschlüsselt wie §7, rules jsonb — Sync-Regeln: all | channel_ids[] | manual, is_active, last_sync_at)
 - `contacts` (org_id, name, email, phone, wa_id, external_ids jsonb) — Identitäten mergen, wenn E-Mail/Telefon übereinstimmt; bei Formular-Mails wird der echte Kontakt per KI-Extraktion gesetzt (Phase 4), nicht der Envelope-Absender
@@ -109,8 +110,8 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `kb_sources` (org_id, type: url|file|text, uri, status: pending|indexed|error, last_indexed_at)
 - `kb_chunks` (source_id, org_id, content, embedding vector(1536), token_count)
 - `ai_runs` (conversation_id, step, model, input_summary, output_summary, confidence, latency_ms, cost_usd)
-- `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual, triggered_by)
-- `org_settings` (org_id, autopilot_enabled per channel, confidence_threshold default 0.7, tone_instructions, business_hours, auto_ack_texts)
+- `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, triggered_by)
+- `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
 
 ## 6. Human-Handoff-Logik (verbindlich)
 

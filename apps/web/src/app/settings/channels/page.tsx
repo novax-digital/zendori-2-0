@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { Channel } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createTestChannel } from '@/app/inbox/actions';
 import {
   createWidgetChannel,
@@ -11,10 +12,23 @@ import {
   createWhatsappTwilioChannel,
   updateVoiceChannelSettings,
   setChannelActive,
+  setChannelAgent,
 } from './actions';
 import ChannelGallery, { type TileKey, type TileMeta } from '@/components/ChannelGallery';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
+
+type AgentOption = { id: string; name: string; is_active: boolean };
+
+async function listAgentOptions(orgId: string): Promise<AgentOption[]> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('agents')
+    .select('id, name, is_active')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: true });
+  return (data ?? []) as AgentOption[];
+}
 
 type WidgetChannelView = {
   id: string;
@@ -22,6 +36,7 @@ type WidgetChannelView = {
   publicToken: string;
   theme: WidgetTheme;
   isActive: boolean;
+  agentId: string | null;
 };
 
 /** Extracts the widget config from a channel row; returns null for non-widget channels. */
@@ -43,17 +58,23 @@ function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
       greeting: typeof theme.greeting === 'string' ? theme.greeting : DEFAULT_THEME.greeting,
     },
     isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
   };
 }
 
-type TestChannelView = { id: string; name: string; isActive: boolean };
+type TestChannelView = { id: string; name: string; isActive: boolean; agentId: string | null };
 
 /** Extracts a manual test channel (type=chat, config.test); null otherwise. */
 function toTestChannelView(channel: Channel): TestChannelView | null {
   if (channel.type !== 'chat') return null;
   const config = channel.config as { test?: unknown };
   if (config.test !== true) return null;
-  return { id: channel.id, name: channel.name, isActive: channel.is_active };
+  return {
+    id: channel.id,
+    name: channel.name,
+    isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
+  };
 }
 
 type IntakeChannelView = {
@@ -62,6 +83,7 @@ type IntakeChannelView = {
   address: string;
   purpose: 'form' | 'forwarded_email';
   isActive: boolean;
+  agentId: string | null;
 };
 
 /** Extracts an inbound-email intake channel; returns null for other channels. */
@@ -76,6 +98,7 @@ function toIntakeChannelView(channel: Channel): IntakeChannelView | null {
     // legacy rows without a purpose are contact-form intakes
     purpose: config.purpose === 'forwarded_email' ? 'forwarded_email' : 'form',
     isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
   };
 }
 
@@ -84,6 +107,7 @@ type WhatsappChannelView = {
   name: string;
   sender: string;
   isActive: boolean;
+  agentId: string | null;
 };
 
 /** Extracts a Twilio WhatsApp channel; returns null for other channels/providers. */
@@ -96,6 +120,7 @@ function toWhatsappChannelView(channel: Channel): WhatsappChannelView | null {
     name: channel.name,
     sender: config.sender,
     isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
   };
 }
 
@@ -103,14 +128,13 @@ type VoiceChannelView = {
   id: string;
   name: string;
   phoneNumber: string;
-  agentMode: 'answer' | 'intake_only';
-  instructions: string;
   greeting: string;
   voice: string;
   keyterms: string;
   speechSpeed: number;
   transferNumber: string;
   isActive: boolean;
+  agentId: string | null;
 };
 
 /** Extracts a voice channel for the agent-settings card; null for other channels. */
@@ -119,8 +143,6 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
   const config = channel.config as {
     provider?: unknown;
     phoneNumber?: unknown;
-    agentMode?: unknown;
-    instructions?: unknown;
     greeting?: unknown;
     voice?: unknown;
     keyterms?: unknown;
@@ -132,8 +154,6 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     id: channel.id,
     name: channel.name,
     phoneNumber: config.phoneNumber,
-    agentMode: config.agentMode === 'intake_only' ? 'intake_only' : 'answer',
-    instructions: typeof config.instructions === 'string' ? config.instructions : '',
     greeting: typeof config.greeting === 'string' ? config.greeting : '',
     voice: typeof config.voice === 'string' ? config.voice : 'eve',
     keyterms: Array.isArray(config.keyterms)
@@ -142,6 +162,7 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     speechSpeed: typeof config.speechSpeed === 'number' ? config.speechSpeed : 1.0,
     transferNumber: typeof config.transferNumber === 'string' ? config.transferNumber : '',
     isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
   };
 }
 
@@ -188,15 +209,68 @@ function ActiveToggle({
   );
 }
 
+/**
+ * Per-channel agent assignment (0011). Its own <form> — must never be nested
+ * inside another form (invalid HTML), so panels render it as a sibling.
+ */
+function AgentSelect({
+  orgId,
+  channelId,
+  agentId,
+  agents,
+  disabled,
+}: {
+  orgId: string;
+  channelId: string;
+  agentId: string | null;
+  agents: AgentOption[];
+  /** Non-owners see the assignment read-only (setChannelAgent is owner-gated). */
+  disabled: boolean;
+}) {
+  return (
+    <form
+      action={setChannelAgent}
+      style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.5rem' }}
+    >
+      <input type="hidden" name="org" value={orgId} />
+      <input type="hidden" name="channelId" value={channelId} />
+      <select
+        name="agentId"
+        defaultValue={agentId ?? ''}
+        aria-label="Agent"
+        disabled={disabled}
+        style={{ maxWidth: '18rem' }}
+      >
+        <option value="">— kein Agent (keine KI-Antworten) —</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.name}
+            {agent.is_active ? '' : ' (pausiert)'}
+          </option>
+        ))}
+      </select>
+      {disabled ? null : (
+        <button className="ghost" type="submit">
+          Agent zuweisen
+        </button>
+      )}
+    </form>
+  );
+}
+
 export default async function ChannelsPage({
   searchParams,
 }: {
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs } = await requireActiveOrg(org);
+  const { orgId, orgs, role } = await requireActiveOrg(org);
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const channels = await listChannels(orgId);
+  const isOwner = role === 'owner';
+  const [channels, agentOptions] = await Promise.all([
+    listChannels(orgId),
+    listAgentOptions(orgId),
+  ]);
 
   const widgetChannels = channels
     .map(toWidgetChannelView)
@@ -261,9 +335,16 @@ export default async function ChannelsPage({
         <div style={{ marginBottom: '1.5rem' }}>
           {formChannels.map((intake) => (
             <div key={intake.id} className="chan-instance">
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="chan-instance-name">{intake.name}</div>
                 <code className="invite-link">{intake.address}</code>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={intake.id}
+                  agentId={intake.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
               </div>
               <ActiveToggle orgId={orgId} channelId={intake.id} isActive={intake.isActive} />
             </div>
@@ -312,9 +393,16 @@ export default async function ChannelsPage({
         <div style={{ marginBottom: '1.5rem' }}>
           {emailChannels.map((intake) => (
             <div key={intake.id} className="chan-instance">
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="chan-instance-name">{intake.name}</div>
                 <code className="invite-link">{intake.address}</code>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={intake.id}
+                  agentId={intake.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
               </div>
               <ActiveToggle orgId={orgId} channelId={intake.id} isActive={intake.isActive} />
             </div>
@@ -364,9 +452,16 @@ export default async function ChannelsPage({
         <div style={{ marginBottom: '1.5rem' }}>
           {whatsappChannels.map((wa) => (
             <div key={wa.id} className="chan-instance">
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="chan-instance-name">{wa.name}</div>
                 <code className="invite-link">{wa.sender}</code>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={wa.id}
+                  agentId={wa.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
               </div>
               <ActiveToggle orgId={orgId} channelId={wa.id} isActive={wa.isActive} />
             </div>
@@ -432,7 +527,7 @@ export default async function ChannelsPage({
       <p style={helpStyle}>
         Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Gespräche erscheinen als
         Konversationen in der Inbox. Die Nummer wird vom Betreiber eingerichtet; hier konfigurierst
-        du das Verhalten des Agenten.
+        du Stimme und Technik — Verhalten und Identität kommen vom zugewiesenen Agenten.
       </p>
       {voiceChannels.length === 0 ? (
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
@@ -441,35 +536,37 @@ export default async function ChannelsPage({
         </p>
       ) : (
         voiceChannels.map((vc) => (
-          <form
-            key={vc.id}
-            className="stack"
-            action={updateVoiceChannelSettings}
-            style={{ maxWidth: '30rem', marginBottom: '1.5rem' }}
-          >
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={vc.id} />
+          <div key={vc.id} style={{ marginBottom: '2rem' }}>
+            {/* header outside the settings form: ActiveToggle/AgentSelect are
+                their own forms and must never nest inside another form */}
             <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                gap: '1rem',
-              }}
+              className="chan-instance"
+              style={{ borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}
             >
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="chan-instance-name">{vc.name}</div>
                 <code className="invite-link">{vc.phoneNumber}</code>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={vc.id}
+                  agentId={vc.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                  Verhalten und Identität steuert der zugewiesene Agent. Ohne Agent nimmt der
+                  Assistent Anrufe im sicheren Annahme-Modus entgegen.
+                </p>
               </div>
               <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />
             </div>
-            <div>
-              <label htmlFor={`voice-mode-${vc.id}`}>Agent-Verhalten</label>
-              <select id={`voice-mode-${vc.id}`} name="agentMode" defaultValue={vc.agentMode}>
-                <option value="answer">Beantworten (mit Wissensdatenbank)</option>
-                <option value="intake_only">Nur Anliegen aufnehmen (reine Annahme)</option>
-              </select>
-            </div>
+            <form
+              className="stack"
+              action={updateVoiceChannelSettings}
+              style={{ maxWidth: '30rem' }}
+            >
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="channelId" value={vc.id} />
             <div>
               <label htmlFor={`voice-greeting-${vc.id}`}>Begrüßung</label>
               <input
@@ -479,18 +576,6 @@ export default async function ChannelsPage({
                 maxLength={500}
                 defaultValue={vc.greeting}
                 placeholder="z. B. Willkommen bei Strong Energy, was kann ich für Sie tun?"
-              />
-            </div>
-            <div>
-              <label htmlFor={`voice-instructions-${vc.id}`}>Zusätzliche Anweisungen</label>
-              <textarea
-                id={`voice-instructions-${vc.id}`}
-                name="instructions"
-                rows={4}
-                maxLength={4000}
-                defaultValue={vc.instructions}
-                style={textareaStyle}
-                placeholder="Tonalität, Besonderheiten, was der Agent wissen soll …"
               />
             </div>
             <div>
@@ -543,7 +628,8 @@ export default async function ChannelsPage({
             <button className="primary" type="submit">
               Voice-Einstellungen speichern
             </button>
-          </form>
+            </form>
+          </div>
         ))
       )}
     </div>
@@ -564,7 +650,16 @@ export default async function ChannelsPage({
             className="chan-instance"
             style={{ borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}
           >
-            <div className="chan-instance-name">{widget.name}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="chan-instance-name">{widget.name}</div>
+              <AgentSelect
+                orgId={orgId}
+                channelId={widget.id}
+                agentId={widget.agentId}
+                agents={agentOptions}
+                disabled={!isOwner}
+              />
+            </div>
             <ActiveToggle orgId={orgId} channelId={widget.id} isActive={widget.isActive} />
           </div>
           <form className="stack" action={updateWidgetTheme} style={{ maxWidth: '26rem' }}>
@@ -653,7 +748,16 @@ export default async function ChannelsPage({
         <div style={{ marginBottom: '1.5rem' }}>
           {testChannels.map((tc) => (
             <div key={tc.id} className="chan-instance">
-              <div className="chan-instance-name">{tc.name}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="chan-instance-name">{tc.name}</div>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={tc.id}
+                  agentId={tc.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
+              </div>
               <ActiveToggle orgId={orgId} channelId={tc.id} isActive={tc.isActive} />
             </div>
           ))}

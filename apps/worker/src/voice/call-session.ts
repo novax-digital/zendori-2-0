@@ -2,7 +2,11 @@ import WebSocket from 'ws';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import type { VoiceChannelConfig } from '@zendori/channels';
 import { toErrorInfo } from '../db.js';
-import { buildSessionConfig, type SessionContext } from './session-config.js';
+import {
+  buildSessionConfig,
+  type SessionContext,
+  type VoiceAgentBehavior,
+} from './session-config.js';
 import {
   callWebSocketUrl,
   forceMessageEvent,
@@ -48,6 +52,8 @@ export interface CallSessionParams {
   channelId: string;
   conversationId: string;
   channelConfig: VoiceChannelConfig;
+  /** Assigned agent's behavior (0011), resolved by dispatch. */
+  agent: VoiceAgentBehavior;
   context: SessionContext;
   /** Called exactly once when the session reaches `closed` (registry cleanup). */
   onClosed: (providerCallId: string) => void;
@@ -243,7 +249,9 @@ export class CallSession {
 
   private async onSessionCreated(): Promise<void> {
     this.state = 'configuring';
-    this.send(sessionUpdateEvent(buildSessionConfig(this.p.channelConfig, this.p.context)));
+    this.send(
+      sessionUpdateEvent(buildSessionConfig(this.p.channelConfig, this.p.agent, this.p.context))
+    );
   }
 
   private async onSessionUpdated(): Promise<void> {
@@ -376,6 +384,7 @@ export class CallSession {
       conversationId: this.p.conversationId,
       channelId: this.p.channelId,
       channelConfig: this.p.channelConfig,
+      agentMode: this.p.agent.mode,
     };
     try {
       switch (name) {

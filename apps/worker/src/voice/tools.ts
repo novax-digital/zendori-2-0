@@ -15,6 +15,8 @@ export interface ToolContext {
   conversationId: string;
   channelId: string;
   channelConfig: VoiceChannelConfig;
+  /** Resolved from the assigned agent (0011): gates kb_search in intake mode. */
+  agentMode: 'answer' | 'intake_only';
 }
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
@@ -26,7 +28,7 @@ const kbSearchArgsSchema = z.object({ query: z.string().min(1).max(2000) });
 export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<ToolResult> {
   const parsed = kbSearchArgsSchema.safeParse(rawArgs);
   if (!parsed.success) return { ok: false, error: 'invalid arguments' };
-  if (ctx.channelConfig.agentMode === 'intake_only') {
+  if (ctx.agentMode === 'intake_only') {
     return { ok: false, error: 'kb_search ist in diesem Modus nicht verfügbar' };
   }
 

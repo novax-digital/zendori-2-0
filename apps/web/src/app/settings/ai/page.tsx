@@ -1,7 +1,7 @@
+import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { autoAckTextsSchema, businessHoursSchema } from '@zendori/channels';
 import type { AutoAckTexts, BusinessHours } from '@zendori/channels';
-import type { ChannelType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { saveAiSettings } from './actions';
@@ -17,13 +17,6 @@ const weekdayLabels: Record<Weekday, string> = {
   fri: 'Freitag',
   sat: 'Samstag',
   sun: 'Sonntag',
-};
-
-const channelLabels: Record<ChannelType, string> = {
-  chat: 'Chat-Widget',
-  email: 'E-Mail',
-  whatsapp: 'WhatsApp',
-  voice: 'Telefon (Voice)',
 };
 
 const fieldStyle: CSSProperties = {
@@ -63,17 +56,7 @@ const checkboxRowStyle: CSSProperties = {
   marginBottom: '0.4rem',
 };
 
-/** Reads a boolean flag defensively from the autopilot_enabled jsonb. */
-function autopilotFor(value: unknown, type: ChannelType): boolean {
-  return (
-    typeof value === 'object' && value !== null && (value as Record<string, unknown>)[type] === true
-  );
-}
-
 type OrgSettingsRow = {
-  autopilot_enabled?: unknown;
-  confidence_threshold?: unknown;
-  tone_instructions?: unknown;
   business_hours?: unknown;
   auto_ack_texts?: unknown;
   escalation_keywords?: unknown;
@@ -92,17 +75,12 @@ export default async function AiSettingsPage({
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('org_settings')
-    .select(
-      'autopilot_enabled, confidence_threshold, tone_instructions, business_hours, auto_ack_texts, escalation_keywords'
-    )
+    .select('business_hours, auto_ack_texts, escalation_keywords')
     .eq('org_id', orgId)
     .maybeSingle();
   const settings = (data ?? {}) as OrgSettingsRow;
 
   // parse jsonb / array columns defensively (channels schemas guarantee shape)
-  const confidence =
-    typeof settings.confidence_threshold === 'number' ? settings.confidence_threshold : 0.7;
-  const tone = typeof settings.tone_instructions === 'string' ? settings.tone_instructions : '';
   const businessHoursParsed = businessHoursSchema.safeParse(settings.business_hours);
   const businessHours: BusinessHours = businessHoursParsed.success
     ? businessHoursParsed.data
@@ -121,6 +99,15 @@ export default async function AiSettingsPage({
 
   return (
     <div className="shell">
+      <div className="page-head">
+        <h1>Übergabe &amp; Zeiten</h1>
+        <p>
+          Org-weite Regeln von {orgName} für die Übergabe an Menschen: Eskalations-Keywords,
+          Geschäftszeiten und automatische Eingangsbestätigungen. Verhalten, Identität und
+          Autopilot der KI konfigurierst du pro Agent unter{' '}
+          <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
+        </p>
+      </div>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
@@ -135,72 +122,13 @@ export default async function AiSettingsPage({
 
       {!isOwner ? (
         <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          Nur Owner dürfen die KI-Einstellungen ändern. Die aktuellen Werte werden schreibgeschützt
+          Nur Owner dürfen diese Einstellungen ändern. Die aktuellen Werte werden schreibgeschützt
           angezeigt.
         </p>
       ) : null}
 
       <form action={saveAiSettings}>
         <input type="hidden" name="org" value={orgId} />
-
-        <div className="panel">
-          <h2>KI &amp; Autopilot — {orgName}</h2>
-          <p style={helpStyle}>
-            Der Autopilot sendet KI-Antworten nur dann automatisch, wenn er pro Kanal aktiviert ist
-            und die Sicherheit des Vorschlags über dem Schwellwert liegt. Andernfalls bleibt die
-            Antwort ein Vorschlag in der Inbox.
-          </p>
-
-          <div style={{ maxWidth: '16rem', marginBottom: '1.25rem' }}>
-            <label htmlFor="confidence_threshold">Sicherheits-Schwellwert (0–1)</label>
-            <input
-              id="confidence_threshold"
-              name="confidence_threshold"
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              defaultValue={confidence}
-              disabled={disabled}
-              required
-              style={fieldStyle}
-            />
-          </div>
-
-          <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-            <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Autopilot pro Kanal
-            </legend>
-            {(Object.keys(channelLabels) as ChannelType[]).map((type) => (
-              <label key={type} style={checkboxRowStyle}>
-                <input
-                  type="checkbox"
-                  name={`autopilot_${type}`}
-                  defaultChecked={autopilotFor(settings.autopilot_enabled, type)}
-                  disabled={disabled}
-                />
-                {channelLabels[type]}
-              </label>
-            ))}
-          </fieldset>
-        </div>
-
-        <div className="panel">
-          <h2>Ton-Vorgaben</h2>
-          <p style={helpStyle}>
-            Optionale Vorgaben für Tonfall und Stil der KI-Antworten (z. B. „freundlich, siezen,
-            kurz halten").
-          </p>
-          <textarea
-            name="tone_instructions"
-            rows={4}
-            defaultValue={tone}
-            disabled={disabled}
-            maxLength={4000}
-            style={textareaStyle}
-            aria-label="Ton-Vorgaben"
-          />
-        </div>
 
         <div className="panel">
           <h2>Eskalations-Keywords</h2>

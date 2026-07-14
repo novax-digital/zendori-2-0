@@ -87,7 +87,16 @@ export async function listConversations(
 }
 
 type ConversationDetailRow = Conversation & {
-  channel: Pick<Channel, 'id' | 'name' | 'type'> | null;
+  channel:
+    | (Pick<Channel, 'id' | 'name' | 'type'> & {
+        agent: {
+          id: string;
+          name: string;
+          confidence_threshold: number | string;
+          is_active: boolean;
+        } | null;
+      })
+    | null;
   contact: Contact | null;
 };
 
@@ -206,14 +215,28 @@ export async function getConversationDetail(
 
   const { data: conversationData } = await supabase
     .from('conversations')
-    .select('*, channel:channels(id, name, type), contact:contacts(*)')
+    .select(
+      '*, channel:channels(id, name, type, agent:agents(id, name, confidence_threshold, is_active)), contact:contacts(*)'
+    )
     .eq('org_id', orgId)
     .eq('id', conversationId)
     .maybeSingle();
   if (!conversationData) return null;
 
-  const { channel, contact, ...conversation } =
+  const { channel: channelRow, contact, ...conversation } =
     conversationData as unknown as ConversationDetailRow;
+  // split the nested agent off the channel (numeric may arrive as string)
+  const agent = channelRow?.agent
+    ? {
+        id: channelRow.agent.id,
+        name: channelRow.agent.name,
+        confidence_threshold: Number(channelRow.agent.confidence_threshold),
+        is_active: channelRow.agent.is_active,
+      }
+    : null;
+  const channel = channelRow
+    ? { id: channelRow.id, name: channelRow.name, type: channelRow.type }
+    : null;
 
   const [{ data: messageData }, { data: noteData }, { data: draftData }] = await Promise.all([
     supabase
@@ -261,7 +284,7 @@ export async function getConversationDetail(
     author_email: n.author_id ? (emailByUserId.get(n.author_id) ?? null) : null,
   }));
 
-  return { conversation, channel, contact, messages, notes, draft };
+  return { conversation, channel, agent, contact, messages, notes, draft };
 }
 
 export async function listChannels(orgId: string): Promise<Channel[]> {

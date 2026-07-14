@@ -192,6 +192,69 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
   );
 }
 
+// --- assign an agent to a channel -------------------------------------------------
+
+const setChannelAgentSchema = z.object({
+  org: z.uuid(),
+  channelId: z.uuid(),
+  /** Empty string = detach (no agent → no drafts, no auto-sends). */
+  agentId: z.uuid().or(z.literal('')),
+});
+
+/**
+ * Assigns/detaches the channel's AI agent (0011). Owner-only: the assignment
+ * changes live bot behavior (channels RLS is member-level, so this explicit
+ * check is load-bearing). The composite FK rejects cross-org agents.
+ */
+export async function setChannelAgent(formData: FormData): Promise<void> {
+  const parsed = setChannelAgentSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+    agentId: textField(formData.get('agentId')),
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(textField(formData.get('org')), {
+        error: 'Agent-Zuweisung konnte nicht gespeichert werden.',
+      })
+    );
+  }
+  const { org, channelId, agentId } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  const { data: memberRow } = await supabase
+    .from('org_members')
+    .select('role')
+    .eq('org_id', org)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if ((memberRow as { role: string } | null)?.role !== 'owner') {
+    redirect(channelsUrl(org, { error: 'Nur Inhaber können den Agenten eines Kanals ändern.' }));
+  }
+
+  const { data, error } = await supabase
+    .from('channels')
+    .update({ agent_id: agentId === '' ? null : agentId })
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(channelsUrl(org, { error: 'Agent-Zuweisung konnte nicht gespeichert werden.' }));
+  }
+
+  revalidatePath('/settings/channels');
+  revalidatePath('/settings/agents');
+  redirect(
+    channelsUrl(org, {
+      notice: agentId === '' ? 'Agent entfernt — Kanal läuft ohne KI-Antworten.' : 'Agent zugewiesen.',
+    })
+  );
+}
+
 // --- activate / deactivate a channel ---------------------------------------------
 
 const setChannelActiveSchema = z.object({
@@ -326,8 +389,6 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
 const updateVoiceSettingsSchema = z.object({
   org: z.uuid(),
   channelId: z.uuid(),
-  agentMode: z.enum(['answer', 'intake_only']),
-  instructions: z.string().max(4000),
   greeting: z.string().max(500),
   voice: z.string().min(1).max(80),
   keyterms: z.string().max(4000),
@@ -339,17 +400,16 @@ const updateVoiceSettingsSchema = z.object({
 });
 
 /**
- * Updates the voice agent settings of an existing voice channel. The
+ * Updates the voice-technical settings of an existing voice channel. The
  * provisioning fields (phoneNumber, signing secret, SIDs) are operator-managed
- * and preserved via read-modify-write; only the agent config is editable here.
+ * and preserved via read-modify-write. Behavioral config (mode/identity) lives
+ * on the assigned agent (0011) — edited under settings/agents.
  */
 export async function updateVoiceChannelSettings(formData: FormData): Promise<void> {
   const errorText = 'Voice-Einstellungen konnten nicht gespeichert werden.';
   const parsed = updateVoiceSettingsSchema.safeParse({
     org: formData.get('org'),
     channelId: formData.get('channelId'),
-    agentMode: formData.get('agentMode'),
-    instructions: textField(formData.get('instructions')),
     greeting: textField(formData.get('greeting')),
     voice: textField(formData.get('voice')),
     keyterms: textField(formData.get('keyterms')),
@@ -364,17 +424,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
       })
     );
   }
-  const {
-    org,
-    channelId,
-    agentMode,
-    instructions,
-    greeting,
-    voice,
-    keyterms,
-    speechSpeed,
-    transferNumber,
-  } = parsed.data;
+  const { org, channelId, greeting, voice, keyterms, speechSpeed, transferNumber } = parsed.data;
 
   const supabase = await createSupabaseServerClient();
 
@@ -418,8 +468,6 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     .slice(0, 100);
 
   const overrides = {
-    agentMode,
-    instructions: instructions || undefined,
     greeting: greeting || undefined,
     voice,
     keyterms: keytermList,
@@ -436,10 +484,12 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     ...(channel.config as Record<string, unknown>),
     ...overrides,
   };
-  // Explicitly clear optional fields the form emptied (spread keeps old values).
-  if (!overrides.instructions) delete nextConfig.instructions;
+  // Explicitly clear optional fields the form emptied (spread keeps old values),
+  // and drop the pre-0011 behavioral keys — they live on the agent now.
   if (!overrides.greeting) delete nextConfig.greeting;
   if (!overrides.transferNumber) delete nextConfig.transferNumber;
+  delete nextConfig.agentMode;
+  delete nextConfig.instructions;
 
   const { data, error } = await supabase
     .from('channels')

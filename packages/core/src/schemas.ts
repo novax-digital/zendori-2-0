@@ -29,8 +29,22 @@ export type ContentType = z.infer<typeof contentTypeSchema>;
 export const processingStateSchema = z.enum(['pending', 'done', 'skipped']);
 export type ProcessingState = z.infer<typeof processingStateSchema>;
 
-export const handoffReasonSchema = z.enum(['low_confidence', 'user_request', 'keyword', 'manual']);
+export const handoffReasonSchema = z.enum([
+  'low_confidence',
+  'user_request',
+  'keyword',
+  'manual',
+  'intake',
+]);
 export type HandoffReason = z.infer<typeof handoffReasonSchema>;
+
+/**
+ * Agent behavior mode (0011): draft_only = suggestions only, autopilot =
+ * auto-send above the confidence threshold, intake_only = no RAG answer — just
+ * ticketise the request and hand off ("reine Annahme").
+ */
+export const agentModeSchema = z.enum(['draft_only', 'autopilot', 'intake_only']);
+export type AgentMode = z.infer<typeof agentModeSchema>;
 
 export const kbSourceTypeSchema = z.enum(['url', 'file', 'text']);
 export type KbSourceType = z.infer<typeof kbSourceTypeSchema>;
@@ -74,10 +88,26 @@ export const channelSchema = z.object({
   type: channelTypeSchema,
   name: z.string().min(1),
   config: z.record(z.string(), z.unknown()),
+  /** Assigned AI agent (0011); null = no agent = no drafts, no auto-sends. */
+  agent_id: z.uuid().nullable(),
   is_active: z.boolean(),
   created_at: z.string(),
 });
 export type Channel = z.infer<typeof channelSchema>;
+
+/** AI agent entity (0011): identity/prompt + behavior, assigned to channels. */
+export const agentSchema = z.object({
+  id: z.uuid(),
+  org_id: z.uuid(),
+  name: z.string().min(1),
+  /** Persona / system prompt ("Identität"); null = neutral default persona. */
+  identity: z.string().nullable(),
+  mode: agentModeSchema,
+  confidence_threshold: z.number().min(0).max(1),
+  is_active: z.boolean(),
+  created_at: z.string(),
+});
+export type Agent = z.infer<typeof agentSchema>;
 
 export const contactSchema = z.object({
   id: z.uuid(),

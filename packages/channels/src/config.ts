@@ -113,11 +113,13 @@ export const voiceChannelConfigSchema = z.object({
   twilioTrunkSid: z.string().optional(),
   /** One-time Standard-Webhooks signing secret from xAI registration, encrypted ("v1:…"). */
   dispatchSigningSecretEncrypted: z.string(),
-  /** answer = RAG-backed replies; intake_only = only take the case → ticket, no kb_search. */
-  agentMode: z.enum(['answer', 'intake_only']).default('answer'),
-  /** Persona/system prompt (German, org-edited); merged with the mode template. */
-  instructions: z.string().optional(),
-  greeting: z.string().optional(),
+  // Behavioral fields (agentMode, instructions) moved to the assigned agents
+  // row (0011) — the channel keeps only voice-technical parameters. Legacy keys
+  // still present in old config jsonb are stripped on parse.
+  /** Exact opening line the bot must speak (channel-specific, stays here).
+   *  Bounded so a jsonb written past the app-layer cap fails the worker's
+   *  re-parse instead of injecting an oversized prompt block. */
+  greeting: z.string().max(500).optional(),
   /** eve|ara|rex|sal|leo or a custom voice id. */
   voice: z.string().default('eve'),
   /** BCP-47 ASR language hint. */

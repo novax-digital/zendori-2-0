@@ -91,25 +91,41 @@ export interface SessionContext {
   contactName?: string | null;
 }
 
-/** Builds the session.update payload for a call from the channel config. */
+/**
+ * The assigned agent's behavior, resolved by dispatch (0011). agent.mode maps
+ * onto the two voice templates: autopilot → 'answer'; draft_only/intake_only →
+ * 'intake_only' (a live call cannot present a draft for review — intake is the
+ * mode that respects "a human checks before the customer gets an answer").
+ */
+export interface VoiceAgentBehavior {
+  mode: 'answer' | 'intake_only';
+  /** agents.identity — persona/system prompt appended to the mode template. */
+  identity: string | null;
+}
+
+/** Builds the session.update payload from channel config + assigned agent. */
 export function buildSessionConfig(
   config: VoiceChannelConfig,
+  agent: VoiceAgentBehavior,
   context: SessionContext
 ): SessionConfig {
-  const template = config.agentMode === 'intake_only' ? INTAKE_TEMPLATE : ANSWER_TEMPLATE;
+  const template = agent.mode === 'intake_only' ? INTAKE_TEMPLATE : ANSWER_TEMPLATE;
   const parts = [template.replaceAll('{company}', context.companyName)];
-  if (config.instructions && config.instructions.trim().length > 0) {
-    parts.push(`Zusätzliche Anweisungen des Unternehmens:\n${config.instructions.trim()}`);
+  if (agent.identity && agent.identity.trim().length > 0) {
+    parts.push(`Zusätzliche Anweisungen des Unternehmens:\n${agent.identity.trim()}`);
   }
   if (config.greeting && config.greeting.trim().length > 0) {
-    parts.push(`Beginne das Gespräch mit genau dieser Begrüßung: "${config.greeting.trim()}"`);
+    // Greeting is DATA inside the prompt: flatten newlines and strip quotes so
+    // it cannot break out of the quoted phrase and masquerade as instructions.
+    const greeting = config.greeting.trim().replace(/\s+/g, ' ').replaceAll('"', '');
+    parts.push(`Beginne das Gespräch mit genau dieser Begrüßung: "${greeting}"`);
   }
   if (context.contactName) {
     parts.push(`Der Anrufer ist vermutlich ${context.contactName} (bekannter Kontakt).`);
   }
 
   const tools: FunctionTool[] =
-    config.agentMode === 'intake_only'
+    agent.mode === 'intake_only'
       ? [CREATE_TICKET_TOOL, HANDOFF_TOOL, END_CALL_TOOL]
       : [KB_SEARCH_TOOL, CREATE_TICKET_TOOL, HANDOFF_TOOL, END_CALL_TOOL];
 

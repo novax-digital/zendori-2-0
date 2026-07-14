@@ -868,6 +868,17 @@ button.ghost:hover {
   background: color-mix(in srgb, #ff7a59 16%, transparent);
   color: #e8623b;
 }
+.tile-icon--agent {
+  background: color-mix(in srgb, var(--brand-500) 16%, transparent);
+  color: var(--brand-600);
+}
+.tile-icon--new {
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted);
+}
+.channel-tile--new {
+  border-style: dashed;
+}
 
 .tile-name {
   font-size: 1rem;

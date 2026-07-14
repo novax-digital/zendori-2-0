@@ -17,13 +17,13 @@ describe('buildClassifyPrompt', () => {
   it('appends tone instructions when provided', () => {
     const prompt = buildClassifyPrompt({
       companyName: 'Acme GmbH',
-      toneInstructions: 'Immer per Sie ansprechen.',
+      agentIdentity: 'Immer per Sie ansprechen.',
     });
     expect(prompt).toContain('Immer per Sie ansprechen.');
   });
 
   it('omits the tone section when tone is blank', () => {
-    const prompt = buildClassifyPrompt({ companyName: 'Acme GmbH', toneInstructions: '   ' });
+    const prompt = buildClassifyPrompt({ companyName: 'Acme GmbH', agentIdentity: '   ' });
     expect(prompt).not.toContain('Kontext zum Unternehmen');
   });
 });

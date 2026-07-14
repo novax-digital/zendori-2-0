@@ -283,6 +283,161 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: agents (0011)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let member: SupabaseClient;
+  let ownerId: string;
+  let memberId: string;
+  let orgId: string;
+  let foreignOrgId: string;
+  const ownerEmail = `agent-owner-${randomUUID()}@test.zendori.dev`;
+  const memberEmail = `agent-member-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, memberEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    memberId = created[1]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Agents Org', slug: `agents-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: ownerId, role: 'owner' },
+      { org_id: orgId, user_id: memberId, role: 'agent' },
+    ]);
+
+    const { data: foreignOrg } = await admin
+      .from('organizations')
+      .insert({ name: 'Foreign Org', slug: `agents-foreign-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    foreignOrgId = foreignOrg!.id as string;
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    member = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+    expect(
+      (await member.auth.signInWithPassword({ email: memberEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (foreignOrgId) await admin.from('organizations').delete().eq('id', foreignOrgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+    if (memberId) await admin.auth.admin.deleteUser(memberId);
+  });
+
+  it('owners create agents, members read them, non-owners cannot write', async () => {
+    const { data: agent, error: insertError } = await owner
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Chat-Agent', mode: 'draft_only' })
+      .select('id')
+      .single();
+    expect(insertError).toBeNull();
+
+    // fellow member (agent role) sees the agent…
+    const { data: visible } = await member.from('agents').select('id').eq('org_id', orgId);
+    expect(visible).toHaveLength(1);
+
+    // …but cannot create or modify agents (owner-only writes)
+    const { error: memberInsert } = await member
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Eingeschleust' });
+    expect(memberInsert).not.toBeNull();
+    const { data: memberUpdate } = await member
+      .from('agents')
+      .update({ name: 'Umbenannt' })
+      .eq('id', agent!.id)
+      .select('id');
+    expect(memberUpdate ?? []).toHaveLength(0);
+  });
+
+  it('agents of a foreign org are invisible', async () => {
+    await admin.from('agents').insert({ org_id: foreignOrgId, name: 'Geheimer Agent' });
+    const { data } = await owner.from('agents').select('id').eq('org_id', foreignOrgId);
+    expect(data).toHaveLength(0);
+  });
+
+  it('a member cannot assign a channel agent directly (guard trigger)', async () => {
+    // channels RLS is member-level, so without the 0011 guard trigger a member
+    // could flip a channel onto an autopilot agent via direct PostgREST.
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Guard-Test', config: { test: true } })
+      .select('id')
+      .single();
+    const { data: agentRow } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Guard-Agent' })
+      .select('id')
+      .single();
+
+    const { error: memberAssign } = await member
+      .from('channels')
+      .update({ agent_id: agentRow!.id })
+      .eq('id', channel!.id);
+    expect(memberAssign).not.toBeNull();
+
+    // an owner may assign it (same session-level path the app uses)
+    const { error: ownerAssign } = await owner
+      .from('channels')
+      .update({ agent_id: agentRow!.id })
+      .eq('id', channel!.id);
+    expect(ownerAssign).toBeNull();
+  });
+
+  it('channels.agent_id rejects a cross-org agent (composite FK)', async () => {
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'FK-Test', config: { test: true } })
+      .select('id')
+      .single();
+    const { data: foreignAgent } = await admin
+      .from('agents')
+      .insert({ org_id: foreignOrgId, name: 'Fremder Agent' })
+      .select('id')
+      .single();
+
+    const { error: crossOrg } = await admin
+      .from('channels')
+      .update({ agent_id: foreignAgent!.id })
+      .eq('id', channel!.id);
+    expect(crossOrg).not.toBeNull(); // FK (agent_id, org_id) must reject
+
+    // same-org assignment works, and deleting the agent detaches the channel
+    const { data: ownAgent } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Eigener Agent' })
+      .select('id')
+      .single();
+    const { error: sameOrg } = await admin
+      .from('channels')
+      .update({ agent_id: ownAgent!.id })
+      .eq('id', channel!.id);
+    expect(sameOrg).toBeNull();
+
+    await admin.from('agents').delete().eq('id', ownAgent!.id);
+    const { data: detached } = await admin
+      .from('channels')
+      .select('agent_id, org_id')
+      .eq('id', channel!.id)
+      .single();
+    expect(detached!.agent_id).toBeNull();
+    expect(detached!.org_id).toBe(orgId); // set null must not touch org_id
+  });
+});
+
 describe.skipIf(!enabled)('RLS: platform_admins', () => {
   let admin: SupabaseClient;
   let adminUser: SupabaseClient;

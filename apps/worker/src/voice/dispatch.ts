@@ -4,6 +4,7 @@ import { loadWorkerEnv } from '@zendori/core';
 import { voiceChannelConfigSchema } from '@zendori/channels';
 import { getServiceClient, toErrorInfo } from '../db.js';
 import { CallSession } from './call-session.js';
+import type { VoiceAgentBehavior } from './session-config.js';
 
 // Voice dispatch (Phase 9): the ingress-free worker learns about incoming calls
 // via a Supabase Realtime broadcast (0009 trigger on voice_calls, private topic
@@ -42,6 +43,11 @@ export interface VoiceDispatchHandle {
 /** Missing-table error while migration 0009 is not applied yet. */
 function isMissingTable(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === '42P01';
+}
+
+/** Undefined-column error while migration 0011 (channels.agent_id) is pending. */
+function isUndefinedColumn(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === '42703';
 }
 
 export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
@@ -100,8 +106,8 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
 
     // Load channel config + org name for the session. Transient load errors
     // must NOT terminally fail the call — release it back to ringing instead.
-    const [channelRes, orgRes, contactRes] = await Promise.all([
-      supabase.from('channels').select('config').eq('id', call.channel_id).maybeSingle(),
+    const loads = await Promise.all([
+      supabase.from('channels').select('config, agent_id').eq('id', call.channel_id).maybeSingle(),
       supabase.from('organizations').select('name').eq('id', call.org_id).maybeSingle(),
       supabase
         .from('conversations')
@@ -109,6 +115,19 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         .eq('id', call.conversation_id)
         .maybeSingle(),
     ]);
+    let channelRes = loads[0];
+    const [, orgRes, contactRes] = loads;
+    if (isUndefinedColumn(channelRes.error)) {
+      // channels.agent_id not migrated yet (worker ahead of 0011): answer the
+      // call anyway — retry without the column; the null agent below falls back
+      // to safe intake mode. Releasing would just loop until 'missed'.
+      logger.warn({ voiceCallId }, 'channels.agent_id missing — is migration 0011 applied?');
+      channelRes = (await supabase
+        .from('channels')
+        .select('config')
+        .eq('id', call.channel_id)
+        .maybeSingle()) as typeof channelRes;
+    }
     if (channelRes.error || orgRes.error || contactRes.error) {
       logger.warn(
         { voiceCallId, err: toErrorInfo(channelRes.error ?? orgRes.error ?? contactRes.error) },
@@ -150,6 +169,48 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         null) ||
       null;
 
+    // Resolve the assigned agent (0011). A live call cannot simply "not answer",
+    // so a missing/paused agent falls back to safe intake mode (take the case,
+    // no RAG answers) with a warning; transient load errors release the claim.
+    const agentId = (channelRes.data as { agent_id?: string | null }).agent_id ?? null;
+    let agent: VoiceAgentBehavior = { mode: 'intake_only', identity: null };
+    if (agentId) {
+      const agentRes = await supabase
+        .from('agents')
+        .select('identity, mode, is_active')
+        .eq('id', agentId)
+        .maybeSingle();
+      if (agentRes.error && isMissingTable(agentRes.error)) {
+        // agents table not migrated yet: answer in safe intake mode instead of
+        // release-looping the call into 'missed'.
+        logger.warn({ voiceCallId }, 'agents table missing — is migration 0011 applied?');
+      } else if (agentRes.error) {
+        logger.warn(
+          { voiceCallId, err: toErrorInfo(agentRes.error) },
+          'voice agent load failed — releasing back to ringing'
+        );
+        await releaseClaim(call.id);
+        return;
+      }
+      const row = agentRes.data as {
+        identity: string | null;
+        mode: string;
+        is_active: boolean;
+      } | null;
+      if (row && row.is_active) {
+        // autopilot → live answering; draft_only/intake_only → intake (a call
+        // cannot present a draft for human review first).
+        agent = {
+          mode: row.mode === 'autopilot' ? 'answer' : 'intake_only',
+          identity: row.identity ?? null,
+        };
+      } else {
+        logger.warn({ voiceCallId }, 'voice agent missing/paused — falling back to intake mode');
+      }
+    } else {
+      logger.warn({ voiceCallId }, 'voice channel has no agent — falling back to intake mode');
+    }
+
     const session = new CallSession({
       supabase,
       logger,
@@ -160,6 +221,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       channelId: call.channel_id,
       conversationId: call.conversation_id,
       channelConfig: configResult.data,
+      agent,
       context: { companyName, contactName },
       onClosed: (providerCallId) => {
         sessions.delete(providerCallId);

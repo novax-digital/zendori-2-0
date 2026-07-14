@@ -11,25 +11,28 @@ describe('voice channel config', () => {
       dispatchSigningSecretEncrypted: 'v1:nonce:cipher',
     });
     if (config.type !== 'voice') throw new Error('expected voice config');
-    expect(config.agentMode).toBe('answer');
     expect(config.voice).toBe('eve');
     expect(config.languageHint).toBe('de');
     expect(config.maxCallSeconds).toBe(900);
   });
 
-  it('parses the intake_only mode with keyterms and transfer number', () => {
+  it('parses keyterms and transfer number, stripping legacy behavioral keys (0011)', () => {
     const config = channelConfigSchema.parse({
       type: 'voice',
       provider: 'xai',
       phoneNumber: '+493022334455',
       dispatchSigningSecretEncrypted: 'v1:nonce:cipher',
+      // legacy keys from pre-0011 configs — must be stripped, not rejected
       agentMode: 'intake_only',
+      instructions: 'alte Anweisungen',
       keyterms: ['Strong Energy', 'Wallbox'],
       transferNumber: '+491701112233',
     });
     if (config.type !== 'voice') throw new Error('expected voice config');
-    expect(config.agentMode).toBe('intake_only');
     expect(config.keyterms).toHaveLength(2);
+    expect(config.transferNumber).toBe('+491701112233');
+    expect('agentMode' in config).toBe(false);
+    expect('instructions' in config).toBe(false);
   });
 
   it('rejects a voice config without the signing secret', () => {

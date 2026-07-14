@@ -51,7 +51,7 @@ function toUsage(usage: { input_tokens: number | null; output_tokens: number }):
 
 export interface ClassifyInput {
   companyName: string;
-  toneInstructions?: string | null;
+  agentIdentity?: string | null;
   channelType: string;
   subject?: string | null;
   body: string;
@@ -65,7 +65,7 @@ export async function classify(input: ClassifyInput): Promise<AiCallResult<Class
     max_tokens: 1024,
     system: buildClassifyPrompt({
       companyName: input.companyName,
-      toneInstructions: input.toneInstructions,
+      agentIdentity: input.agentIdentity,
     }),
     messages: [
       {
@@ -88,7 +88,7 @@ export async function classify(input: ClassifyInput): Promise<AiCallResult<Class
 export interface ExtractInput {
   companyName: string;
   categories: readonly string[];
-  toneInstructions?: string | null;
+  agentIdentity?: string | null;
   channelType: string;
   subject?: string | null;
   body: string;
@@ -103,7 +103,7 @@ export async function extract(input: ExtractInput): Promise<AiCallResult<Extract
     system: buildExtractPrompt({
       companyName: input.companyName,
       categories: input.categories,
-      toneInstructions: input.toneInstructions,
+      agentIdentity: input.agentIdentity,
     }),
     messages: [
       {
@@ -125,7 +125,7 @@ export async function extract(input: ExtractInput): Promise<AiCallResult<Extract
 
 export interface DraftInput {
   companyName: string;
-  toneInstructions?: string | null;
+  agentIdentity?: string | null;
   channelType: string;
   subject?: string | null;
   body: string;
@@ -141,7 +141,7 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
     max_tokens: 1500,
     system: buildDraftPrompt({
       companyName: input.companyName,
-      toneInstructions: input.toneInstructions,
+      agentIdentity: input.agentIdentity,
       sources: input.sources,
       language: input.language,
     }),

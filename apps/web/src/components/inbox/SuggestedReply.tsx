@@ -5,16 +5,17 @@ import type { CSSProperties } from 'react';
 import { useFormStatus } from 'react-dom';
 import type { ConversationMode } from '@zendori/core';
 import { acceptDraft, discardDraft, markDraftEdited } from '@/app/inbox/actions';
-import type { DraftItem } from '@/lib/inbox/types';
+import type { AgentInfo, DraftItem } from '@/lib/inbox/types';
 
-// Reference threshold for the confidence badge color (org default per CLAUDE.md §5).
-// Phase 4 never auto-sends — the color only signals how reliable the draft is.
+// Fallback badge threshold when the channel has no assigned agent (0011: the
+// assigned agent's confidence_threshold is authoritative). The color only
+// signals how reliable the draft is.
 const CONFIDENCE_REFERENCE = 0.7;
 
 type ConfidenceTone = { label: string; background: string; color: string };
 
-function confidenceTone(confidence: number): ConfidenceTone {
-  if (confidence >= CONFIDENCE_REFERENCE) {
+function confidenceTone(confidence: number, reference: number): ConfidenceTone {
+  if (confidence >= reference) {
     return { label: 'Hohe Sicherheit', background: '#d1fae5', color: '#065f46' };
   }
   if (confidence >= 0.4) {
@@ -112,6 +113,8 @@ type SuggestedReplyProps = {
   filterChannel: string;
   mode: ConversationMode;
   draft: DraftItem;
+  /** Agent assigned to this conversation's channel (threshold + name). */
+  agent?: AgentInfo | null;
 };
 
 function ActionButton({ className, children }: { className: string; children: React.ReactNode }) {
@@ -130,10 +133,11 @@ export default function SuggestedReply({
   filterChannel,
   mode,
   draft,
+  agent,
 }: SuggestedReplyProps) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(draft.content);
-  const tone = confidenceTone(draft.confidence);
+  const tone = confidenceTone(draft.confidence, agent?.confidence_threshold ?? CONFIDENCE_REFERENCE);
   const confidencePercent = Math.round(Math.max(0, Math.min(1, draft.confidence)) * 100);
 
   const hiddenFields = (
@@ -154,7 +158,7 @@ export default function SuggestedReply({
         </div>
       ) : null}
       <div style={headerStyle}>
-        <span style={titleStyle}>KI-Vorschlag</span>
+        <span style={titleStyle}>KI-Vorschlag{agent ? ` — ${agent.name}` : ''}</span>
         <span style={badgeStyle(tone)} title={`Sicherheit ${confidencePercent} %`}>
           {tone.label} · {confidencePercent} %
         </span>

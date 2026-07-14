@@ -117,6 +117,8 @@ async function main(): Promise<void> {
   void trunkingRequest; // trunk attach via TrunkSid on purchase; helper kept for per-number trunks
 
   // 3. create the Zendori voice channel (draft config; secret added in step 4).
+  // Behavioral config (mode/identity) lives on the assigned agent (0011) — the
+  // owner assigns one in the channel settings after provisioning.
   const draftConfig = {
     type: 'voice',
     provider: 'xai',
@@ -124,7 +126,6 @@ async function main(): Promise<void> {
     twilioPhoneNumberSid: bought.sid,
     twilioTrunkSid: trunkSid,
     dispatchSigningSecretEncrypted: 'pending',
-    agentMode: 'answer',
     voice: 'eve',
     languageHint: 'de',
     keyterms: [],

@@ -58,9 +58,19 @@ export type DraftItem = {
   created_at: string;
 };
 
+/** The channel's assigned agent as shown in the inbox (0011). */
+export type AgentInfo = {
+  id: string;
+  name: string;
+  confidence_threshold: number;
+  is_active: boolean;
+};
+
 export type ConversationDetail = {
   conversation: Conversation;
   channel: Pick<Channel, 'id' | 'name' | 'type'> | null;
+  /** Agent assigned to the conversation's channel; null = no AI replies. */
+  agent: AgentInfo | null;
   contact: Contact | null;
   messages: MessageWithAttachments[];
   notes: NoteItem[];

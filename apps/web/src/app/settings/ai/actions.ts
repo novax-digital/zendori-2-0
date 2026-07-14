@@ -8,8 +8,6 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 // Weekday keys as expected by businessHoursSchema.hours (missing day = closed).
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
-// Autopilot is stored per channel type as a jsonb object of booleans.
-const CHANNEL_TYPES = ['chat', 'email', 'whatsapp', 'voice'] as const;
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -30,7 +28,8 @@ function aiSettingsUrl(org: string, message?: { error?: string; notice?: string 
 }
 
 /**
- * Persists the org-wide AI/autopilot settings. The RLS policy
+ * Persists the org-wide handoff settings (0011: autopilot/threshold/tone moved
+ * to the per-channel agents — see settings/agents). The RLS policy
  * `org_settings_update` restricts writes to owners — the update simply affects
  * zero rows for non-owners, which we surface as an owner hint. Never logs any
  * field values (§7).
@@ -40,31 +39,6 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
   if (!z.uuid().safeParse(org).success) {
     redirect('/settings/ai');
   }
-
-  // confidence threshold (0..1) — reject an empty value instead of coercing to 0
-  const confidenceRaw = textField(formData.get('confidence_threshold'));
-  if (confidenceRaw === '') {
-    redirect(aiSettingsUrl(org, { error: 'Bitte einen Schwellwert zwischen 0 und 1 angeben.' }));
-  }
-  const confidenceParsed = z.coerce.number().min(0).max(1).safeParse(confidenceRaw);
-  if (!confidenceParsed.success) {
-    redirect(aiSettingsUrl(org, { error: 'Bitte einen Schwellwert zwischen 0 und 1 angeben.' }));
-  }
-  const confidenceThreshold = confidenceParsed.data;
-
-  // autopilot per channel type → { chat, email, whatsapp, voice }
-  const autopilot: Record<string, boolean> = {};
-  for (const type of CHANNEL_TYPES) {
-    autopilot[type] = isChecked(formData, `autopilot_${type}`);
-  }
-
-  // tone instructions (optional free text)
-  const toneRaw = textField(formData.get('tone_instructions'));
-  const toneParsed = z.string().max(4000).safeParse(toneRaw);
-  if (!toneParsed.success) {
-    redirect(aiSettingsUrl(org, { error: 'Die Ton-Vorgaben sind zu lang (max. 4000 Zeichen).' }));
-  }
-  const toneInstructions = toneParsed.data === '' ? null : toneParsed.data;
 
   // escalation keywords: comma list → normalized (lowercased, deduped) text[]
   const keywords = Array.from(
@@ -128,9 +102,6 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
   const { data, error } = await supabase
     .from('org_settings')
     .update({
-      confidence_threshold: confidenceThreshold,
-      autopilot_enabled: autopilot,
-      tone_instructions: toneInstructions,
       escalation_keywords: keywordsParsed.data,
       business_hours: businessHoursParsed.data,
       auto_ack_texts: autoAck,
@@ -143,9 +114,9 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
   }
   if (!data || data.length === 0) {
     // RLS blocked the write (non-owner) or the row is missing
-    redirect(aiSettingsUrl(org, { error: 'Nur Owner dürfen die KI-Einstellungen ändern.' }));
+    redirect(aiSettingsUrl(org, { error: 'Nur Owner dürfen diese Einstellungen ändern.' }));
   }
 
   revalidatePath('/settings/ai');
-  redirect(aiSettingsUrl(org, { notice: 'KI-Einstellungen gespeichert.' }));
+  redirect(aiSettingsUrl(org, { notice: 'Einstellungen gespeichert.' }));
 }

@@ -87,6 +87,7 @@ export default async function InboxPage({
                 <SuggestedReply
                   key={detail.draft.id}
                   draft={detail.draft}
+                  agent={detail.agent}
                   orgId={orgId}
                   conversationId={detail.conversation.id}
                   mode={detail.conversation.mode}

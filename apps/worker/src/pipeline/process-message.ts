@@ -1,9 +1,11 @@
 // Full inbound message pipeline (CLAUDE.md §4/§6/§11). Runs in the worker off
 // the pg-boss queue: classify → (extract + contact correction for email/form) →
-// retrieve (RAG) → draft → decide. Phase 5 adds the autopilot + handoff gate
-// after the draft step: hand off to a human (low confidence / wants-human /
-// escalation keyword), auto-send when the org enabled autopilot for the channel,
-// or keep the draft as a suggestion. While a human owns the conversation the bot
+// agent gate → retrieve (RAG) → draft → decide. Classification/extraction are
+// inbox hygiene and always run; everything after is driven by the channel's
+// assigned agent (0011): no agent = no drafts/auto-sends, intake_only =
+// ticketise + hand off, draft_only = suggestions, autopilot = auto-send above
+// the agent's confidence threshold (handoff on low confidence / wants-human /
+// escalation keyword still wins). While a human owns the conversation the bot
 // stays silent unless an agent explicitly requested a draft (metadata.force_draft).
 // Message content is never logged (§7); the classification/extraction summaries
 // stored in the DB are PII-free by prompt design and live in RLS-protected
@@ -27,6 +29,7 @@ import {
   selectAutoAckText,
 } from '@zendori/channels';
 import type {
+  AgentMode,
   ChannelType,
   ContentType,
   ConversationMode,
@@ -40,12 +43,7 @@ import type {
 } from '@zendori/core';
 import { syncRulesSchema } from '@zendori/core';
 import { getServiceClient } from '../db.js';
-import {
-  decideDraftAction,
-  deliverBotReply,
-  detectHandoff,
-  isAutopilotEnabled,
-} from './handoff.js';
+import { decideDraftAction, deliverBotReply, detectHandoff } from './handoff.js';
 
 /**
  * Default ticket categories (docs/legacy-analysis.md §2.4). v2 has no per-org
@@ -71,6 +69,18 @@ interface LoadedChannel {
   id: string;
   type: ChannelType;
   name: string;
+  /** Assigned AI agent (0011); null = no drafts, no auto-sends. */
+  agent_id: string | null;
+}
+
+/** The channel's assigned agent, resolved per message (0011). */
+interface LoadedAgent {
+  id: string;
+  name: string;
+  identity: string | null;
+  mode: AgentMode;
+  confidenceThreshold: number;
+  isActive: boolean;
 }
 
 interface LoadedMessage {
@@ -126,7 +136,7 @@ export class PipelineError extends Error {
 const MESSAGE_SELECT =
   'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, metadata, processing_state, ' +
   'conversation:conversations!inner(id, org_id, mode, priority, contact_id, subject), ' +
-  'channel:channels!inner(id, type, name)';
+  'channel:channels!inner(id, type, name, agent_id)';
 
 /**
  * Process one inbound message. Idempotent: guards short-circuit anything that is
@@ -142,7 +152,15 @@ export async function processMessage(messageId: string): Promise<void> {
     .select(MESSAGE_SELECT)
     .eq('id', messageId)
     .maybeSingle();
-  if (loadError) throw loadError;
+  if (loadError) {
+    // 42703 = channels.agent_id / agents not migrated yet (worker deployed
+    // ahead of 0011). Return WITHOUT throwing so the message stays 'pending'
+    // and the scan re-enqueues it once the migration lands — throwing would
+    // exhaust retries and permanently mark it 'skipped'. Costs nothing: this
+    // fails before any LLM call. Same skew pattern as 42P01 in scan.ts.
+    if ((loadError as { code?: string }).code === '42703') return;
+    throw loadError;
+  }
   if (!messageData) return; // message vanished — nothing to do
 
   const message = messageData as unknown as LoadedMessage;
@@ -176,11 +194,14 @@ export async function processMessage(messageId: string): Promise<void> {
 
   try {
     // --- context loads -------------------------------------------------------
-    const [orgName, toneInstructions, currentContact] = await Promise.all([
+    const [orgName, agent, currentContact] = await Promise.all([
       loadOrgName(supabase, orgId),
-      loadToneInstructions(supabase, orgId),
+      channel.agent_id ? loadAgent(supabase, channel.agent_id) : Promise.resolve(null),
       conv.contact_id ? loadContact(supabase, conv.contact_id) : Promise.resolve(null),
     ]);
+    // A paused agent behaves like no agent: ticketising still runs, replies don't.
+    const activeAgent = agent && agent.isActive ? agent : null;
+    const agentIdentity = activeAgent?.identity ?? null;
 
     const cleanBody = deriveCleanBody(channel.type, message);
     const inputSummary = `channel=${channel.type} chars=${cleanBody.length}`;
@@ -190,7 +211,7 @@ export async function processMessage(messageId: string): Promise<void> {
     const classifyStart = Date.now();
     const { result: classification, costUsd: classifyCost } = await classify({
       companyName: orgName,
-      toneInstructions,
+      agentIdentity,
       channelType: channel.type,
       subject: conv.subject,
       body: cleanBody,
@@ -243,7 +264,7 @@ export async function processMessage(messageId: string): Promise<void> {
       const { result: extraction, costUsd: extractCost } = await extract({
         companyName: orgName,
         categories: DEFAULT_CATEGORIES,
-        toneInstructions,
+        agentIdentity,
         channelType: channel.type,
         subject: conv.subject,
         body: cleanBody,
@@ -270,7 +291,36 @@ export async function processMessage(messageId: string): Promise<void> {
       });
     }
 
-    // --- 3. retrieve (RAG, shared with the voice kb_search tool) --------------
+    // --- 3. agent gate (0011) --------------------------------------------------
+    // Classification + extraction above are inbox hygiene and always run. What
+    // happens NEXT is the assigned agent's job — except for an explicit
+    // force-draft request, which drafts regardless (the human asked for it).
+    if (!forceDraft) {
+      if (!activeAgent) {
+        // No agent on this channel: no drafts, no auto-sends, no handoff logic.
+        await finishMessage(supabase, message.id, updatedMetadata);
+        await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+        return;
+      }
+      if (activeAgent.mode === 'intake_only') {
+        // "Reine Annahme": the request is ticketised (classify/extract above);
+        // hand straight to a human with the org's auto-ack — no RAG, no draft.
+        const settings = await loadHandoffSettings(supabase, orgId);
+        await applyHandoff(supabase, {
+          orgId,
+          conv,
+          channel,
+          reason: 'intake',
+          autoAckTexts: settings.autoAckTexts,
+          businessHours: settings.businessHours,
+        });
+        await finishMessage(supabase, message.id, updatedMetadata);
+        await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+        return;
+      }
+    }
+
+    // --- 4. retrieve (RAG, shared with the voice kb_search tool) --------------
     currentStep = 'retrieve';
     const retrieveStart = Date.now();
     const { matches, costUsd: embedCost } = await retrieveKbChunks(supabase, orgId, cleanBody);
@@ -286,12 +336,12 @@ export async function processMessage(messageId: string): Promise<void> {
       outputSummary: `matches=${matches.length}`,
     });
 
-    // --- 4. draft (Sonnet) ---------------------------------------------------
+    // --- 5. draft (Sonnet) ---------------------------------------------------
     currentStep = 'draft';
     const draftStart = Date.now();
     const { result: draftResult, costUsd: draftCost } = await draft({
       companyName: orgName,
-      toneInstructions,
+      agentIdentity,
       channelType: channel.type,
       subject: conv.subject,
       body: cleanBody,
@@ -314,7 +364,7 @@ export async function processMessage(messageId: string): Promise<void> {
       outputSummary: `confidence=${draftResult.confidence.toFixed(2)} used=${draftResult.used_source_ids.length}`,
     });
 
-    // --- 5. decide + persist (§4 message-flow, §6) ---------------------------
+    // --- 6. decide + persist (§4 message-flow, §6) ---------------------------
     const draftSources = await buildDraftSources(supabase, matches, draftResult.used_source_ids);
     const draftPersist = {
       orgId,
@@ -333,19 +383,24 @@ export async function processMessage(messageId: string): Promise<void> {
       return;
     }
 
-    // Bot mode: autopilot + handoff gate.
-    const settings = await loadAutopilotSettings(supabase, orgId);
+    // Bot mode with an active agent (the gate above returned otherwise): the
+    // agent's threshold + mode drive the handoff/auto-send decision.
+    if (!activeAgent) {
+      // Defensive: unreachable (gate above), but never auto-act without an agent.
+      await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+      await finishMessage(supabase, message.id, updatedMetadata);
+      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+      return;
+    }
+    const settings = await loadHandoffSettings(supabase, orgId);
     const detection = detectHandoff({
       confidence: draftResult.confidence,
-      threshold: settings.confidenceThreshold,
+      threshold: activeAgent.confidenceThreshold,
       wantsHuman: classification.wants_human,
       body: cleanBody,
       keywords: settings.escalationKeywords,
     });
-    const action = decideDraftAction(
-      detection.handoff,
-      isAutopilotEnabled(settings.autopilotEnabled, channel.type)
-    );
+    const action = decideDraftAction(detection.handoff, activeAgent.mode === 'autopilot');
 
     if (action === 'auto_send') {
       // No handoff ⇒ confidence ≥ threshold. Auto-send delivers a real reply to
@@ -354,8 +409,13 @@ export async function processMessage(messageId: string): Promise<void> {
       // (a) TOCTOU (§6): an agent may have clicked "Übernehmen" during the
       //     multi-second pipeline. Re-read the mode; if a human now owns the
       //     conversation, keep the answer as a suggestion and do not send.
+      // (b) TOCTOU (0011): the AGENT snapshot is from before the LLM chain —
+      //     the owner may have paused it, switched it off autopilot or detached
+      //     it from the channel (the natural per-channel kill switch). Re-read
+      //     and only send if it is still the same, active, autopilot agent.
       const stillBot = await isStillBotMode(supabase, orgId, conv.id);
-      if (!stillBot) {
+      const stillAutopilot = stillBot && (await isStillAutopilotAgent(supabase, channel.id, activeAgent.id));
+      if (!stillBot || !stillAutopilot) {
         await persistDraft(supabase, { ...draftPersist, status: 'pending' });
         await finishMessage(supabase, message.id, updatedMetadata);
         return;
@@ -519,6 +579,31 @@ async function isStillBotMode(
 }
 
 /**
+ * True if the channel still points to the SAME agent and that agent is still
+ * active in autopilot mode (re-read before an auto-send, 0011): pausing,
+ * downgrading or detaching the agent mid-pipeline must stop the send.
+ */
+async function isStillAutopilotAgent(
+  supabase: SupabaseClient,
+  channelId: string,
+  agentId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('channels')
+    .select('agent_id, agent:agents(mode, is_active)')
+    .eq('id', channelId)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as {
+    agent_id: string | null;
+    agent: { mode: string; is_active: boolean } | null;
+  } | null;
+  return (
+    row?.agent_id === agentId && row.agent?.is_active === true && row.agent.mode === 'autopilot'
+  );
+}
+
+/**
  * Atomically claim the inbound message for the auto-send path: flip
  * pending→done in a single conditional UPDATE and persist the metadata. Returns
  * whether this run won the claim (exactly one row updated). A pg-boss retry that
@@ -590,10 +675,7 @@ async function persistDraft(supabase: SupabaseClient, args: DraftPersistArgs): P
   if (insert.error) throw insert.error;
 }
 
-interface AutopilotSettings {
-  /** org_settings.autopilot_enabled jsonb ({"chat": true, …}); read defensively. */
-  autopilotEnabled: unknown;
-  confidenceThreshold: number;
+interface HandoffSettings {
   escalationKeywords: string[];
   /** org_settings.auto_ack_texts jsonb; parsed via autoAckTextsSchema when used. */
   autoAckTexts: unknown;
@@ -601,29 +683,26 @@ interface AutopilotSettings {
   businessHours: unknown;
 }
 
-/** Load the Phase-5 autopilot/handoff knobs for an org. Row exists by trigger. */
-async function loadAutopilotSettings(
+/**
+ * Load the org-level handoff knobs (0011: autopilot/threshold/tone moved to the
+ * assigned agent — escalation keywords, auto-ack and hours stay org-wide).
+ */
+async function loadHandoffSettings(
   supabase: SupabaseClient,
   orgId: string
-): Promise<AutopilotSettings> {
+): Promise<HandoffSettings> {
   const { data, error } = await supabase
     .from('org_settings')
-    .select(
-      'autopilot_enabled, confidence_threshold, escalation_keywords, auto_ack_texts, business_hours'
-    )
+    .select('escalation_keywords, auto_ack_texts, business_hours')
     .eq('org_id', orgId)
     .maybeSingle();
   if (error) throw error;
   const row = data as {
-    autopilot_enabled: unknown;
-    confidence_threshold: number | string | null;
     escalation_keywords: unknown;
     auto_ack_texts: unknown;
     business_hours: unknown;
   } | null;
   return {
-    autopilotEnabled: row?.autopilot_enabled ?? {},
-    confidenceThreshold: parseThreshold(row?.confidence_threshold),
     escalationKeywords: Array.isArray(row?.escalation_keywords)
       ? row.escalation_keywords.filter((k): k is string => typeof k === 'string')
       : [],
@@ -632,11 +711,40 @@ async function loadAutopilotSettings(
   };
 }
 
-/** Clamp org_settings.confidence_threshold (numeric → number|string) to [0,1]; default 0.7. */
+/** Clamp a numeric confidence threshold (number|string from PG) to [0,1]; default 0.7. */
 function parseThreshold(value: number | string | null | undefined): number {
   const n = typeof value === 'string' ? Number.parseFloat(value) : value;
   if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n;
-  return 0.7; // org_settings.confidence_threshold default
+  return 0.7; // agents.confidence_threshold default
+}
+
+/** Load the channel's assigned agent (0011). Unknown mode values → draft_only. */
+async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<LoadedAgent | null> {
+  const { data, error } = await supabase
+    .from('agents')
+    .select('id, name, identity, mode, confidence_threshold, is_active')
+    .eq('id', agentId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as {
+    id: string;
+    name: string;
+    identity: string | null;
+    mode: string;
+    confidence_threshold: number | string | null;
+    is_active: boolean;
+  };
+  const mode: AgentMode =
+    row.mode === 'autopilot' || row.mode === 'intake_only' ? row.mode : 'draft_only';
+  return {
+    id: row.id,
+    name: row.name,
+    identity: row.identity ?? null,
+    mode,
+    confidenceThreshold: parseThreshold(row.confidence_threshold),
+    isActive: row.is_active === true,
+  };
 }
 
 interface ApplyHandoffArgs {
@@ -907,19 +1015,6 @@ async function loadOrgName(supabase: SupabaseClient, orgId: string): Promise<str
   if (error) throw error;
   const name = (data as { name?: string } | null)?.name;
   return name && name.trim().length > 0 ? name : 'unser Unternehmen';
-}
-
-async function loadToneInstructions(
-  supabase: SupabaseClient,
-  orgId: string
-): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('org_settings')
-    .select('tone_instructions')
-    .eq('org_id', orgId)
-    .maybeSingle();
-  if (error) throw error;
-  return (data as { tone_instructions?: string | null } | null)?.tone_instructions ?? null;
 }
 
 async function loadContact(

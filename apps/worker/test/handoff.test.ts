@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  decideDraftAction,
-  detectHandoff,
-  isAutopilotEnabled,
-  matchesEscalationKeyword,
-} from '../src/pipeline/handoff.js';
+import { decideDraftAction, detectHandoff, matchesEscalationKeyword } from '../src/pipeline/handoff.js';
 
 const KEYWORDS = ['kündigung', 'beschwerde', 'anwalt', 'datenschutz'];
 
@@ -120,29 +115,5 @@ describe('decideDraftAction', () => {
 
   it('keeps the draft as a suggestion when autopilot is off and no handoff', () => {
     expect(decideDraftAction(false, false)).toBe('pending');
-  });
-});
-
-describe('isAutopilotEnabled', () => {
-  it('is true only for a strict boolean true on the channel key', () => {
-    expect(isAutopilotEnabled({ chat: true, email: false }, 'chat')).toBe(true);
-    expect(isAutopilotEnabled({ chat: true, email: false }, 'email')).toBe(false);
-  });
-
-  it('treats a missing channel key as off', () => {
-    expect(isAutopilotEnabled({ chat: true }, 'whatsapp')).toBe(false);
-    expect(isAutopilotEnabled({}, 'chat')).toBe(false);
-  });
-
-  it('treats truthy-but-not-true values as off', () => {
-    expect(isAutopilotEnabled({ chat: 'true' }, 'chat')).toBe(false);
-    expect(isAutopilotEnabled({ chat: 1 }, 'chat')).toBe(false);
-  });
-
-  it('treats non-objects (null, arrays, primitives) as off', () => {
-    expect(isAutopilotEnabled(null, 'chat')).toBe(false);
-    expect(isAutopilotEnabled(undefined, 'chat')).toBe(false);
-    expect(isAutopilotEnabled(['chat'], 'chat')).toBe(false);
-    expect(isAutopilotEnabled('chat', 'chat')).toBe(false);
   });
 });
