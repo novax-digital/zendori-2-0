@@ -29,6 +29,13 @@ Ablauf:
 Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
 Inhaltliche Fragen beantwortest du nicht — nimm sie stattdessen als Anliegen auf.`;
 
+// Shared style rules for both modes — live-gate feedback (2026-07-15): the
+// model read English product terms with German pronunciation and addressed the
+// caller as "Herr <Vorname>".
+const STYLE_RULES = `Sprache und Anrede:
+- Englische Produkt- und Fachbegriffe sprichst du englisch aus (z. B. "All-in-One").
+- Sprich Anrufer niemals mit "Herr" oder "Frau" plus Vornamen an. Nur ein Nachname bekommt eine förmliche Anrede; ist nur der Vorname bekannt, verzichte auf die förmliche Anrede.`;
+
 const KB_SEARCH_TOOL: FunctionTool = {
   type: 'function',
   name: 'kb_search',
@@ -115,7 +122,7 @@ export function buildSessionConfig(
   context: SessionContext
 ): SessionConfig {
   const template = agent.mode === 'intake_only' ? INTAKE_TEMPLATE : ANSWER_TEMPLATE;
-  const parts = [template.replaceAll('{company}', context.companyName)];
+  const parts = [template.replaceAll('{company}', context.companyName), STYLE_RULES];
   if (agent.identity && agent.identity.trim().length > 0) {
     parts.push(`Zusätzliche Anweisungen des Unternehmens:\n${agent.identity.trim()}`);
   }
