@@ -1,10 +1,13 @@
 // Twilio call recording for voice channels with recordingEnabled (Phase 9).
 //
-// Per-call recording via the Calls API (NOT trunk-wide recording): only calls
-// on channels whose owner opted in are ever recorded, and the session speaks a
-// mandatory notice first (§201 StGB: both-party consent). The post-call job
-// moves the audio to Supabase Storage (EU) and deletes it at Twilio so the
-// US-stored copy is transient (§7).
+// Recording is done at the TRUNK level: incoming calls are Elastic SIP Trunking
+// originations (type sip-pstn), which are NOT recordable via the per-call Voice
+// API (`/Calls/{Sid}/Recordings` → 20404 "Call not found"). Instead the trunk's
+// Recording sub-resource is set to dual-channel record-from-answer, and each
+// call's recording then appears under the account's Recordings, looked up by
+// CallSid. The session still speaks the mandatory §201 notice first. The
+// post-call job moves the audio to Supabase Storage (EU) and deletes it at
+// Twilio so the US-stored copy is transient (§7).
 //
 // Credentials are the operator-level TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN from
 // the worker env — recording is cleanly disabled when they are absent.
@@ -14,39 +17,65 @@ export interface TwilioRecordingCreds {
   authToken: string;
 }
 
+/** Dual-channel keeps caller and bot on separate tracks (§7: clean QA audio). */
+export type TrunkRecordingMode =
+  | 'do-not-record'
+  | 'record-from-ringing-dual'
+  | 'record-from-answer-dual';
+
 const TWILIO_BASE = (): string =>
   process.env.TWILIO_API_BASE?.replace(/\/+$/, '') || 'https://api.twilio.com';
+
+const TRUNKING_BASE = (): string =>
+  process.env.TWILIO_TRUNKING_API_BASE?.replace(/\/+$/, '') || 'https://trunking.twilio.com';
 
 function authHeader(creds: TwilioRecordingCreds): string {
   return `Basic ${Buffer.from(`${creds.accountSid}:${creds.authToken}`).toString('base64')}`;
 }
 
 /**
- * Starts a dual-channel recording on the live inbound call leg. Returns the
- * recording SID. Throws on any non-2xx (callers treat recording as
- * best-effort and must not fail the call).
+ * Sets the recording mode on an Elastic SIP Trunk (trunk-wide: every call on
+ * the trunk is recorded). Per-org opt-in therefore requires a trunk per org.
+ * Throws on any non-2xx.
  */
-export async function startCallRecording(
+export async function setTrunkRecording(
   creds: TwilioRecordingCreds,
-  twilioCallSid: string
-): Promise<string> {
+  trunkSid: string,
+  mode: TrunkRecordingMode
+): Promise<void> {
+  const res = await fetch(`${TRUNKING_BASE()}/v1/Trunks/${trunkSid}/Recording`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader(creds),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ Mode: mode, Trim: 'do-not-trim' }).toString(),
+  });
+  if (!res.ok) {
+    throw new Error(`Twilio set trunk recording → ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+}
+
+/**
+ * Finds the recording SID for a call (trunk recordings surface under the
+ * account's Recordings, filterable by CallSid). Returns null when Twilio has
+ * not listed it yet, so the caller can retry shortly. Throws on other errors.
+ */
+export async function findRecordingSidByCall(
+  creds: TwilioRecordingCreds,
+  callSid: string
+): Promise<string | null> {
   const res = await fetch(
-    `${TWILIO_BASE()}/2010-04-01/Accounts/${creds.accountSid}/Calls/${twilioCallSid}/Recordings.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: authHeader(creds),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ RecordingChannels: 'dual' }).toString(),
-    }
+    `${TWILIO_BASE()}/2010-04-01/Accounts/${creds.accountSid}/Recordings.json?CallSid=${encodeURIComponent(
+      callSid
+    )}&PageSize=1`,
+    { headers: { Authorization: authHeader(creds) } }
   );
   if (!res.ok) {
-    throw new Error(`Twilio start recording → ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    throw new Error(`Twilio list recordings → ${res.status}`);
   }
-  const body = (await res.json()) as { sid?: string };
-  if (!body.sid) throw new Error('Twilio start recording returned no sid');
-  return body.sid;
+  const body = (await res.json()) as { recordings?: { sid?: string }[] };
+  return body.recordings?.[0]?.sid ?? null;
 }
 
 /**

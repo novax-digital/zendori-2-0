@@ -5,6 +5,7 @@ import { getServiceClient, toErrorInfo } from '../db.js';
 import {
   deleteRecording,
   fetchRecordingWav,
+  findRecordingSidByCall,
   type TwilioRecordingCreds,
 } from '../voice/recording.js';
 
@@ -44,7 +45,7 @@ interface VoiceCallRow {
   conversation_id: string;
   status: string;
   post_processed_at: string | null;
-  /** Session-written extras: twilio_call_sid, recording_sid, recording_stored_at. */
+  /** Webhook/session-written extras: twilio_call_sid, recording_stored_at. */
   metadata: Record<string, unknown> | null;
 }
 
@@ -54,23 +55,40 @@ const RECORDING_POLL_DELAY_MS = 5_000;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Moves a finished Twilio recording to Supabase Storage (EU) and deletes it at
- * Twilio (§7: the US-stored copy is transient). Best-effort by design: any
+ * Moves the finished trunk recording to Supabase Storage (EU) and deletes it at
+ * Twilio (§7: the US-stored copy is transient). Recording happens trunk-wide
+ * (see recording.ts); here we look the call's recording up by CallSid, so the
+ * channel must have opted in (`recordingEnabled`). Best-effort by design: any
  * failure logs and returns — the transcript is the primary record, and the
- * recording stays fetchable at Twilio (sid is logged) for manual recovery.
- * Idempotent via metadata.recording_stored_at.
+ * recording stays fetchable at Twilio for manual recovery. Idempotent via
+ * metadata.recording_stored_at.
  */
 async function maybeStoreRecording(
   supabase: SupabaseClient,
   call: VoiceCallRow
 ): Promise<void> {
   const meta = call.metadata ?? {};
-  const recordingSid = typeof meta.recording_sid === 'string' ? meta.recording_sid : null;
-  if (!recordingSid || meta.recording_stored_at) return;
+  if (meta.recording_stored_at) return; // already stored (idempotent)
+
+  // Gate on the channel's opt-in: without it we'd probe Twilio for a recording
+  // that was never made on every single call.
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('config')
+    .eq('id', call.channel_id)
+    .maybeSingle();
+  const config = (channelRow as { config?: Record<string, unknown> } | null)?.config ?? {};
+  if (config.recordingEnabled !== true) return;
+
+  const twilioCallSid = typeof meta.twilio_call_sid === 'string' ? meta.twilio_call_sid : null;
+  if (!twilioCallSid) {
+    log.warn({ voiceCallId: call.id }, 'recording enabled but no twilio_call_sid captured');
+    return;
+  }
 
   const env = loadWorkerEnv();
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
-    log.warn({ voiceCallId: call.id }, 'recording present but TWILIO_* creds missing');
+    log.warn({ voiceCallId: call.id }, 'recording enabled but TWILIO_* creds missing');
     return;
   }
   const creds: TwilioRecordingCreds = {
@@ -78,13 +96,26 @@ async function maybeStoreRecording(
     authToken: env.TWILIO_AUTH_TOKEN,
   };
 
+  // Declared out here so the outer catch can log the sid if it was found.
+  let recordingSid: string | null = null;
   try {
-    // Twilio finishes processing shortly after hangup — poll briefly.
+    // Trunk recording is finalized shortly after hangup — poll for it to be
+    // listed under the account, then for the WAV to finish processing.
     let wav: Uint8Array | null = null;
     for (let attempt = 0; attempt < RECORDING_POLL_ATTEMPTS; attempt += 1) {
-      wav = await fetchRecordingWav(creds, recordingSid);
-      if (wav) break;
+      if (!recordingSid) recordingSid = await findRecordingSidByCall(creds, twilioCallSid);
+      if (recordingSid) {
+        wav = await fetchRecordingWav(creds, recordingSid);
+        if (wav) break;
+      }
       if (attempt < RECORDING_POLL_ATTEMPTS - 1) await sleep(RECORDING_POLL_DELAY_MS);
+    }
+    if (!recordingSid) {
+      log.warn(
+        { voiceCallId: call.id, twilioCallSid },
+        'no trunk recording found for call — is trunk recording enabled?'
+      );
+      return;
     }
     if (!wav) {
       log.warn(

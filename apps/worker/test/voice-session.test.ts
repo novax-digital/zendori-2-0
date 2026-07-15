@@ -420,12 +420,7 @@ describe('CallSession protocol', () => {
     expect(final.patch.ended_reason).toBe('connect_failed');
   });
 
-  it('recording: speaks the consent notice BEFORE the greeting and starts the Twilio recording', async () => {
-    // The recording-start POST needs a sid in the response body.
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      fetchCalls.push({ url: String(input), method: init?.method ?? 'GET' });
-      return new Response(JSON.stringify({ sid: 'REtest' }), { status: 200 });
-    }) as typeof fetch;
+  it('recording: speaks the §201 consent notice, then defers the greeting to its response.done', async () => {
     const fake = makeFakeSupabase();
     const session = new CallSession({
       supabase: fake.client,
@@ -439,10 +434,7 @@ describe('CallSession protocol', () => {
       channelConfig: { ...CONFIG, recordingEnabled: true },
       agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
       context: { companyName: 'Testfirma' },
-      recording: {
-        creds: { accountSid: 'ACtest', authToken: 'tok' },
-        twilioCallSid: 'CAtest123',
-      },
+      recordingEnabled: true,
       onClosed: () => undefined,
       wsUrl: `ws://127.0.0.1:${port}`,
     });
@@ -479,22 +471,12 @@ describe('CallSession protocol', () => {
     expect(forceIdx).toBeGreaterThan(-1);
     expect(forceIdx).toBeLessThan(greetIdx);
 
-    // Twilio per-call recording started (dual channel) …
-    const startCall = await waitFor(() =>
-      fetchCalls.find((c) => c.url.includes('/Calls/CAtest123/Recordings.json'))
-    );
-    expect(startCall.method).toBe('POST');
-    // … and both sids stamped into voice_calls.metadata for the post-call job.
-    await waitFor(() =>
-      fake.updates.find(
-        (u) =>
-          u.table === 'voice_calls' &&
-          (u.patch.metadata as { recording_sid?: string } | undefined)?.recording_sid !== undefined
-      )
-    );
+    // No per-call Twilio recording is started from the session anymore —
+    // capture is trunk-wide; the post-call job fetches it.
+    expect(fetchCalls.filter((c) => c.url.includes('/Recordings'))).toHaveLength(0);
   });
 
-  it('without recording param: no force_message before the greeting, no Twilio call', async () => {
+  it('without recording enabled: no force_message before the greeting, no Twilio call', async () => {
     const fake = makeFakeSupabase();
     startSession(fake);
     await completeHandshake();

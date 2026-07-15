@@ -233,25 +233,11 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       logger.warn({ voiceCallId }, 'voice channel has no agent — falling back to intake mode');
     }
 
-    // Recording param: only when the owner opted in AND the operator creds are
-    // configured AND the webhook captured the Twilio CallSid. Missing pieces
-    // degrade cleanly to an unrecorded call (with a why-log for the operator).
-    let recording: { creds: { accountSid: string; authToken: string }; twilioCallSid: string } | null =
-      null;
-    if (configResult.data.recordingEnabled) {
-      const twilioCallSid =
-        typeof call.metadata?.twilio_call_sid === 'string' ? call.metadata.twilio_call_sid : null;
-      if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
-        logger.warn({ voiceCallId }, 'recording enabled but TWILIO_* creds missing in worker env');
-      } else if (!twilioCallSid) {
-        logger.warn({ voiceCallId }, 'recording enabled but no X-Twilio-CallSid captured');
-      } else {
-        recording = {
-          creds: { accountSid: env.TWILIO_ACCOUNT_SID, authToken: env.TWILIO_AUTH_TOKEN },
-          twilioCallSid,
-        };
-      }
-    }
+    // Recording (opt-in): capture is done trunk-wide at Twilio (Elastic SIP
+    // Trunking calls are not recordable via the per-call Voice API). The session
+    // only speaks the §201 consent notice; the post-call job fetches the trunk
+    // recording by CallSid and moves it to EU storage.
+    const recordingEnabled = configResult.data.recordingEnabled === true;
 
     const session = new CallSession({
       supabase,
@@ -265,7 +251,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       channelConfig: configResult.data,
       agent,
       context: { companyName, contactName },
-      recording,
+      recordingEnabled,
       onClosed: (providerCallId) => {
         sessions.delete(providerCallId);
       },

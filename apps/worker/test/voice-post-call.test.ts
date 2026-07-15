@@ -271,11 +271,15 @@ describe('recording transfer (maybeStoreRecording via processPostCall)', () => {
     globalThis.fetch = realFetch;
   });
 
-  it('downloads the recording, stores it as message+attachment, stamps and deletes at Twilio', async () => {
+  it('looks the recording up by CallSid, stores it as message+attachment, stamps and deletes at Twilio', async () => {
     const fetchLog: { url: string; method: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       fetchLog.push({ url, method: init?.method ?? 'GET' });
+      if (url.includes('/Recordings.json')) {
+        // trunk recording listed for the call
+        return new Response(JSON.stringify({ recordings: [{ sid: 'RExyz' }] }), { status: 200 });
+      }
       if (url.endsWith('.wav')) {
         return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
       }
@@ -288,8 +292,9 @@ describe('recording transfer (maybeStoreRecording via processPostCall)', () => {
       singles: {
         voice_calls: {
           ...CALL_ROW,
-          metadata: { twilio_call_sid: 'CAx', recording_sid: 'RExyz' },
+          metadata: { twilio_call_sid: 'CAx' },
         },
+        channels: { config: { recordingEnabled: true } },
         organizations: { name: 'Testfirma' },
         conversations: { subject: 'Anruf von X', contact_id: null },
         messages: { id: 'msg-rec-1' },
@@ -300,7 +305,9 @@ describe('recording transfer (maybeStoreRecording via processPostCall)', () => {
 
     await processPostCall('call-1');
 
-    // WAV fetched with auth against the recording media URL …
+    // recording looked up by CallSid …
+    expect(fetchLog.some((c) => c.url.includes('/Recordings.json?CallSid=CAx'))).toBe(true);
+    // … WAV fetched against the recording media URL …
     expect(fetchLog.some((c) => c.url.includes('/Recordings/RExyz.wav'))).toBe(true);
     // … uploaded org-scoped into the attachments bucket …
     expect(fake.uploads).toEqual([
@@ -344,7 +351,7 @@ describe('recording transfer (maybeStoreRecording via processPostCall)', () => {
       singles: {
         voice_calls: {
           ...CALL_ROW,
-          metadata: { recording_sid: 'RExyz', recording_stored_at: '2026-07-15T11:00:00Z' },
+          metadata: { twilio_call_sid: 'CAx', recording_stored_at: '2026-07-15T11:00:00Z' },
         },
         organizations: { name: 'Testfirma' },
         conversations: { subject: 'Anruf von X', contact_id: null },
