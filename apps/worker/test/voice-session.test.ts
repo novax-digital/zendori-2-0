@@ -202,6 +202,37 @@ describe('CallSession protocol', () => {
     );
   });
 
+  it('greeting is non-interruptible: disables server VAD, re-enables on its response.done', async () => {
+    const fake = makeFakeSupabase();
+    startSession(fake);
+    await completeHandshake();
+
+    const turnDetectionOff = (e: unknown): boolean =>
+      (e as { type?: string }).type === 'session.update' &&
+      (e as { session?: { turn_detection?: unknown } }).session?.turn_detection === null;
+    const countVadOn = (): number =>
+      received.filter(
+        (e) =>
+          e.type === 'session.update' &&
+          (e as { session?: { turn_detection?: { type?: string } } }).session?.turn_detection
+            ?.type === 'server_vad'
+      ).length;
+
+    // barge-in is disabled for the greeting: a turn_detection:null update was
+    // sent and it precedes the greeting response.create.
+    const vadOffIdx = received.findIndex(turnDetectionOff);
+    const greetIdx = received.findIndex((e) => e.type === 'response.create');
+    expect(vadOffIdx).toBeGreaterThan(-1);
+    expect(vadOffIdx).toBeLessThan(greetIdx);
+    // only the initial full-config server_vad update so far (greeting VAD is off)
+    expect(countVadOn()).toBe(1);
+
+    // greeting completes → server VAD re-enabled for the conversation.
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.done' });
+    await waitFor(() => (countVadOn() === 2 ? true : undefined));
+  });
+
   it('handles the CUMULATIVE transcript without double-counting', async () => {
     const fake = makeFakeSupabase();
     startSession(fake);

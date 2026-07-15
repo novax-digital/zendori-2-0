@@ -21,6 +21,7 @@ import {
   sessionUpdateEvent,
   transcriptionCompletedSchema,
   transcriptionUpdatedSchema,
+  turnDetectionEvent,
 } from './xai-realtime.js';
 import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from './tools.js';
 
@@ -94,6 +95,11 @@ export class CallSession {
    * leaving dead air until the caller speaks.
    */
   private greetPending = false;
+  /**
+   * True while the greeting is being spoken with server-VAD disabled (barge-in
+   * blocked). Re-enabled on the greeting's response.done.
+   */
+  private greetingInFlight = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -301,13 +307,25 @@ export class CallSession {
         this.greetPending = true;
       } else {
         // Greet the caller (first activation only — a rejoin must not re-greet).
-        this.send(responseCreateEvent());
+        this.sendGreeting();
       }
     }
 
     // Ping is per-connection: clear a previous connection's timer before re-arming.
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.pingTimer = setInterval(() => this.ws?.ping(), PING_INTERVAL_MS);
+  }
+
+  /**
+   * Speaks the greeting with barge-in disabled: server VAD is turned off first
+   * so the caller cannot interrupt the opening, then re-enabled on the
+   * greeting's response.done (onResponseDone). The greeting itself stays
+   * model-generated (keeps the style rules / pronunciation handling).
+   */
+  private sendGreeting(): void {
+    this.send(turnDetectionEvent(false));
+    this.greetingInFlight = true;
+    this.send(responseCreateEvent());
   }
 
   private async onResponseDone(): Promise<void> {
@@ -321,8 +339,15 @@ export class CallSession {
     // 1a. The §201 notice just finished — now greet, back-to-back, no dead air.
     if (this.greetPending && this.state === 'active') {
       this.greetPending = false;
-      this.send(responseCreateEvent());
+      this.sendGreeting();
       return; // the notice carries no tool calls
+    }
+
+    // 1b. The greeting just finished — re-enable barge-in for the conversation.
+    if (this.greetingInFlight) {
+      this.greetingInFlight = false;
+      this.send(turnDetectionEvent(true));
+      // greeting carries no tool calls — fall through ends the handler.
     }
 
     // 2. Execute collected tool calls (possibly several in parallel), answer

@@ -113,6 +113,18 @@ export function responseCreateEvent(instructions?: string): string {
   );
 }
 
+/**
+ * Toggles server-VAD barge-in mid-session (partial session.update, merged by the
+ * server). `false` (turn_detection: null) disables interruption — used to
+ * protect the greeting; re-enabled on its response.done.
+ */
+export function turnDetectionEvent(enabled: boolean): string {
+  return JSON.stringify({
+    type: 'session.update',
+    session: { turn_detection: enabled ? { type: 'server_vad' } : null },
+  });
+}
+
 export function functionCallOutputEvent(callId: string, output: unknown): string {
   return JSON.stringify({
     type: 'conversation.item.create',
