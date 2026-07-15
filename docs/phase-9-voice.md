@@ -44,7 +44,9 @@ Transfer-Nummer (gesetzt ⇒ Live-Transfer per REST `refer`; leer ⇒ Rückruf-T
 
 1. Twilio DE-Regulatory-Bundle (Novax als Business-End-User) über
    `numbering.twilio.com/v1/RegulatoryCompliance` anlegen und auf `twilio-approved`
-   warten → `TWILIO_BUNDLE_SID`.
+   warten. **Pro genutztem Nummerntyp ein eigenes Bundle** — local (geografisch) und
+   mobil (und ggf. national = 032) haben unterschiedliche regulatorische Anforderungen →
+   `TWILIO_BUNDLE_SID_LOCAL` / `_MOBILE` / (optional `_NATIONAL`); nur die, die ihr nutzt.
 2. Elastic SIP Trunk mit Origination-URI `sip:sip.voice.x.ai;transport=tls`
    (`trunking.twilio.com/v1/Trunks`) → `TWILIO_VOICE_TRUNK_SID`.
    ⚠️ `sips:`-Schema lehnt Twilio ab; TLS über den `;transport=tls`-Parameter.
@@ -53,11 +55,20 @@ Transfer-Nummer (gesetzt ⇒ Live-Transfer per REST `refer`; leer ⇒ Rückruf-T
 
 ```bash
 cd apps/worker
-npx tsx --env-file=../../.env scripts/provision-voice-number.ts \
-  --org <org-uuid> --name "Telefon Strong Energy"
+APP_URL=https://app.zendori.ai npx tsx --env-file=../../.env scripts/provision-voice-number.ts \
+  --org <org-uuid> --name "Telefon Strong Energy" --type local
+# --type local | mobile | national (Pflicht) — wählt Twilio-Suche + passendes Bundle.
+# national = 032-Nummern; braucht dann TWILIO_BUNDLE_SID_NATIONAL.
+# APP_URL inline überschreiben: xAI verlangt eine https-Webhook-URL und registriert
+# sie FIX pro Nummer — sie muss auf die Vercel-Produktion zeigen, nicht auf das
+# lokale APP_URL=http://localhost:3000 aus der Dev-.env.
+# Schlug Schritt 4 (xAI) fehl (z. B. ohne Credits), NICHT neu kaufen, sondern:
+#   APP_URL=https://app.zendori.ai npx tsx --env-file=../../.env \
+#     scripts/provision-voice-number.ts --complete-channel <channel-uuid>
 ```
 
-Das Script: DE-National-Nummer suchen/kaufen (Bundle + Trunk) → Voice-Channel anlegen →
+Das Script: DE-Nummer des gewählten Typs suchen/kaufen (typ-passendes Bundle + Trunk) →
+Voice-Channel anlegen →
 Nummer bei xAI registrieren (`POST /v2/phone-numbers`, origin `byo_trunk`, Webhook-URL
 `/api/hooks/voice?channel=…`) → das **einmalig** zurückgegebene `dispatch_signing_secret`
 sofort verschlüsselt in die Channel-Config schreiben → Kanal aktivieren.
@@ -69,8 +80,11 @@ Gebaut + gegen Mock-WS/Stubs getestet: Webhook-Verify/Idempotenz, Dispatch/Claim
 Session-Handshake, kumulatives Transkript (xAI-Delta!), Tool-Loop, Handoff-Pfade,
 end_call, Post-Call-KI. **Offen bis zum echten Testanruf:**
 
-- Beta- vs. GA-Eventnamen (Receive-Switch akzeptiert beide) und exakte
-  `client_secrets`-/Phone-Number-API-Feldnamen.
+- Beta- vs. GA-Eventnamen (Receive-Switch akzeptiert beide).
+- ~~Phone-Number-API-Feldnamen~~ **live verifiziert (2026-07-15):** die API antwortet
+  in camelCase — `phoneNumberId`, Secret-Feld `dispatchSigningSecret` (Registrierung
+  gibt ihn genau einmal zurück; Recovery = deregister + re-register, im CLI als
+  `--complete-channel` umgesetzt). Webhook-URL muss https sein (Vercel-Prod-URL).
 - SIP-Topologie: Shared-Trunk vs. Trunk pro Nummer; Twilio-CIDR-Allowlist bei xAI;
   TLS/SRTP-Anforderungen.
 - Deutsche ASR-/Sprachqualität, Latenz, Minutenpreis — das eigentliche Phase-9-Gate.
