@@ -184,11 +184,18 @@ describe('CallSession protocol', () => {
     const update = received.find((e) => e.type === 'session.update') as {
       session: {
         instructions: string;
-        audio: { input: { format: { type: string; rate: number } } };
+        audio: {
+          input: { format?: unknown; transcription: { language_hint: string } };
+          output: { format?: unknown };
+        };
       };
     };
     expect(update.session.instructions).toContain('Testfirma');
-    expect(update.session.audio.input.format).toEqual({ type: 'audio/pcmu', rate: 8000 });
+    // Live-gate: NO explicit audio formats — the SIP bridge negotiates G.711
+    // itself; forcing pcmu made the caller hear noise (2026-07-15).
+    expect(update.session.audio.input.format).toBeUndefined();
+    expect(update.session.audio.output.format).toBeUndefined();
+    expect(update.session.audio.input.transcription.language_hint).toBe('de');
     // voice_calls flipped to active
     await waitFor(() =>
       fake.updates.find((u) => u.table === 'voice_calls' && u.patch.status === 'active')

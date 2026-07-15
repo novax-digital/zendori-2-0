@@ -82,11 +82,11 @@ export interface SessionConfig {
   };
   audio: {
     input: {
-      format: { type: 'audio/pcmu'; rate: 8000 };
+      // Live-gate: no format on call-attached sessions — the SIP bridge owns
+      // the codec (forcing pcmu produced noise at the caller, 2026-07-15).
       transcription: { language_hint: string; keyterms?: string[] };
     };
     output: {
-      format: { type: 'audio/pcmu'; rate: 8000 };
       speed?: number;
     };
   };

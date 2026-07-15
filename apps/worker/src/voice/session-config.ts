@@ -138,16 +138,18 @@ export function buildSessionConfig(
     instructions: parts.join('\n\n'),
     voice: config.voice,
     turn_detection: { type: 'server_vad' },
+    // Live-gate finding (2026-07-15): NEVER set audio formats on a call-attached
+    // session. The SIP bridge negotiates G.711 with the carrier itself; forcing
+    // audio/pcmu@8000 made the model emit μ-law the bridge re-encoded as PCM —
+    // the caller heard noise instead of speech.
     audio: {
       input: {
-        format: { type: 'audio/pcmu', rate: 8000 },
         transcription: {
           language_hint: config.languageHint,
           ...(config.keyterms.length > 0 ? { keyterms: config.keyterms } : {}),
         },
       },
       output: {
-        format: { type: 'audio/pcmu', rate: 8000 },
         ...(config.speechSpeed !== 1.0 ? { speed: config.speechSpeed } : {}),
       },
     },
