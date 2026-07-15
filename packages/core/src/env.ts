@@ -18,6 +18,9 @@ export const workerEnvSchema = z.object({
   XAI_API_KEY: z.string().min(1).optional(),
   XAI_API_BASE: z.string().optional(),
   VOICE_MAX_CONCURRENT_CALLS: z.coerce.number().int().positive().optional(),
+  /** Operator Twilio creds — voice call recording only; absent disables recording. */
+  TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
+  TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
   LOG_LEVEL: z.string().optional(),
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

@@ -1,7 +1,12 @@
 import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
+import { createLogger, loadWorkerEnv } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from '../db.js';
-import { createLogger } from '@zendori/core';
+import {
+  deleteRecording,
+  fetchRecordingWav,
+  type TwilioRecordingCreds,
+} from '../voice/recording.js';
 
 // Post-call AI (Phase 9): once a voice call ends, run classify + extract (the
 // Bridge prompts, same as the text pipeline) over the full transcript to give
@@ -39,6 +44,110 @@ interface VoiceCallRow {
   conversation_id: string;
   status: string;
   post_processed_at: string | null;
+  /** Session-written extras: twilio_call_sid, recording_sid, recording_stored_at. */
+  metadata: Record<string, unknown> | null;
+}
+
+const RECORDING_POLL_ATTEMPTS = 3;
+const RECORDING_POLL_DELAY_MS = 5_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Moves a finished Twilio recording to Supabase Storage (EU) and deletes it at
+ * Twilio (§7: the US-stored copy is transient). Best-effort by design: any
+ * failure logs and returns — the transcript is the primary record, and the
+ * recording stays fetchable at Twilio (sid is logged) for manual recovery.
+ * Idempotent via metadata.recording_stored_at.
+ */
+async function maybeStoreRecording(
+  supabase: SupabaseClient,
+  call: VoiceCallRow
+): Promise<void> {
+  const meta = call.metadata ?? {};
+  const recordingSid = typeof meta.recording_sid === 'string' ? meta.recording_sid : null;
+  if (!recordingSid || meta.recording_stored_at) return;
+
+  const env = loadWorkerEnv();
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+    log.warn({ voiceCallId: call.id }, 'recording present but TWILIO_* creds missing');
+    return;
+  }
+  const creds: TwilioRecordingCreds = {
+    accountSid: env.TWILIO_ACCOUNT_SID,
+    authToken: env.TWILIO_AUTH_TOKEN,
+  };
+
+  try {
+    // Twilio finishes processing shortly after hangup — poll briefly.
+    let wav: Uint8Array | null = null;
+    for (let attempt = 0; attempt < RECORDING_POLL_ATTEMPTS; attempt += 1) {
+      wav = await fetchRecordingWav(creds, recordingSid);
+      if (wav) break;
+      if (attempt < RECORDING_POLL_ATTEMPTS - 1) await sleep(RECORDING_POLL_DELAY_MS);
+    }
+    if (!wav) {
+      log.warn(
+        { voiceCallId: call.id, recordingSid },
+        'recording not ready — left at Twilio for manual recovery'
+      );
+      return;
+    }
+
+    // Upload first (path is org-scoped for the storage RLS), then message +
+    // attachment row, then stamp + delete at Twilio.
+    const path = `${call.org_id}/${call.id}/aufzeichnung.wav`;
+    const { error: uploadError } = await supabase.storage
+      .from('attachments')
+      .upload(path, wav, { contentType: 'audio/wav', upsert: true });
+    if (uploadError) {
+      log.warn({ voiceCallId: call.id, recordingSid }, 'recording upload failed');
+      return;
+    }
+    const { data: msgRow, error: msgError } = await supabase
+      .from('messages')
+      .insert({
+        org_id: call.org_id,
+        conversation_id: call.conversation_id,
+        channel_id: call.channel_id,
+        direction: 'out',
+        sender_type: 'system',
+        content: 'Gesprächsaufzeichnung zum Anruf.',
+        content_type: 'text',
+        processing_state: null,
+      })
+      .select('id')
+      .single();
+    if (msgError || !msgRow) {
+      log.warn({ voiceCallId: call.id }, 'recording message insert failed');
+      return;
+    }
+    await supabase.from('attachments').insert({
+      org_id: call.org_id,
+      message_id: (msgRow as { id: string }).id,
+      storage_path: path,
+      mime: 'audio/wav',
+      size: wav.byteLength,
+    });
+    await supabase
+      .from('voice_calls')
+      .update({ metadata: { ...meta, recording_stored_at: new Date().toISOString() } })
+      .eq('id', call.id);
+    try {
+      await deleteRecording(creds, recordingSid);
+    } catch (err) {
+      log.warn(
+        { voiceCallId: call.id, recordingSid, err: toErrorInfo(err) },
+        'recording delete at Twilio failed — delete manually'
+      );
+    }
+    log.info({ voiceCallId: call.id }, 'recording stored');
+  } catch (err) {
+    log.warn(
+      { voiceCallId: call.id, recordingSid, err: toErrorInfo(err) },
+      'recording transfer failed — left at Twilio'
+    );
+  }
 }
 
 export async function processPostCall(voiceCallId: string): Promise<void> {
@@ -46,11 +155,15 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
 
   const { data: callData } = await supabase
     .from('voice_calls')
-    .select('id, org_id, channel_id, conversation_id, status, post_processed_at')
+    .select('id, org_id, channel_id, conversation_id, status, post_processed_at, metadata')
     .eq('id', voiceCallId)
     .maybeSingle();
   const call = callData as VoiceCallRow | null;
   if (!call || call.post_processed_at !== null) return; // gone or already processed
+
+  // Recording transfer runs BEFORE the AI part and is best-effort: it must
+  // neither block classification nor be re-run on AI retries (own stamp).
+  await maybeStoreRecording(supabase, call);
 
   const stamp = async (): Promise<void> => {
     await supabase

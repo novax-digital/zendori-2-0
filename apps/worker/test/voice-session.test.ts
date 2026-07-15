@@ -420,6 +420,74 @@ describe('CallSession protocol', () => {
     expect(final.patch.ended_reason).toBe('connect_failed');
   });
 
+  it('recording: speaks the consent notice BEFORE the greeting and starts the Twilio recording', async () => {
+    // The recording-start POST needs a sid in the response body.
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: String(input), method: init?.method ?? 'GET' });
+      return new Response(JSON.stringify({ sid: 'REtest' }), { status: 200 });
+    }) as typeof fetch;
+    const fake = makeFakeSupabase();
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000003',
+      providerCallId: 'call-rec',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: { ...CONFIG, recordingEnabled: true },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      recording: {
+        creds: { accountSid: 'ACtest', authToken: 'tok' },
+        twilioCallSid: 'CAtest123',
+      },
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    });
+    session.start();
+    await completeHandshake();
+
+    // The §201 consent notice is a force_message and must precede the greeting
+    // response.create in the outbound frame order.
+    const forceIdx = received.findIndex(
+      (e) =>
+        e.type === 'conversation.item.create' &&
+        (e as { item?: { type?: string } }).item?.type === 'force_message'
+    );
+    const greetIdx = received.findIndex((e) => e.type === 'response.create');
+    expect(forceIdx).toBeGreaterThan(-1);
+    expect(forceIdx).toBeLessThan(greetIdx);
+
+    // Twilio per-call recording started (dual channel) …
+    const startCall = await waitFor(() =>
+      fetchCalls.find((c) => c.url.includes('/Calls/CAtest123/Recordings.json'))
+    );
+    expect(startCall.method).toBe('POST');
+    // … and both sids stamped into voice_calls.metadata for the post-call job.
+    await waitFor(() =>
+      fake.updates.find(
+        (u) =>
+          u.table === 'voice_calls' &&
+          (u.patch.metadata as { recording_sid?: string } | undefined)?.recording_sid !== undefined
+      )
+    );
+  });
+
+  it('without recording param: no force_message before the greeting, no Twilio call', async () => {
+    const fake = makeFakeSupabase();
+    startSession(fake);
+    await completeHandshake();
+    const force = received.filter(
+      (e) =>
+        e.type === 'conversation.item.create' &&
+        (e as { item?: { type?: string } }).item?.type === 'force_message'
+    );
+    expect(force).toHaveLength(0);
+    expect(fetchCalls.filter((c) => c.url.includes('/Recordings'))).toHaveLength(0);
+  });
+
   it('late transcription.completed corrects an already-flushed user turn', async () => {
     const fake = makeFakeSupabase();
     startSession(fake);

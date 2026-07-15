@@ -133,6 +133,7 @@ type VoiceChannelView = {
   keyterms: string;
   speechSpeed: number;
   transferNumber: string;
+  recordingEnabled: boolean;
   isActive: boolean;
   agentId: string | null;
 };
@@ -148,6 +149,7 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     keyterms?: unknown;
     speechSpeed?: unknown;
     transferNumber?: unknown;
+    recordingEnabled?: unknown;
   };
   if (config.provider !== 'xai' || typeof config.phoneNumber !== 'string') return null;
   return {
@@ -161,6 +163,7 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
       : '',
     speechSpeed: typeof config.speechSpeed === 'number' ? config.speechSpeed : 1.0,
     transferNumber: typeof config.transferNumber === 'string' ? config.transferNumber : '',
+    recordingEnabled: config.recordingEnabled === true,
     isActive: channel.is_active,
     agentId: channel.agent_id ?? null,
   };
@@ -624,6 +627,26 @@ export default async function ChannelsPage({
                 defaultValue={vc.transferNumber}
                 placeholder="+49301234567 (leer = Rückruf-Ticket)"
               />
+            </div>
+            <div>
+              <label
+                htmlFor={`voice-recording-${vc.id}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <input
+                  id={`voice-recording-${vc.id}`}
+                  name="recordingEnabled"
+                  type="checkbox"
+                  defaultChecked={vc.recordingEnabled}
+                  style={{ width: 'auto' }}
+                />
+                Anrufe aufzeichnen
+              </label>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                Der Assistent spricht zu Gesprächsbeginn einen Aufzeichnungshinweis (gesetzlich
+                erforderlich, § 201 StGB). Die Aufnahme erscheint nach dem Anruf als Anhang in der
+                Konversation und wird in der EU gespeichert.
+              </p>
             </div>
             <button className="primary" type="submit">
               Voice-Einstellungen speichern

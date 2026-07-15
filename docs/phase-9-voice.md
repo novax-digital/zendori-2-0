@@ -80,6 +80,18 @@ Gebaut + gegen Mock-WS/Stubs getestet: Webhook-Verify/Idempotenz, Dispatch/Claim
 Session-Handshake, kumulatives Transkript (xAI-Delta!), Tool-Loop, Handoff-Pfade,
 end_call, Post-Call-KI. **Offen bis zum echten Testanruf:**
 
+**Erster echter deutscher Testanruf BESTANDEN (2026-07-15):** Qualität „überraschend gut",
+Transkript sauber in der Inbox. Zwei Live-Fixes waren nötig:
+1. **Twilio-Trunk braucht Secure Trunking (SRTP)** — `secure=false` ⇒ Anruf wird
+   angenommen, aber Totenstille (Media-Timeout nach ~18 s, WS-Drop). `secure=true` setzen.
+2. **KEINE Audio-Formate im `session.update`** — die SIP-Bridge verhandelt G.711 selbst;
+   erzwungenes `audio/pcmu@8000` ⇒ Anrufer hört Lärm statt Sprache (Fix `e752aa4`).
+Prompt-Feinschliff aus dem Call (englische Begriffe deutsch ausgesprochen, „Herr
+<Vorname>") als STYLE_RULES in beiden Templates (`3e84fb0`); pro Org zusätzlich über
+die Agent-Identität justierbar (wirkt ohne Deploy beim nächsten Anruf).
+
+Weiterhin offen:
+
 - Beta- vs. GA-Eventnamen (Receive-Switch akzeptiert beide).
 - ~~Phone-Number-API-Feldnamen~~ **live verifiziert (2026-07-15):** die API antwortet
   in camelCase — `phoneNumberId`, Secret-Feld `dispatchSigningSecret` (Registrierung
@@ -90,13 +102,34 @@ end_call, Post-Call-KI. **Offen bis zum echten Testanruf:**
 - Deutsche ASR-/Sprachqualität, Latenz, Minutenpreis — das eigentliche Phase-9-Gate.
 - Verhalten von `refer` (Live-Transfer) am echten PSTN.
 
+## Anruf-Aufzeichnung (Owner-Opt-in pro Kanal, seit 2026-07-15)
+
+Settings → Kanäle → Telefon → „Anrufe aufzeichnen". Ablauf:
+
+1. Webhook speichert den `X-Twilio-CallSid` aus den SIP-Headern in `voice_calls.metadata`.
+2. Session spricht bei Aktivierung **zuerst** die Pflichtansage („Dieses Gespräch wird zur
+   Qualitätssicherung aufgezeichnet.", `force_message` = garantierter Wortlaut — § 201 StGB
+   verlangt beidseitige Einwilligung), dann die Begrüßung; parallel startet sie per Twilio-API
+   eine **Dual-Channel-Aufnahme des einzelnen Calls** (kein Trunk-weites Recording).
+3. Post-Call-Job lädt die WAV (kurzes Polling bis Twilio fertig ist), legt sie **org-scoped im
+   Supabase-Storage (EU)** ab (`attachments`-Bucket), hängt sie als Systemnachricht + Anhang an
+   die Konversation und **löscht die Kopie bei Twilio** (US-Speicherung nur transient).
+4. Voraussetzung im Worker-Env: `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` — fehlen sie, ist
+   Recording sauber deaktiviert (Warn-Log). Alles best-effort: ein Recording-Fehler killt nie
+   den Anruf; eine nicht abgeholte Aufnahme bleibt bei Twilio (SID im Log) zur Hand-Recovery.
+
+Verify-Punkt: ob xAI den `X-Twilio-CallSid`-SIP-Header durchreicht — falls nicht, loggt der
+Dispatch „recording enabled but no X-Twilio-CallSid captured" und der Call läuft unaufgezeichnet.
+
 ## DSGVO (Blocker vor Kunden-Rollout — Owner-Aufgabe)
 
 xAI Self-Serve = US-Verarbeitung, 30-Tage-Retention; **EU-Residenz + Zero Data
 Retention sind Enterprise-only** (sales@x.ai). Twilio Voice ist ein weiterer
 US-Prozessor. §7-Ausnahme ist erteilt, aber: vor echten Kundenanrufen AVV/SCCs/DPA
-unterschreiben (wie Resend). Bis dahin nur Testanrufe mit Testdaten. v1 speichert
-bewusst **nur Transkripte, kein Audio** (Recording erst nach Enterprise-Klärung).
+unterschreiben (wie Resend). Bis dahin nur Testanrufe mit Testdaten.
+Audio-Recording ist seit 2026-07-15 als **Owner-Opt-in** umgesetzt (Abschnitt oben:
+Pflichtansage, EU-Ablage, Twilio-Kopie wird gelöscht) — Produktiveinsatz erst nach
+der DPA-Hausaufgabe; Default bleibt aus.
 
 ## Betriebshinweise
 

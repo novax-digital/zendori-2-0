@@ -23,6 +23,7 @@ import {
   transcriptionUpdatedSchema,
 } from './xai-realtime.js';
 import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from './tools.js';
+import { startCallRecording, type TwilioRecordingCreds } from './recording.js';
 
 // One CallSession per live call: holds the outbound WebSocket to xAI for the
 // duration of the conversation, persists transcript turns as normal `messages`
@@ -32,6 +33,9 @@ import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from '.
 // event types and error shapes.
 
 const TRANSFER_HOLD_TEXT = 'Einen Moment bitte, ich verbinde Sie mit einem Mitarbeiter.';
+/** Mandatory §201-StGB consent notice — spoken verbatim BEFORE the greeting. */
+const RECORDING_NOTICE_TEXT =
+  'Dieses Gespräch wird zur Qualitätssicherung aufgezeichnet.';
 const GOODBYE_TIMEOUT_TEXT =
   'Wir müssen das Gespräch aus technischen Gründen beenden. Wir rufen Sie schnellstmöglich zurück. Auf Wiederhören.';
 const PING_INTERVAL_MS = 15_000;
@@ -55,6 +59,13 @@ export interface CallSessionParams {
   /** Assigned agent's behavior (0011), resolved by dispatch. */
   agent: VoiceAgentBehavior;
   context: SessionContext;
+  /**
+   * Present only when the channel has recordingEnabled AND the operator Twilio
+   * creds are configured AND the webhook captured the Twilio CallSid. The
+   * session then speaks the consent notice before the greeting and starts a
+   * dual-channel recording (best-effort — a failure never kills the call).
+   */
+  recording?: { creds: TwilioRecordingCreds; twilioCallSid: string } | null;
   /** Called exactly once when the session reaches `closed` (registry cleanup). */
   onClosed: (providerCallId: string) => void;
   /** Test seam: overrides the WS URL (mock server). */
@@ -272,6 +283,15 @@ export class CallSession {
         void this.endByWatchdog();
       }, this.p.channelConfig.maxCallSeconds * 1000);
 
+      // Recording (opt-in): the §201-StGB consent notice MUST be the first
+      // thing spoken — force_message guarantees the exact wording (a prompt
+      // instruction would only be probabilistic). Recording start runs in
+      // parallel and is best-effort: a Twilio failure never kills the call.
+      if (this.p.recording) {
+        this.send(forceMessageEvent(RECORDING_NOTICE_TEXT));
+        void this.startRecording(this.p.recording);
+      }
+
       // Greet the caller (first activation only — a rejoin must not re-greet).
       this.send(responseCreateEvent());
     }
@@ -279,6 +299,32 @@ export class CallSession {
     // Ping is per-connection: clear a previous connection's timer before re-arming.
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.pingTimer = setInterval(() => this.ws?.ping(), PING_INTERVAL_MS);
+  }
+
+  /**
+   * Starts the Twilio dual-channel recording and stamps both SIDs into
+   * voice_calls.metadata — the post-call job needs recording_sid to move the
+   * audio to Supabase Storage and delete it at Twilio. Best-effort by design.
+   */
+  private async startRecording(rec: {
+    creds: TwilioRecordingCreds;
+    twilioCallSid: string;
+  }): Promise<void> {
+    try {
+      const recordingSid = await startCallRecording(rec.creds, rec.twilioCallSid);
+      await this.p.supabase
+        .from('voice_calls')
+        .update({
+          metadata: { twilio_call_sid: rec.twilioCallSid, recording_sid: recordingSid },
+        })
+        .eq('id', this.p.voiceCallId);
+      this.p.logger.info({ voiceCallId: this.p.voiceCallId }, 'voice recording started');
+    } catch (err) {
+      this.p.logger.warn(
+        { voiceCallId: this.p.voiceCallId, err: toErrorInfo(err) },
+        'voice recording start failed — call continues unrecorded'
+      );
+    }
   }
 
   private async onResponseDone(): Promise<void> {

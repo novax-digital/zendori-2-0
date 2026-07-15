@@ -397,6 +397,7 @@ const updateVoiceSettingsSchema = z.object({
     .string()
     .regex(/^\+[1-9]\d{6,15}$/)
     .or(z.literal('')),
+  recordingEnabled: z.boolean(),
 });
 
 /**
@@ -415,6 +416,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     keyterms: textField(formData.get('keyterms')),
     speechSpeed: textField(formData.get('speechSpeed')) || '1.0',
     transferNumber: textField(formData.get('transferNumber')),
+    recordingEnabled: formData.get('recordingEnabled') === 'on',
   });
   if (!parsed.success) {
     redirect(
@@ -424,7 +426,8 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
       })
     );
   }
-  const { org, channelId, greeting, voice, keyterms, speechSpeed, transferNumber } = parsed.data;
+  const { org, channelId, greeting, voice, keyterms, speechSpeed, transferNumber, recordingEnabled } =
+    parsed.data;
 
   const supabase = await createSupabaseServerClient();
 
@@ -473,6 +476,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     keyterms: keytermList,
     speechSpeed,
     transferNumber: transferNumber || undefined,
+    recordingEnabled,
   };
   // Validate the merged shape, but PERSIST raw-config + overrides so unknown
   // keys a newer worker/provisioning version wrote are preserved (zod strips).

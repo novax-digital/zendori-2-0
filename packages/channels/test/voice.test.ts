@@ -14,6 +14,20 @@ describe('voice channel config', () => {
     expect(config.voice).toBe('eve');
     expect(config.languageHint).toBe('de');
     expect(config.maxCallSeconds).toBe(900);
+    // recording is a legal opt-in — MUST default to off
+    expect(config.recordingEnabled).toBe(false);
+  });
+
+  it('accepts recordingEnabled true (owner opt-in)', () => {
+    const config = channelConfigSchema.parse({
+      type: 'voice',
+      provider: 'xai',
+      phoneNumber: '+493022334455',
+      dispatchSigningSecretEncrypted: 'v1:nonce:cipher',
+      recordingEnabled: true,
+    });
+    if (config.type !== 'voice') throw new Error('expected voice config');
+    expect(config.recordingEnabled).toBe(true);
   });
 
   it('parses keyterms and transfer number, stripping legacy behavioral keys (0011)', () => {

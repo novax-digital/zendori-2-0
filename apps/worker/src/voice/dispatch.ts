@@ -32,6 +32,8 @@ interface RingingCallRow {
   channel_id: string;
   conversation_id: string;
   created_at: string;
+  /** Webhook-captured extras, e.g. twilio_call_sid for per-call recording. */
+  metadata: Record<string, unknown> | null;
 }
 
 export interface VoiceDispatchHandle {
@@ -86,7 +88,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       .update({ status: 'connecting', claimed_at: new Date().toISOString() })
       .eq('id', voiceCallId)
       .eq('status', 'ringing')
-      .select('id, provider_call_id, org_id, channel_id, conversation_id, created_at');
+      .select('id, provider_call_id, org_id, channel_id, conversation_id, created_at, metadata');
     if (claimError) {
       if (!isMissingTable(claimError)) {
         logger.error({ voiceCallId, err: toErrorInfo(claimError) }, 'voice claim failed');
@@ -231,6 +233,26 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       logger.warn({ voiceCallId }, 'voice channel has no agent — falling back to intake mode');
     }
 
+    // Recording param: only when the owner opted in AND the operator creds are
+    // configured AND the webhook captured the Twilio CallSid. Missing pieces
+    // degrade cleanly to an unrecorded call (with a why-log for the operator).
+    let recording: { creds: { accountSid: string; authToken: string }; twilioCallSid: string } | null =
+      null;
+    if (configResult.data.recordingEnabled) {
+      const twilioCallSid =
+        typeof call.metadata?.twilio_call_sid === 'string' ? call.metadata.twilio_call_sid : null;
+      if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+        logger.warn({ voiceCallId }, 'recording enabled but TWILIO_* creds missing in worker env');
+      } else if (!twilioCallSid) {
+        logger.warn({ voiceCallId }, 'recording enabled but no X-Twilio-CallSid captured');
+      } else {
+        recording = {
+          creds: { accountSid: env.TWILIO_ACCOUNT_SID, authToken: env.TWILIO_AUTH_TOKEN },
+          twilioCallSid,
+        };
+      }
+    }
+
     const session = new CallSession({
       supabase,
       logger,
@@ -243,6 +265,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       channelConfig: configResult.data,
       agent,
       context: { companyName, contactName },
+      recording,
       onClosed: (providerCallId) => {
         sessions.delete(providerCallId);
       },

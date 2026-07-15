@@ -130,6 +130,13 @@ export const voiceChannelConfigSchema = z.object({
   /** tel:+E164 live-transfer target; absent ⇒ callback-ticket handoff only. */
   transferNumber: z.string().optional(),
   maxCallSeconds: z.number().int().positive().default(900),
+  /**
+   * Call recording (owner opt-in, default off). When on, the session speaks a
+   * mandatory recording notice (§201 StGB: both-party consent) before the
+   * greeting, starts a dual-channel recording at Twilio, and the post-call job
+   * moves the audio to Supabase Storage (EU) and deletes it at Twilio.
+   */
+  recordingEnabled: z.boolean().default(false),
   connectionState: z.enum(['active', 'needs_reconnect']).default('active'),
 });
 

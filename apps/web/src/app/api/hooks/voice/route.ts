@@ -149,6 +149,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const callId = parsed.data.data.call_id;
   const from = sipHeaderNumber(parsed.data.data.sip_headers, 'From');
   const to = sipHeaderNumber(parsed.data.data.sip_headers, 'To');
+  // Twilio stamps its CallSid as a SIP header on trunk originations; the worker
+  // needs it to start a per-call recording (recordingEnabled channels).
+  const twilioCallSid =
+    parsed.data.data.sip_headers.find((h) => h.name.toLowerCase() === 'x-twilio-callsid')?.value ??
+    null;
 
   // Cross-check the dialed number against the channel's registered number.
   if (to && to !== config.phoneNumber) {
@@ -213,6 +218,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     from_number: from,
     to_number: to ?? config.phoneNumber,
     status: 'ringing',
+    ...(twilioCallSid ? { metadata: { twilio_call_sid: twilioCallSid } } : {}),
   });
   if (callError) {
     await admin.from('conversations').delete().eq('id', conversationId).eq('org_id', orgId);
