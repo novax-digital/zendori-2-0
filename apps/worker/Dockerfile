@@ -12,6 +12,7 @@ COPY apps/worker/package.json apps/worker/
 COPY packages/core/package.json packages/core/
 COPY packages/channels/package.json packages/channels/
 COPY packages/ai/package.json packages/ai/
+COPY packages/integrations/package.json packages/integrations/
 
 RUN pnpm install --frozen-lockfile --filter @zendori/worker...
 
