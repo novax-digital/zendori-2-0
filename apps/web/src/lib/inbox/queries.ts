@@ -173,17 +173,27 @@ async function attachMessageAttachments(
     );
   const rows = (data ?? []) as unknown as AttachmentRow[];
 
-  // Sign all paths in one batch and force a download disposition: a signed URL
-  // must never let a browser inline-render an uploaded HTML/SVG payload.
+  // Force a download disposition by default: a signed URL must never let a
+  // browser inline-render an uploaded HTML/SVG payload. Audio is the exception —
+  // it must stream inline for the in-conversation player, and an audio payload
+  // cannot carry executable HTML/SVG (the stored content-type governs render).
   const admin = createSupabaseAdminClient();
   const signedUrlByPath = new Map<string, string>();
   if (admin && rows.length > 0) {
-    const { data: signed } = await admin.storage.from('attachments').createSignedUrls(
-      rows.map((row) => row.storage_path),
-      3600,
-      { download: true }
-    );
-    for (const entry of signed ?? []) {
+    const audioPaths = rows.filter((r) => r.mime.startsWith('audio/')).map((r) => r.storage_path);
+    const downloadPaths = rows
+      .filter((r) => !r.mime.startsWith('audio/'))
+      .map((r) => r.storage_path);
+    const storage = admin.storage.from('attachments');
+    const [downloadSigned, audioSigned] = await Promise.all([
+      downloadPaths.length > 0
+        ? storage.createSignedUrls(downloadPaths, 3600, { download: true })
+        : Promise.resolve({ data: [] }),
+      audioPaths.length > 0
+        ? storage.createSignedUrls(audioPaths, 3600)
+        : Promise.resolve({ data: [] }),
+    ]);
+    for (const entry of [...(downloadSigned.data ?? []), ...(audioSigned.data ?? [])]) {
       if (entry.path && entry.signedUrl) signedUrlByPath.set(entry.path, entry.signedUrl);
     }
   }

@@ -87,6 +87,13 @@ export class CallSession {
   private sawAudioDelta = false;
   /** Tool calls collected for the current response (flushed on response.done). */
   private pendingToolCalls: { callId: string; name: string; rawArguments: string }[] = [];
+  /**
+   * Set when the §201 recording notice was spoken and the greeting must follow.
+   * The greeting response.create is deferred until the notice's response.done —
+   * sending it while the force_message turn is still active gets it dropped,
+   * leaving dead air until the caller speaks.
+   */
+  private greetPending = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -290,10 +297,13 @@ export class CallSession {
       if (this.p.recording) {
         this.send(forceMessageEvent(RECORDING_NOTICE_TEXT));
         void this.startRecording(this.p.recording);
+        // Defer the greeting to the notice's response.done — sending it now,
+        // while the force_message turn is still active, drops it.
+        this.greetPending = true;
+      } else {
+        // Greet the caller (first activation only — a rejoin must not re-greet).
+        this.send(responseCreateEvent());
       }
-
-      // Greet the caller (first activation only — a rejoin must not re-greet).
-      this.send(responseCreateEvent());
     }
 
     // Ping is per-connection: clear a previous connection's timer before re-arming.
@@ -333,6 +343,13 @@ export class CallSession {
       await this.insertMessage('out', 'bot', this.botBuffer.trim());
       this.botBuffer = '';
       this.sawAudioDelta = false;
+    }
+
+    // 1a. The §201 notice just finished — now greet, back-to-back, no dead air.
+    if (this.greetPending && this.state === 'active') {
+      this.greetPending = false;
+      this.send(responseCreateEvent());
+      return; // the notice carries no tool calls
     }
 
     // 2. Execute collected tool calls (possibly several in parallel), answer

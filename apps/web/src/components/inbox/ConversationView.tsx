@@ -67,24 +67,40 @@ export default function ConversationView({ detail }: { detail: ConversationDetai
                     gap: '0.2rem',
                   }}
                 >
-                  {message.attachments.map((attachment) => (
-                    <span
-                      key={attachment.id}
-                      style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}
-                    >
-                      📎{' '}
-                      {attachment.url ? (
-                        <a href={attachment.url} target="_blank" rel="noreferrer" download>
-                          {attachment.filename}
-                        </a>
-                      ) : (
-                        <span>{attachment.filename}</span>
-                      )}{' '}
-                      <span style={{ color: 'var(--text-muted)' }}>
-                        ({formatBytes(attachment.size)})
+                  {message.attachments.map((attachment) =>
+                    attachment.mime.startsWith('audio/') && attachment.url ? (
+                      <span
+                        key={attachment.id}
+                        style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
+                      >
+                        <audio controls preload="none" src={attachment.url} style={{ width: '100%' }}>
+                          <a href={attachment.url} target="_blank" rel="noreferrer">
+                            {attachment.filename}
+                          </a>
+                        </audio>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          🎧 {attachment.filename} ({formatBytes(attachment.size)})
+                        </span>
                       </span>
-                    </span>
-                  ))}
+                    ) : (
+                      <span
+                        key={attachment.id}
+                        style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}
+                      >
+                        📎{' '}
+                        {attachment.url ? (
+                          <a href={attachment.url} target="_blank" rel="noreferrer" download>
+                            {attachment.filename}
+                          </a>
+                        ) : (
+                          <span>{attachment.filename}</span>
+                        )}{' '}
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          ({formatBytes(attachment.size)})
+                        </span>
+                      </span>
+                    )
+                  )}
                 </div>
               ) : null}
               <div className="inbox-msg-meta">

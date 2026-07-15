@@ -447,10 +447,29 @@ describe('CallSession protocol', () => {
       wsUrl: `ws://127.0.0.1:${port}`,
     });
     session.start();
-    await completeHandshake();
+    // Handshake, but the greeting is DEFERRED when recording: session.updated
+    // triggers the §201 notice force_message, not the greeting.
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
 
-    // The §201 consent notice is a force_message and must precede the greeting
-    // response.create in the outbound frame order.
+    // The §201 consent notice is a force_message spoken FIRST …
+    await waitFor(() =>
+      received.find(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'force_message'
+      )
+    );
+    // … and the greeting must NOT be sent yet — it waits for the notice's
+    // response.done (sending it mid-force_message would drop it → dead air).
+    expect(received.find((e) => e.type === 'response.create')).toBeUndefined();
+
+    // The notice turn completes → the greeting fires now, back-to-back.
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.done' });
+    await waitFor(() => received.find((e) => e.type === 'response.create'));
+
+    // Frame order: notice force_message precedes the greeting response.create.
     const forceIdx = received.findIndex(
       (e) =>
         e.type === 'conversation.item.create' &&
