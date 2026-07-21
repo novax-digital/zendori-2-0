@@ -33,9 +33,10 @@ import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from '.
 
 // Expectation-setting on purpose (0018): after a successful SIP REFER we cannot
 // observe ring-no-answer — the promise of a callback is the caller-side safety
-// net when nobody picks up.
+// net when nobody picks up. Kept SHORT: the REFER waits for the spoken duration
+// (playback grace below), so every extra word delays the actual transfer.
 const TRANSFER_HOLD_TEXT =
-  'Einen Moment bitte, ich verbinde Sie mit einem Mitarbeiter. Sollten Sie niemanden erreichen, melden wir uns schnellstmöglich bei Ihnen zurück.';
+  'Einen Moment, ich verbinde Sie. Falls niemand erreichbar ist, melden wir uns zurück.';
 /** Mandatory §201-StGB consent notice — spoken verbatim BEFORE the greeting. */
 const RECORDING_NOTICE_TEXT =
   'Dieses Gespräch wird zur Qualitätssicherung aufgezeichnet.';
@@ -90,7 +91,7 @@ export interface CallSessionParams {
   wsUrl?: string;
   /** Test seam: overrides the greeting-fallback delay (defaults to GREET_FALLBACK_MS). */
   greetFallbackMs?: number;
-  /** Test seam: overrides the post-end_call playback grace before hangup. */
+  /** Test seam: overrides the playback graces (end_call→hangup, hold→REFER). */
   hangupGraceMs?: number;
 }
 
@@ -462,6 +463,18 @@ export class CallSession {
         // and only mark 'transferred' once the REFER succeeded. On failure the
         // session stays active and the model falls back to the callback flow.
         this.send(forceMessageEvent(TRANSFER_HOLD_TEXT));
+        // Playback-drain grace (same class as the end_call farewell cutoff,
+        // live 2026-07-21): the REFER executes in milliseconds and would yank
+        // the audio path into ringing mid-sentence. Wait roughly the spoken
+        // duration of the hold text (~14 chars/s) before transferring.
+        const holdMs =
+          this.p.hangupGraceMs ?? Math.min(9_000, TRANSFER_HOLD_TEXT.length * 70 + 800);
+        await new Promise((resolve) => setTimeout(resolve, holdMs));
+        // Caller may have hung up while the hold text played — the close event
+        // is queued behind this handler, so check the socket, not just state.
+        if (this.state !== 'active' || this.ws?.readyState !== WebSocket.OPEN) {
+          return;
+        }
         try {
           await referCall(this.p.apiKey, this.p.providerCallId, `tel:${transferNumber}`);
           this.state = 'ending';
