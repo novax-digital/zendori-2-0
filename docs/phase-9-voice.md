@@ -92,6 +92,12 @@ werden jetzt geloggt (`voice ws closed`).
 2. Elastic SIP Trunk mit Origination-URI `sip:sip.voice.x.ai;transport=tls`
    (`trunking.twilio.com/v1/Trunks`) → `TWILIO_VOICE_TRUNK_SID`.
    ⚠️ `sips:`-Schema lehnt Twilio ab; TLS über den `;transport=tls`-Parameter.
+   ⚠️ Außerdem `secure=true` (SRTP — ohne: Totenstille) und **`TransferMode=enable-all`**
+   + `TransferCallerId=from-transferee`: Twilio lehnt SIP REFER standardmäßig ab
+   (`disable-all`) — der xAI-Live-Transfer (§6 Handoff) schlug damit fehl inkl.
+   Piepton beim Anrufer (live 2026-07-21). Der Mitarbeiter sieht mit
+   from-transferee die Nummer des ANRUFERS. Kostenhinweis: das transferierte
+   Bein ist eine normale Twilio-Outbound-Minute.
 
 **Pro Kunde (CLI):**
 
