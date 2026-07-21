@@ -4,6 +4,8 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import KnowledgeTabs, { type KbTabKey } from '@/components/KnowledgeTabs';
 import KbGallery, { type KbTileMeta } from '@/components/KbGallery';
+import KbFileUpload from '@/components/KbFileUpload';
+import DangerDeleteKb from '@/components/DangerDeleteKb';
 import {
   addFileSource,
   addTextSource,
@@ -179,26 +181,10 @@ export default async function KnowledgePage({
       panel: (
         <>
           <p style={helpStyle}>
-            PDF, DOCX, TXT oder MD, maximal 15 MB. Der Text wird aus der Datei extrahiert und
-            indiziert.
+            PDF, DOCX, TXT oder MD, maximal 15 MB pro Datei. Mehrere Dateien auf einmal möglich —
+            der Text wird aus jeder Datei extrahiert und indiziert.
           </p>
-          <form className="stack" action={addFileSource} style={{ maxWidth: '32rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
-            <div>
-              <label htmlFor={`file-${kb.id}`}>Datei</label>
-              <input
-                id={`file-${kb.id}`}
-                name="file"
-                type="file"
-                accept=".pdf,.docx,.txt,.md"
-                required
-              />
-            </div>
-            <button className="primary" type="submit">
-              Datei hochladen
-            </button>
-          </form>
+          <KbFileUpload org={orgId} knowledgeBaseId={kb.id} action={addFileSource} />
         </>
       ),
     },
@@ -309,15 +295,10 @@ export default async function KnowledgePage({
           <h2>Wissensdatenbank löschen</h2>
           <p style={helpStyle}>
             Löscht „{kb.name}" mitsamt {kbSources.length === 1 ? 'ihrer Quelle' : 'allen Quellen'}{' '}
-            und deren Index — Agenten verlieren die Verknüpfung. Nicht rückgängig machbar.
+            und deren Index — Agenten verlieren die Verknüpfung. Nicht rückgängig machbar, daher
+            nur nach Eingabe deines aktuellen Passworts.
           </p>
-          <form action={deleteKnowledgeBase}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="id" value={kb.id} />
-            <button className="ghost" type="submit">
-              „{kb.name}" löschen
-            </button>
-          </form>
+          <DangerDeleteKb org={orgId} kbId={kb.id} kbName={kb.name} action={deleteKnowledgeBase} />
         </div>
       </div>
     );

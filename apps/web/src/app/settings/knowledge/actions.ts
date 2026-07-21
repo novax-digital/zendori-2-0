@@ -2,9 +2,11 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { publicSupabaseEnv } from '@/lib/env';
 
 const KB_BUCKET = 'kb-files';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -22,6 +24,22 @@ function knowledgeUrl(org: string, message?: { error?: string; notice?: string }
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/knowledge?${params.toString()}`;
+}
+
+/**
+ * Verifies the caller re-entered their own current password — a deliberate gate
+ * for destructive actions (§8.2 spirit). Uses a THROWAWAY client with session
+ * persistence off, so a successful sign-in never rotates the real session cookie.
+ * Returns true only when email + password authenticate.
+ */
+async function verifyCurrentPassword(email: string, password: string): Promise<boolean> {
+  if (!email || password.length === 0) return false;
+  const { url, anonKey } = publicSupabaseEnv();
+  const throwaway = createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { error } = await throwaway.auth.signInWithPassword({ email, password });
+  return !error;
 }
 
 /** Basename, restricted to a safe charset so it can never escape the org/source prefix. */
@@ -167,6 +185,55 @@ export async function addTextSource(formData: FormData): Promise<void> {
 
 const addFileMetaSchema = z.object({ org: z.uuid(), knowledgeBaseId: z.uuid() });
 
+/** Uploads a single already-validated file as its own source. Returns the failed filename, or null on success. */
+async function uploadOneFile(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  admin: NonNullable<ReturnType<typeof createSupabaseAdminClient>>,
+  org: string,
+  knowledgeBaseId: string,
+  file: File
+): Promise<string | null> {
+  const filename = sanitizeFilename(file.name);
+  const { data: inserted, error } = await supabase
+    .from('kb_sources')
+    .insert({
+      org_id: org,
+      knowledge_base_id: knowledgeBaseId,
+      type: 'file',
+      uri: filename,
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+  if (error || !inserted) return filename;
+  const sourceId = (inserted as { id: string }).id;
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const { error: uploadError } = await admin.storage
+    .from(KB_BUCKET)
+    .upload(`${org}/${sourceId}/${filename}`, buffer, {
+      contentType: file.type || 'application/octet-stream',
+      upsert: true,
+    });
+  if (uploadError) {
+    await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
+    return filename;
+  }
+
+  // TOCTOU vs deleteKnowledgeBase (see addTextSource).
+  const { data: stillThere } = await supabase
+    .from('kb_sources')
+    .select('id')
+    .eq('org_id', org)
+    .eq('id', sourceId)
+    .maybeSingle();
+  if (!stillThere) {
+    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
+    return filename;
+  }
+  return null;
+}
+
 export async function addFileSource(formData: FormData): Promise<void> {
   const parsedMeta = addFileMetaSchema.safeParse({
     org: formData.get('org'),
@@ -181,18 +248,26 @@ export async function addFileSource(formData: FormData): Promise<void> {
   }
   const { org, knowledgeBaseId } = parsedMeta.data;
 
-  const file = formData.get('file');
-  if (!(file instanceof File) || file.size === 0) {
-    redirect(knowledgeUrl(org, { error: 'Bitte eine Datei auswählen.' }));
+  // Multi-file: the uploader posts every picked/dropped file under `file`.
+  const files = formData.getAll('file').filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) {
+    redirect(knowledgeUrl(org, { error: 'Bitte mindestens eine Datei auswählen.' }));
   }
-  if (file.size > MAX_FILE_BYTES) {
-    redirect(knowledgeUrl(org, { error: 'Die Datei ist zu groß (max. 15 MB).' }));
+
+  // Validate all up front — reject the whole batch on a bad file so nothing is
+  // silently dropped (the user picked it on purpose).
+  const rejected: string[] = [];
+  for (const file of files) {
+    const ext = fileExtension(sanitizeFilename(file.name));
+    if (file.size > MAX_FILE_BYTES) rejected.push(`${file.name} (zu groß, max. 15 MB)`);
+    else if (!ALLOWED_EXTENSIONS.includes(ext as AllowedExtension))
+      rejected.push(`${file.name} (Format nicht unterstützt)`);
   }
-  const filename = sanitizeFilename(file.name);
-  const ext = fileExtension(filename);
-  if (!ALLOWED_EXTENSIONS.includes(ext as AllowedExtension)) {
+  if (rejected.length > 0) {
     redirect(
-      knowledgeUrl(org, { error: 'Nicht unterstütztes Format. Erlaubt: PDF, DOCX, TXT, MD.' })
+      knowledgeUrl(org, {
+        error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD bis 15 MB.`,
+      })
     );
   }
 
@@ -202,48 +277,24 @@ export async function addFileSource(formData: FormData): Promise<void> {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { data: inserted, error } = await supabase
-    .from('kb_sources')
-    .insert({
-      org_id: org,
-      knowledge_base_id: knowledgeBaseId,
-      type: 'file',
-      uri: filename,
-      status: 'pending',
-    })
-    .select('id')
-    .single();
-  if (error || !inserted) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
-  }
-  const sourceId = (inserted as { id: string }).id;
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const { error: uploadError } = await admin.storage
-    .from(KB_BUCKET)
-    .upload(`${org}/${sourceId}/${filename}`, buffer, {
-      contentType: file.type || 'application/octet-stream',
-      upsert: true,
-    });
-  if (uploadError) {
-    await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
-    redirect(knowledgeUrl(org, { error: 'Datei konnte nicht hochgeladen werden.' }));
+  const failures: string[] = [];
+  for (const file of files) {
+    const failed = await uploadOneFile(supabase, admin, org, knowledgeBaseId, file);
+    if (failed) failures.push(failed);
   }
 
-  // TOCTOU vs deleteKnowledgeBase (see addTextSource).
-  const { data: stillThere } = await supabase
-    .from('kb_sources')
-    .select('id')
-    .eq('org_id', org)
-    .eq('id', sourceId)
-    .maybeSingle();
-  if (!stillThere) {
-    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
-  }
-
+  const ok = files.length - failures.length;
   revalidatePath('/settings/knowledge');
-  redirect(knowledgeUrl(org, { notice: 'Datei hochgeladen — die Indizierung startet in Kürze.' }));
+  if (ok === 0) {
+    redirect(knowledgeUrl(org, { error: 'Keine Datei konnte hochgeladen werden.' }));
+  }
+  const noticeCount = ok === 1 ? 'Datei hochgeladen' : `${ok} Dateien hochgeladen`;
+  const suffix = failures.length > 0 ? ` (${failures.length} fehlgeschlagen)` : '';
+  redirect(
+    knowledgeUrl(org, {
+      notice: `${noticeCount}${suffix} — die Indizierung startet in Kürze.`,
+    })
+  );
 }
 
 // --- knowledge bases (0012) --------------------------------------------------------
@@ -284,28 +335,43 @@ export async function createKnowledgeBase(formData: FormData): Promise<void> {
   redirect(knowledgeUrl(org, { notice: `Wissensdatenbank „${name}" angelegt.` }));
 }
 
-const deleteKbSchema = z.object({ org: z.uuid(), id: z.uuid() });
+const deleteKbSchema = z.object({
+  org: z.uuid(),
+  id: z.uuid(),
+  password: z.string().min(1),
+});
 
 /**
  * Deletes a knowledge base INCLUDING all its sources and chunks (FK cascade).
- * Mirrors deleteSource's isolation pattern: the user-scoped delete proves
- * membership before any service-role storage cleanup runs (§7).
+ * Guarded by a current-password re-entry (irreversible action). Mirrors
+ * deleteSource's isolation pattern: the user-scoped delete proves membership
+ * before any service-role storage cleanup runs (§7).
  */
 export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
   const parsed = deleteKbSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
+    password: formData.get('password'),
   });
   if (!parsed.success) {
     redirect(
       knowledgeUrl(textField(formData.get('org')), {
-        error: 'Wissensdatenbank konnte nicht gelöscht werden.',
+        error: 'Bitte zur Bestätigung dein aktuelles Passwort eingeben.',
       })
     );
   }
-  const { org, id } = parsed.data;
+  const { org, id, password } = parsed.data;
 
   const supabase = await createSupabaseServerClient();
+
+  // Password gate: prove it is really the account owner before an irreversible
+  // delete. Reuses the signed-in user's email; only the password comes from the form.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.email || !(await verifyCurrentPassword(user.email, password))) {
+    redirect(knowledgeUrl(org, { error: 'Falsches Passwort — Löschung abgebrochen.' }));
+  }
 
   // Collect the source ids BEFORE the cascade removes them (user-scoped: RLS
   // proves membership; a foreign org/id yields zero rows and a harmless no-op).

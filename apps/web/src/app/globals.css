@@ -305,7 +305,7 @@ a:hover {
   border-radius: var(--r);
   color: var(--sidebar-text);
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
   transition:
@@ -691,6 +691,133 @@ button.ghost:hover {
   background: var(--brand-50);
   border-color: var(--brand-300);
   transform: translateY(-1px);
+}
+
+button.danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 0.6rem 1.2rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    filter 0.12s ease,
+    transform 0.12s ease;
+}
+button.danger:hover {
+  filter: brightness(0.94);
+  transform: translateY(-1px);
+}
+button.danger:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+/* --- KB drag-and-drop uploader --- */
+.kb-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  text-align: center;
+  padding: 1.5rem 1rem;
+  border: 1.5px dashed var(--brand-200);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease;
+}
+.kb-dropzone:hover {
+  border-color: var(--brand-300);
+  background: var(--brand-50);
+}
+.kb-dropzone--active {
+  border-color: var(--brand-400, var(--brand-300));
+  background: var(--brand-50);
+  border-style: solid;
+}
+.kb-dropzone svg {
+  color: var(--brand-600);
+}
+.kb-dropzone-title {
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+.kb-dropzone-link {
+  color: var(--brand-600);
+  font-weight: 600;
+}
+.kb-dropzone-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.kb-filelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.kb-fileitem {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.kb-fileitem-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.kb-fileitem-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.kb-fileitem-size--bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+.kb-fileitem-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.kb-fileitem-remove:hover {
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 
 .error {
