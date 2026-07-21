@@ -184,3 +184,63 @@ export async function addMember(formData: FormData): Promise<void> {
   revalidatePath(`/admin/users/${orgId}`);
   redirect(orgUrl(orgId, { notice: 'Mitglied hinzugefügt.' }));
 }
+
+// --- channel quotas per customer (0017) --------------------------------------------
+
+const CHANNEL_KINDS = ['form', 'email', 'whatsapp', 'voice', 'chat', 'test'] as const;
+
+const setLimitsSchema = z.object({ orgId: z.uuid() });
+
+/**
+ * Saves the org's channel quotas. Empty input = unlimited (row deleted);
+ * a number (including 0) upserts the row. Service-role writes — the table has
+ * deliberately no client write policies.
+ */
+export async function setChannelLimits(formData: FormData): Promise<void> {
+  await requirePlatformAdmin();
+
+  const parsed = setLimitsSchema.safeParse({ orgId: textField(formData.get('orgId')) });
+  if (!parsed.success) {
+    redirect(usersUrl({ error: 'Organisation wurde nicht gefunden.' }));
+  }
+  const { orgId } = parsed.data;
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) redirect(orgUrl(orgId, { error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+
+  // Validate ALL inputs before the first write — a mid-loop rejection must not
+  // leave half the kinds already saved (audit 2026-07-21).
+  const parsedLimits: { kind: (typeof CHANNEL_KINDS)[number]; value: number | null }[] = [];
+  for (const kind of CHANNEL_KINDS) {
+    const raw = textField(formData.get(`limit_${kind}`));
+    if (raw === '') {
+      parsedLimits.push({ kind, value: null });
+      continue;
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 0 || value > 999) {
+      redirect(
+        orgUrl(orgId, { error: 'Kontingente müssen leer (unbegrenzt) oder ganze Zahlen 0–999 sein.' })
+      );
+    }
+    parsedLimits.push({ kind, value });
+  }
+  for (const { kind, value } of parsedLimits) {
+    const { error } =
+      value === null
+        ? await admin
+            .from('org_channel_limits')
+            .delete()
+            .eq('org_id', orgId)
+            .eq('channel_kind', kind)
+        : await admin
+            .from('org_channel_limits')
+            .upsert({ org_id: orgId, channel_kind: kind, max_count: value });
+    if (error) {
+      redirect(orgUrl(orgId, { error: 'Kontingente konnten nicht gespeichert werden.' }));
+    }
+  }
+
+  revalidatePath(`/admin/users/${orgId}`);
+  redirect(orgUrl(orgId, { notice: 'Kanal-Kontingente gespeichert.' }));
+}

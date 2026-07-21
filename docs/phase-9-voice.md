@@ -28,15 +28,57 @@ der Worker hält die WebSocket selbst, Tools sind worker-interne Funktionen.
 Einzige neue Route: `POST /api/hooks/voice`. Fallback für verpasste Broadcasts:
 3s-Sweep über `status='ringing'`; nach 30 s → `missed` + Inbox-Hinweis.
 
-## Agent-Modi (pro Kanal, Settings → Kanäle → Telefon)
+## Voice-Agenten (0015) und Agent-Modi
 
-- **answer** — beantwortet Fragen RAG-gestützt (kb_search), kann Tickets aufnehmen und übergeben.
+Agenten haben seit 0015 einen **Typ**: `voice` (bedient NUR Voice-Kanäle) oder `text`
+(alle anderen). Voice-Agenten kennen genau zwei Verhalten (DB-Constraint):
+
+- **autopilot** (= Session-Modus `answer`) — beantwortet Fragen RAG-gestützt (kb_search),
+  kann Tickets aufnehmen und übergeben.
 - **intake_only** — reine Annahme: begrüßen → Name/Rückrufnummer/Anliegen erfragen →
   zusammenfassen/bestätigen → `create_ticket` → verabschieden. Kein kb_search.
 
-Weitere Kanal-Einstellungen: Begrüßung, Zusatz-Anweisungen, Stimme (eve/ara/rex/sal/leo
-oder Custom-Voice-Id), Fachbegriffe (Keyterms, verbessern deutsche ASR), Sprechtempo,
-Transfer-Nummer (gesetzt ⇒ Live-Transfer per REST `refer`; leer ⇒ Rückruf-Ticket).
+DB-Trigger erzwingen Typ-Match bei der Kanal-Zuweisung und Typ-Unveränderlichkeit,
+solange Kanäle zugewiesen sind. Der Dispatch fällt bei Alt-Daten (Text-Agent auf
+Voice-Kanal) auf den neutralen Intake-Modus zurück.
+
+## Kanal-Einstellungen (Settings → Kanäle → Voice)
+
+- **Begrüßung (Welcome Message)** — wird wörtlich per `force_message` gesprochen
+  (Live-Evidenz 2026-07-21: force_message-Turns streamen Transkript-Deltas +
+  `response.done`, landen also normal in der Inbox). Checkbox „Anrufer darf die
+  Begrüßung unterbrechen" = das `interruptible`-Flag (Default aus). Leer ⇒ das Modell
+  begrüßt frei (`response.create`). Bei aktivierter Aufzeichnung: §201-Hinweis
+  (force_message) → dessen `response.done` (Fallback-Timer 6 s) → Begrüßung.
+  UI-Empfehlungstext je nach Agent-Modus („Ich nehme Ihr Anliegen auf …" bei Annahme).
+- **Stimme** — eve/ara/rex/sal/leo (oder Custom-Voice-Id) mit ▶-Hörprobe im UI.
+  Hörproben: `apps/worker/scripts/generate-voice-samples.ts` (echte xAI-Realtime-Session
+  pro Stimme) → `apps/web/public/voice-samples/<voice>.wav`.
+- **Sprache** — `languageHint` (de/en/fr/es/it/nl/pl/tr): ASR-Hint UND Gesprächssprache
+  (Prompt-Block „Führe das Gespräch auf …, wechsle wenn der Anrufer wechselt").
+- Fachbegriffe (Keyterms), Sprechtempo, Transfer-Nummer (gesetzt ⇒ Live-Transfer per
+  REST `refer`; leer ⇒ Rückruf-Ticket), Aufzeichnung (opt-in, §201-Hinweis).
+
+Aussprache-Regel (Style-Rules, 2026-07-21 verschärft): englische Begriffe werden mit
+englischer Aussprache gesprochen — mit expliziter Beispielliste im Prompt.
+
+## Telefonnummern-Verwaltung (0016) + Kanal-Kontingente (0017)
+
+- **Kunde** (Settings → Telefonnummern): sieht seine Nummern, beantragt neue
+  (Typ/Wunschregion/Notiz, Owner-only per RLS), zieht offene Anfragen zurück.
+- **Operator** (Admin → Nummern): offene Anfragen mit fertigem CLI-Kommando; erfüllen mit
+  `provision-voice-number.ts --request <id> --name "…"` — kauft/registriert und setzt die
+  Anfrage auf `active` (inkl. Inventar-Feldern e164/SIDs/channel_id).
+- **Kontingente** (Admin → Kunde): max. Kanäle je Kanalart (form/email/whatsapp/voice/
+  chat/test); leer = unbegrenzt, 0 = gesperrt. App-seitige Vorprüfung + BEFORE-INSERT-
+  Trigger als Backstop.
+
+## Anruf-Ende (Live-Evidenz 2026-07-21)
+
+xAI schließt den WebSocket beim Auflegen des Anrufers **abnormal** (non-1000). Ablauf:
+ein Rejoin-Versuch; wird der verweigert und der Anruf hatte eine aktive Phase ⇒
+`completed`/`remote_close` (vorher fälschlich `failed`/`reconnect_failed`). Close-Codes
+werden jetzt geloggt (`voice ws closed`).
 
 ## Nummern-Provisionierung (Operator)
 

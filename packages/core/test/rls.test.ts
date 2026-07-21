@@ -564,6 +564,227 @@ describe.skipIf(!enabled)('RLS: platform_admins', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: agent kinds, phone numbers, channel limits (0015–0017)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let member: SupabaseClient;
+  let ownerId: string;
+  let memberId: string;
+  let orgId: string;
+  let foreignOrgId: string;
+  const ownerEmail = `kinds-owner-${randomUUID()}@test.zendori.dev`;
+  const memberEmail = `kinds-member-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, memberEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    memberId = created[1]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Kinds Org', slug: `kinds-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: ownerId, role: 'owner' },
+      { org_id: orgId, user_id: memberId, role: 'agent' },
+    ]);
+
+    const { data: foreignOrg } = await admin
+      .from('organizations')
+      .insert({ name: 'Kinds Foreign', slug: `kinds-foreign-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    foreignOrgId = foreignOrg!.id as string;
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    member = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+    expect(
+      (await member.auth.signInWithPassword({ email: memberEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (foreignOrgId) await admin.from('organizations').delete().eq('id', foreignOrgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+    if (memberId) await admin.auth.admin.deleteUser(memberId);
+  });
+
+  it('voice agents reject draft_only (check constraint), accept intake_only', async () => {
+    const { error: draftError } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Voice Draft', kind: 'voice', mode: 'draft_only' });
+    expect(draftError).not.toBeNull();
+
+    const { error: intakeError } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Voice Intake', kind: 'voice', mode: 'intake_only' });
+    expect(intakeError).toBeNull();
+  });
+
+  it('kind/type guard: text agent cannot serve a voice channel and vice versa', async () => {
+    const { data: voiceChannel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'voice', name: 'Voice Guard', config: {} })
+      .select('id')
+      .single();
+    // widget config (kind 'chat'), NOT a test channel — the limits test below
+    // relies on the 'test' kind count starting at zero in this org.
+    const { data: chatChannel } = await admin
+      .from('channels')
+      .insert({
+        org_id: orgId,
+        type: 'chat',
+        name: 'Chat Guard',
+        config: { widget: true, public_token: 'guard' },
+      })
+      .select('id')
+      .single();
+    const { data: textAgent } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Text Agent', kind: 'text', mode: 'draft_only' })
+      .select('id')
+      .single();
+    const { data: voiceAgent } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Voice Agent', kind: 'voice', mode: 'autopilot' })
+      .select('id')
+      .single();
+
+    // text agent on voice channel → rejected (also for the service role)
+    const { error: mismatch1 } = await admin
+      .from('channels')
+      .update({ agent_id: textAgent!.id })
+      .eq('id', voiceChannel!.id);
+    expect(mismatch1).not.toBeNull();
+
+    // voice agent on chat channel → rejected
+    const { error: mismatch2 } = await admin
+      .from('channels')
+      .update({ agent_id: voiceAgent!.id })
+      .eq('id', chatChannel!.id);
+    expect(mismatch2).not.toBeNull();
+
+    // matching kinds → accepted (owner path, as the app does it)
+    const { error: okAssign } = await owner
+      .from('channels')
+      .update({ agent_id: voiceAgent!.id })
+      .eq('id', voiceChannel!.id);
+    expect(okAssign).toBeNull();
+
+    // kind is immutable while channels reference the agent
+    const { error: kindFlip } = await admin
+      .from('agents')
+      .update({ kind: 'text' })
+      .eq('id', voiceAgent!.id);
+    expect(kindFlip).not.toBeNull();
+  });
+
+  it('phone_numbers: owners file requests, members cannot, provider fields are locked', async () => {
+    // owner files a plain request → allowed
+    const { data: request, error: ownerInsert } = await owner
+      .from('phone_numbers')
+      .insert({ org_id: orgId, number_type: 'local', status: 'requested', requested_by: ownerId })
+      .select('id')
+      .single();
+    expect(ownerInsert).toBeNull();
+
+    // member cannot file requests (owner-only policy)
+    const { error: memberInsert } = await member
+      .from('phone_numbers')
+      .insert({ org_id: orgId, number_type: 'local', status: 'requested' });
+    expect(memberInsert).not.toBeNull();
+
+    // owner cannot smuggle provider fields / status past the policy
+    const { error: forgedInsert } = await owner
+      .from('phone_numbers')
+      .insert({ org_id: orgId, number_type: 'local', status: 'active', e164: '+4930111222' });
+    expect(forgedInsert).not.toBeNull();
+
+    // no client update policy: transitions are service-role only (0 rows)
+    const { data: updated } = await owner
+      .from('phone_numbers')
+      .update({ status: 'active' })
+      .eq('id', request!.id)
+      .select('id');
+    expect(updated ?? []).toHaveLength(0);
+
+    // member sees the org's requests; foreign orgs are blind
+    const { data: visible } = await member.from('phone_numbers').select('id').eq('org_id', orgId);
+    expect((visible ?? []).length).toBeGreaterThan(0);
+    await admin
+      .from('phone_numbers')
+      .insert({ org_id: foreignOrgId, number_type: 'local', status: 'requested' });
+    const { data: foreign } = await owner
+      .from('phone_numbers')
+      .select('id')
+      .eq('org_id', foreignOrgId);
+    expect(foreign).toHaveLength(0);
+
+    // owner may withdraw an open request
+    const { data: deleted } = await owner
+      .from('phone_numbers')
+      .delete()
+      .eq('id', request!.id)
+      .select('id');
+    expect(deleted).toHaveLength(1);
+  });
+
+  it('org_channel_limits: members read, clients cannot write, trigger enforces the cap', async () => {
+    // service role sets a limit of 1 test channel for the org
+    const { error: limitError } = await admin
+      .from('org_channel_limits')
+      .insert({ org_id: orgId, channel_kind: 'test', max_count: 1 });
+    expect(limitError).toBeNull();
+
+    // member sees the quota, but cannot write it (no client policies)
+    const { data: visible } = await member
+      .from('org_channel_limits')
+      .select('channel_kind, max_count')
+      .eq('org_id', orgId);
+    expect(visible).toHaveLength(1);
+    const { error: memberWrite } = await member
+      .from('org_channel_limits')
+      .insert({ org_id: orgId, channel_kind: 'chat', max_count: 99 });
+    expect(memberWrite).not.toBeNull();
+
+    // the BEFORE INSERT trigger blocks the second test channel…
+    const { error: first } = await owner
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Limit 1', config: { test: true } });
+    expect(first).toBeNull();
+    const { error: second } = await owner
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Limit 2', config: { test: true } });
+    expect(second).not.toBeNull();
+
+    // …while kinds without a limit row stay unlimited (widget chat ≠ test)
+    const { data: widgetRow, error: widget } = await owner
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Widget', config: { widget: true, public_token: 'tok' } })
+      .select('id')
+      .single();
+    expect(widget).toBeNull();
+
+    // …and a kind-flipping UPDATE cannot bypass the quota either (trigger
+    // fires on UPDATE OF type/config when the derived kind changes).
+    const { error: flip } = await owner
+      .from('channels')
+      .update({ config: { test: true } })
+      .eq('id', widgetRow!.id);
+    expect(flip).not.toBeNull();
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

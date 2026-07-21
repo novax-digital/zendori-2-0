@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
-import type { Channel } from '@zendori/core';
+import type { AgentKind, AgentMode, Channel, ChannelKind } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -15,20 +15,24 @@ import {
   setChannelAgent,
 } from './actions';
 import ChannelGallery, { type TileKey, type TileMeta } from '@/components/ChannelGallery';
+import VoicePicker from '@/components/VoicePicker';
+import GreetingSuggestion from '@/components/GreetingSuggestion';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
+import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
 
-type AgentOption = { id: string; name: string; is_active: boolean };
+type AgentOption = { id: string; name: string; is_active: boolean; kind: AgentKind; mode: AgentMode };
 
 async function listAgentOptions(orgId: string): Promise<AgentOption[]> {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('agents')
-    .select('id, name, is_active')
+    .select('id, name, is_active, kind, mode')
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
   return (data ?? []) as AgentOption[];
 }
+
 
 type WidgetChannelView = {
   id: string;
@@ -129,7 +133,9 @@ type VoiceChannelView = {
   name: string;
   phoneNumber: string;
   greeting: string;
+  greetingInterruptible: boolean;
   voice: string;
+  languageHint: string;
   keyterms: string;
   speechSpeed: number;
   transferNumber: string;
@@ -145,7 +151,9 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     provider?: unknown;
     phoneNumber?: unknown;
     greeting?: unknown;
+    greetingInterruptible?: unknown;
     voice?: unknown;
+    languageHint?: unknown;
     keyterms?: unknown;
     speechSpeed?: unknown;
     transferNumber?: unknown;
@@ -157,7 +165,9 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     name: channel.name,
     phoneNumber: config.phoneNumber,
     greeting: typeof config.greeting === 'string' ? config.greeting : '',
+    greetingInterruptible: config.greetingInterruptible === true,
     voice: typeof config.voice === 'string' ? config.voice : 'eve',
+    languageHint: typeof config.languageHint === 'string' ? config.languageHint : 'de',
     keyterms: Array.isArray(config.keyterms)
       ? config.keyterms.filter((k): k is string => typeof k === 'string').join(', ')
       : '',
@@ -168,6 +178,18 @@ function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     agentId: channel.agent_id ?? null,
   };
 }
+
+/** Conversation languages offered for voice channels (ASR hint + spoken language). */
+const VOICE_LANGUAGES: { code: string; label: string }[] = [
+  { code: 'de', label: 'Deutsch' },
+  { code: 'en', label: 'Englisch' },
+  { code: 'fr', label: 'Französisch' },
+  { code: 'es', label: 'Spanisch' },
+  { code: 'it', label: 'Italienisch' },
+  { code: 'nl', label: 'Niederländisch' },
+  { code: 'pl', label: 'Polnisch' },
+  { code: 'tr', label: 'Türkisch' },
+];
 
 const textareaStyle: CSSProperties = {
   width: '100%',
@@ -215,21 +237,27 @@ function ActiveToggle({
 /**
  * Per-channel agent assignment (0011). Its own <form> — must never be nested
  * inside another form (invalid HTML), so panels render it as a sibling.
+ * 0015: only agents of the matching kind are offered — voice channels take
+ * voice agents, all other channels take text agents.
  */
 function AgentSelect({
   orgId,
   channelId,
+  channelType,
   agentId,
   agents,
   disabled,
 }: {
   orgId: string;
   channelId: string;
+  channelType: Channel['type'];
   agentId: string | null;
   agents: AgentOption[];
   /** Non-owners see the assignment read-only (setChannelAgent is owner-gated). */
   disabled: boolean;
 }) {
+  const requiredKind: AgentKind = channelType === 'voice' ? 'voice' : 'text';
+  const eligible = agents.filter((a) => a.kind === requiredKind);
   return (
     <form
       action={setChannelAgent}
@@ -245,7 +273,7 @@ function AgentSelect({
         style={{ maxWidth: '18rem' }}
       >
         <option value="">— kein Agent (keine KI-Antworten) —</option>
-        {agents.map((agent) => (
+        {eligible.map((agent) => (
           <option key={agent.id} value={agent.id}>
             {agent.name}
             {agent.is_active ? '' : ' (pausiert)'}
@@ -270,10 +298,29 @@ export default async function ChannelsPage({
   const { orgId, orgs, role } = await requireActiveOrg(org);
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const isOwner = role === 'owner';
-  const [channels, agentOptions] = await Promise.all([
+  const [channels, agentOptions, limits] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),
+    loadChannelLimits(orgId),
   ]);
+
+  // Quotas (0017): no limit row = unlimited. `blocked` gates the create forms;
+  // a kind with limit 0 and no existing channels disappears from the gallery.
+  const kindCounts = countChannelsByKind(channels);
+  const quota = (kind: ChannelKind): { limit: number | null; count: number; blocked: boolean } => {
+    const limit = limits.get(kind) ?? null;
+    const count = kindCounts.get(kind) ?? 0;
+    return { limit, count, blocked: limit !== null && count >= limit };
+  };
+  const quotaNotice = (kind: ChannelKind): ReactNode => {
+    const q = quota(kind);
+    if (!q.blocked) return null;
+    return (
+      <p className="notice" style={{ marginTop: '0.5rem' }}>
+        Kontingent erreicht ({q.count} von {q.limit}). Für weitere Kanäle wende dich an Zendori.
+      </p>
+    );
+  };
 
   const widgetChannels = channels
     .map(toWidgetChannelView)
@@ -313,11 +360,13 @@ export default async function ChannelsPage({
   const tiles: TileMeta[] = [
     meta('form', 'Formular', 'Kontaktformulare beliebiger Websites — als Empfänger eintragen.', formChannels),
     meta('email', 'E-Mail', 'Bestehende Postfächer per Weiterleitung anbinden.', emailChannels),
-    meta('whatsapp', 'WhatsApp', 'Eine WhatsApp-Nummer je Kunde (Twilio).', whatsappChannels),
+    meta('whatsapp', 'WhatsApp', 'WhatsApp-Nummern deines Unternehmens (Twilio).', whatsappChannels),
     meta('voice', 'Voice', 'Telefon-Anrufe nimmt der KI-Sprachassistent entgegen.', voiceChannels),
     meta('chat', 'Chat', 'Embeddable Chat-Widget für deine Website.', widgetChannels),
     meta('test', 'Test', 'Nachrichten manuell einspeisen — zum Ausprobieren.', testChannels),
-  ];
+    // A kind locked to 0 with nothing provisioned is removed from the gallery
+    // entirely ("ausgebaut") — existing channels keep their tile visible.
+  ].filter((tile) => !(quota(tile.key as ChannelKind).limit === 0 && tile.totalCount === 0));
 
   // --- panels ------------------------------------------------------------------
 
@@ -344,6 +393,7 @@ export default async function ChannelsPage({
                 <AgentSelect
                   orgId={orgId}
                   channelId={intake.id}
+                  channelType="email"
                   agentId={intake.agentId}
                   agents={agentOptions}
                   disabled={!isOwner}
@@ -354,6 +404,8 @@ export default async function ChannelsPage({
           ))}
         </div>
       )}
+      {quotaNotice('form')}
+      {quota('form').blocked ? null : (
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="form" />
@@ -377,6 +429,7 @@ export default async function ChannelsPage({
           Formular-Adresse anlegen
         </button>
       </form>
+      )}
     </div>
   );
 
@@ -402,6 +455,7 @@ export default async function ChannelsPage({
                 <AgentSelect
                   orgId={orgId}
                   channelId={intake.id}
+                  channelType="email"
                   agentId={intake.agentId}
                   agents={agentOptions}
                   disabled={!isOwner}
@@ -412,6 +466,8 @@ export default async function ChannelsPage({
           ))}
         </div>
       )}
+      {quotaNotice('email')}
+      {quota('email').blocked ? null : (
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="forwarded_email" />
@@ -435,6 +491,7 @@ export default async function ChannelsPage({
           E-Mail-Adresse anlegen
         </button>
       </form>
+      )}
     </div>
   );
 
@@ -461,6 +518,7 @@ export default async function ChannelsPage({
                 <AgentSelect
                   orgId={orgId}
                   channelId={wa.id}
+                  channelType="whatsapp"
                   agentId={wa.agentId}
                   agents={agentOptions}
                   disabled={!isOwner}
@@ -475,6 +533,8 @@ export default async function ChannelsPage({
         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Webhook-URL (in Twilio eintragen)</span>
         <code className="invite-link">{whatsappTwilioWebhookUrl}</code>
       </div>
+      {quotaNotice('whatsapp')}
+      {quota('whatsapp').blocked ? null : (
       <form className="stack" action={createWhatsappTwilioChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -521,6 +581,7 @@ export default async function ChannelsPage({
           WhatsApp-Nummer verbinden
         </button>
       </form>
+      )}
     </div>
   );
 
@@ -529,16 +590,26 @@ export default async function ChannelsPage({
       <h2>Telefon (Voice-Agent)</h2>
       <p style={helpStyle}>
         Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Gespräche erscheinen als
-        Konversationen in der Inbox. Die Nummer wird vom Betreiber eingerichtet; hier konfigurierst
-        du Stimme und Technik — Verhalten und Identität kommen vom zugewiesenen Agenten.
+        Konversationen in der Inbox. Die Nummer beantragst du unter{' '}
+        <Link href={`/settings/phone-numbers?org=${orgId}`}>Einstellungen → Telefonnummern</Link>;
+        hier konfigurierst du Stimme, Sprache und Begrüßung — Verhalten und Identität kommen vom
+        zugewiesenen Voice-Agenten.
       </p>
       {voiceChannels.length === 0 ? (
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch kein Voice-Kanal eingerichtet. Die Rufnummer und der SIP-Trunk werden vom Betreiber
-          bereitgestellt — anschließend erscheint hier die Agent-Konfiguration.
+          Noch kein Voice-Kanal eingerichtet. Beantrage unter{' '}
+          <Link href={`/settings/phone-numbers?org=${orgId}`}>Telefonnummern</Link> eine Nummer —
+          nach der Einrichtung erscheint hier die Konfiguration.
         </p>
       ) : (
-        voiceChannels.map((vc) => (
+        voiceChannels.map((vc) => {
+          const assignedAgent = agentOptions.find((a) => a.id === vc.agentId) ?? null;
+          const greetingAgentMode: 'answer' | 'intake' | null = assignedAgent
+            ? assignedAgent.mode === 'autopilot'
+              ? 'answer'
+              : 'intake'
+            : null;
+          return (
           <div key={vc.id} style={{ marginBottom: '2rem' }}>
             {/* header outside the settings form: ActiveToggle/AgentSelect are
                 their own forms and must never nest inside another form */}
@@ -552,13 +623,15 @@ export default async function ChannelsPage({
                 <AgentSelect
                   orgId={orgId}
                   channelId={vc.id}
+                  channelType="voice"
                   agentId={vc.agentId}
                   agents={agentOptions}
                   disabled={!isOwner}
                 />
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Verhalten und Identität steuert der zugewiesene Agent. Ohne Agent nimmt der
-                  Assistent Anrufe im sicheren Annahme-Modus entgegen.
+                  Verhalten und Identität steuert der zugewiesene Voice-Agent (Reine Annahme oder
+                  Autopilot). Ohne Agent nimmt der Assistent Anrufe im sicheren Annahme-Modus
+                  entgegen.
                 </p>
               </div>
               <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />
@@ -570,26 +643,63 @@ export default async function ChannelsPage({
             >
             <input type="hidden" name="org" value={orgId} />
             <input type="hidden" name="channelId" value={vc.id} />
+            {/* the action is owner-gated — read-only for members instead of a
+                data-losing rejection on submit */}
+            <fieldset disabled={!isOwner} style={{ border: 'none', padding: 0, margin: 0, display: 'contents' }}>
             <div>
-              <label htmlFor={`voice-greeting-${vc.id}`}>Begrüßung</label>
+              <label htmlFor={`voice-greeting-${vc.id}`}>Begrüßung (Welcome Message)</label>
               <input
                 id={`voice-greeting-${vc.id}`}
                 name="greeting"
                 type="text"
                 maxLength={500}
                 defaultValue={vc.greeting}
-                placeholder="z. B. Willkommen bei Strong Energy, was kann ich für Sie tun?"
+                placeholder="Leer = der Agent begrüßt frei"
               />
+              <GreetingSuggestion
+                inputId={`voice-greeting-${vc.id}`}
+                companyName={orgName}
+                agentMode={greetingAgentMode}
+              />
+              <label
+                htmlFor={`voice-greeting-int-${vc.id}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', fontWeight: 400 }}
+              >
+                <input
+                  id={`voice-greeting-int-${vc.id}`}
+                  name="greetingInterruptible"
+                  type="checkbox"
+                  defaultChecked={vc.greetingInterruptible}
+                  style={{ width: 'auto' }}
+                />
+                Anrufer darf die Begrüßung unterbrechen
+              </label>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                Standard: aus — die Begrüßung wird immer vollständig gesprochen, auch wenn der
+                Anrufer hineinredet.
+              </p>
             </div>
             <div>
               <label htmlFor={`voice-voice-${vc.id}`}>Stimme</label>
-              <select id={`voice-voice-${vc.id}`} name="voice" defaultValue={vc.voice}>
-                <option value="eve">Eve</option>
-                <option value="ara">Ara</option>
-                <option value="rex">Rex</option>
-                <option value="sal">Sal</option>
-                <option value="leo">Leo</option>
+              <VoicePicker id={`voice-voice-${vc.id}`} name="voice" defaultVoice={vc.voice} />
+            </div>
+            <div>
+              <label htmlFor={`voice-language-${vc.id}`}>Sprache des Voice-Agents</label>
+              <select
+                id={`voice-language-${vc.id}`}
+                name="languageHint"
+                defaultValue={vc.languageHint}
+              >
+                {VOICE_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
+                ))}
               </select>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                Gesprächs- und Erkennungssprache. Spricht der Anrufer eine andere Sprache, wechselt
+                der Assistent automatisch.
+              </p>
             </div>
             <div>
               <label htmlFor={`voice-keyterms-${vc.id}`}>
@@ -648,12 +758,20 @@ export default async function ChannelsPage({
                 Konversation und wird in der EU gespeichert.
               </p>
             </div>
-            <button className="primary" type="submit">
-              Voice-Einstellungen speichern
-            </button>
+            {isOwner ? (
+              <button className="primary" type="submit">
+                Voice-Einstellungen speichern
+              </button>
+            ) : (
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Nur Inhaber können die Voice-Einstellungen ändern.
+              </p>
+            )}
+            </fieldset>
             </form>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );
@@ -678,6 +796,7 @@ export default async function ChannelsPage({
               <AgentSelect
                 orgId={orgId}
                 channelId={widget.id}
+                channelType="chat"
                 agentId={widget.agentId}
                 agents={agentOptions}
                 disabled={!isOwner}
@@ -738,6 +857,8 @@ export default async function ChannelsPage({
         </div>
       ))}
 
+      {quotaNotice('chat')}
+      {quota('chat').blocked ? null : (
       <form className="stack" action={createWidgetChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -756,6 +877,7 @@ export default async function ChannelsPage({
           Widget-Channel anlegen
         </button>
       </form>
+      )}
     </div>
   );
 
@@ -776,6 +898,7 @@ export default async function ChannelsPage({
                 <AgentSelect
                   orgId={orgId}
                   channelId={tc.id}
+                  channelType="chat"
                   agentId={tc.agentId}
                   agents={agentOptions}
                   disabled={!isOwner}
@@ -786,6 +909,8 @@ export default async function ChannelsPage({
           ))}
         </div>
       ) : null}
+      {quotaNotice('test')}
+      {quota('test').blocked ? null : (
       <form className="stack" action={createTestChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -803,6 +928,7 @@ export default async function ChannelsPage({
           Test-Channel anlegen
         </button>
       </form>
+      )}
     </div>
   );
 

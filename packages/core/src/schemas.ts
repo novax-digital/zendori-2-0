@@ -46,6 +46,28 @@ export type HandoffReason = z.infer<typeof handoffReasonSchema>;
 export const agentModeSchema = z.enum(['draft_only', 'autopilot', 'intake_only']);
 export type AgentMode = z.infer<typeof agentModeSchema>;
 
+/**
+ * Agent kind (0015): a voice agent serves ONLY voice channels, a text agent
+ * everything else. Voice agents allow only intake_only|autopilot modes.
+ */
+export const agentKindSchema = z.enum(['text', 'voice']);
+export type AgentKind = z.infer<typeof agentKindSchema>;
+
+/**
+ * Channel KIND for quotas (0017) — the UI notion, finer than `type`: email
+ * splits into 'form' (contact-form intake) and 'email' (forwarded mailbox),
+ * chat splits into 'chat' (widget) and 'test'.
+ */
+export const channelKindSchema = z.enum(['form', 'email', 'whatsapp', 'voice', 'chat', 'test']);
+export type ChannelKind = z.infer<typeof channelKindSchema>;
+
+/** Phone number inventory/request lifecycle (0016). */
+export const phoneNumberStatusSchema = z.enum(['requested', 'provisioning', 'active', 'released']);
+export type PhoneNumberStatus = z.infer<typeof phoneNumberStatusSchema>;
+
+export const phoneNumberTypeSchema = z.enum(['local', 'mobile', 'national']);
+export type PhoneNumberType = z.infer<typeof phoneNumberTypeSchema>;
+
 export const kbSourceTypeSchema = z.enum(['url', 'file', 'text']);
 export type KbSourceType = z.infer<typeof kbSourceTypeSchema>;
 
@@ -102,6 +124,8 @@ export const agentSchema = z.object({
   name: z.string().min(1),
   /** Persona / system prompt ("Identität"); null = neutral default persona. */
   identity: z.string().nullable(),
+  /** 0015: voice agents serve only voice channels, text agents everything else. */
+  kind: agentKindSchema,
   mode: agentModeSchema,
   confidence_threshold: z.number().min(0).max(1),
   is_active: z.boolean(),

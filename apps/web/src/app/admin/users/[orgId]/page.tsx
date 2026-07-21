@@ -1,11 +1,15 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { CSSProperties } from 'react';
+import type { Channel, ChannelKind } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { addMember } from '../actions';
+import { CHANNEL_KIND_LABELS, countChannelsByKind } from '@/lib/channel-limits';
+import { addMember, setChannelLimits } from '../actions';
 
 type MemberRow = { user_id: string; role: string; created_at: string };
+
+const KIND_ORDER: ChannelKind[] = ['form', 'email', 'whatsapp', 'voice', 'chat', 'test'];
 
 const helpStyle: CSSProperties = {
   fontSize: '0.9rem',
@@ -50,6 +54,19 @@ export default async function AdminOrgPage({
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
   const members = (memberData ?? []) as MemberRow[];
+
+  // Channel quotas (0017): current limits + live counts per kind.
+  const [{ data: limitData }, { data: channelData }] = await Promise.all([
+    admin.from('org_channel_limits').select('channel_kind, max_count').eq('org_id', orgId),
+    admin.from('channels').select('type, config').eq('org_id', orgId),
+  ]);
+  const limits = new Map(
+    ((limitData ?? []) as { channel_kind: ChannelKind; max_count: number }[]).map((r) => [
+      r.channel_kind,
+      r.max_count,
+    ])
+  );
+  const counts = countChannelsByKind((channelData ?? []) as Pick<Channel, 'type' | 'config'>[]);
 
   const emailByUserId = new Map<string, string>();
   await Promise.all(
@@ -111,6 +128,48 @@ export default async function AdminOrgPage({
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="panel">
+        <h2>Kanal-Kontingente</h2>
+        <p style={helpStyle}>
+          Wie viele Kanäle dieser Kunde je Kanalart anlegen darf. Leer = unbegrenzt, 0 = gesperrt
+          (die Kanalart verschwindet beim Kunden aus der Galerie, solange keine Kanäle existieren).
+          Bestehende Kanäle bleiben immer erhalten.
+        </p>
+        <form className="stack" action={setChannelLimits} style={{ maxWidth: '30rem' }}>
+          <input type="hidden" name="orgId" value={org.id} />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: '0.75rem',
+            }}
+          >
+            {KIND_ORDER.map((kind) => (
+              <div key={kind}>
+                <label htmlFor={`limit-${kind}`}>
+                  {CHANNEL_KIND_LABELS[kind]}{' '}
+                  <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>
+                    ({counts.get(kind) ?? 0} vorhanden)
+                  </span>
+                </label>
+                <input
+                  id={`limit-${kind}`}
+                  name={`limit_${kind}`}
+                  type="number"
+                  min={0}
+                  max={999}
+                  defaultValue={limits.has(kind) ? String(limits.get(kind)) : ''}
+                  placeholder="∞"
+                />
+              </div>
+            ))}
+          </div>
+          <button className="primary" type="submit">
+            Kontingente speichern
+          </button>
+        </form>
       </div>
 
       <div className="panel">

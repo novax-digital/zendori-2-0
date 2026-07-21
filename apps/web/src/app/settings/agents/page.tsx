@@ -1,15 +1,17 @@
 import type { CSSProperties, ReactNode } from 'react';
-import type { AgentMode, Channel, ChannelType } from '@zendori/core';
+import type { AgentKind, AgentMode, Channel, ChannelType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
 import AgentGallery, { type AgentTileMeta } from '@/components/AgentGallery';
+import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 import { createAgent, updateAgent, deleteAgent } from './actions';
 
 type AgentRow = {
   id: string;
   name: string;
   identity: string | null;
+  kind: AgentKind;
   mode: AgentMode;
   confidence_threshold: number;
   is_active: boolean;
@@ -74,7 +76,7 @@ async function listAgents(orgId: string): Promise<AgentRow[]> {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('agents')
-    .select('id, name, identity, mode, confidence_threshold, is_active')
+    .select('id, name, identity, kind, mode, confidence_threshold, is_active')
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
   return (data ?? []) as unknown as AgentRow[];
@@ -124,28 +126,14 @@ function AgentFields({
           Fließt in jede Antwort dieses Agenten ein — Rolle, Tonfall, Regeln.
         </p>
       </div>
-      <div>
-        <label htmlFor={`${idPrefix}-mode`}>Verhalten</label>
-        <select id={`${idPrefix}-mode`} name="mode" defaultValue={agent?.mode ?? 'draft_only'} disabled={disabled}>
-          <option value="draft_only">Nur Entwürfe — Vorschläge, ein Mensch prüft und sendet</option>
-          <option value="autopilot">Autopilot — antwortet selbst, wenn er sicher genug ist</option>
-          <option value="intake_only">Reine Annahme — nimmt das Anliegen auf, antwortet nicht</option>
-        </select>
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1, nur Autopilot)</label>
-        <input
-          id={`${idPrefix}-threshold`}
-          name="confidenceThreshold"
-          type="number"
-          min={0}
-          max={1}
-          step={0.05}
-          defaultValue={agent?.confidence_threshold ?? 0.7}
-          disabled={disabled}
-          style={{ maxWidth: '10rem' }}
-        />
-      </div>
+      {/* kind/mode/threshold interplay lives in the client component (0015) */}
+      <AgentBehaviorFields
+        idPrefix={idPrefix}
+        kindFixed={agent?.kind}
+        defaultMode={agent?.mode}
+        defaultThreshold={agent?.confidence_threshold}
+        disabled={disabled}
+      />
     </>
   );
 }
@@ -184,12 +172,17 @@ export default async function AgentsPage({
   const tiles: AgentTileMeta[] = agents.map((agent) => ({
     id: agent.id,
     name: agent.name,
-    modeLabel: MODE_LABELS[agent.mode],
+    modeLabel: `${agent.kind === 'voice' ? 'Voice · ' : ''}${MODE_LABELS[agent.mode]}`,
     isActive: agent.is_active,
     channelCount: channelsByAgent.get(agent.id) ?? 0,
   }));
 
-  const channelChecklist = (agent: AgentRow): ReactNode => (
+  const channelChecklist = (agent: AgentRow): ReactNode => {
+    // 0015: voice agents serve only voice channels, text agents everything else.
+    const eligible = channels.filter((c: Channel) =>
+      agent.kind === 'voice' ? c.type === 'voice' : c.type !== 'voice'
+    );
+    return (
     <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
       <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
         Zugewiesene Kanäle
@@ -198,13 +191,18 @@ export default async function AgentsPage({
         Der Agent bedient die angehakten Kanäle. Ein Kanal kann nur einen Agenten haben — Anhaken
         zieht ihn ggf. von einem anderen Agenten ab. Kanäle ohne Agent bekommen keine
         KI-Antworten.
+        {agent.kind === 'voice'
+          ? ' Ein Voice-Agent kann nur Voice-Kanäle bedienen.'
+          : ' Ein Text-Agent bedient alle Kanäle außer Telefon.'}
       </p>
-      {channels.length === 0 ? (
+      {eligible.length === 0 ? (
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch keine Kanäle vorhanden.
+          {agent.kind === 'voice'
+            ? 'Noch kein Voice-Kanal vorhanden — Nummern beantragst du unter Einstellungen → Telefonnummern.'
+            : 'Noch keine passenden Kanäle vorhanden.'}
         </p>
       ) : (
-        channels.map((channel: Channel) => (
+        eligible.map((channel: Channel) => (
           <label key={channel.id} style={checkboxRowStyle}>
             {/* render-time truth: only these may be detached by an uncheck */}
             {channel.agent_id === agent.id ? (
@@ -226,7 +224,8 @@ export default async function AgentsPage({
         ))
       )}
     </fieldset>
-  );
+    );
+  };
 
   const panels: Record<string, ReactNode> = {};
   for (const agent of agents) {

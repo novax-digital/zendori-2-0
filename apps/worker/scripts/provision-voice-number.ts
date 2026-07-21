@@ -12,6 +12,11 @@
 //     --org <org-uuid> --name "Telefon Strong Energy" \
 //     --type local|mobile|national [--number +49…] [--dry-run]
 //
+// Fulfil a customer request from the Telefonnummern UI (0016) — org/type come
+// from the request row, the row is flipped provisioning→active on success:
+//   npx tsx --env-file=../../.env scripts/provision-voice-number.ts \
+//     --request <phone-number-uuid> --name "Telefon Strong Energy" [--type …]
+//
 // Required env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VOICE_TRUNK_SID,
 //   XAI_API_KEY, APP_URL, MASTER_ENCRYPTION_KEY, SUPABASE_URL,
 //   SUPABASE_SERVICE_ROLE_KEY, and a regulatory bundle for each --type you use:
@@ -50,9 +55,10 @@ type NumberType = keyof typeof NUMBER_TYPES;
 
 // --type is REQUIRED (no default): with one bundle per number type there is no
 // single sensible default, and a wrong guess would buy the wrong number / miss a
-// bundle. Force the operator to state it.
-function resolveType(): NumberType {
-  const raw = arg('--type')?.toLowerCase();
+// bundle. Force the operator to state it. In --request mode the requested type
+// from the phone_numbers row serves as the fallback.
+function resolveType(fallback?: string): NumberType {
+  const raw = (arg('--type') ?? fallback)?.toLowerCase();
   if (!raw || !(raw in NUMBER_TYPES)) {
     console.error('Missing or invalid --type: use local | mobile | national.');
     process.exit(1);
@@ -176,7 +182,7 @@ interface RegisterDeps {
  * the channel. The secret is returned exactly once, so persistence failures
  * print the ciphertext for manual recovery.
  */
-async function registerAndActivate(d: RegisterDeps): Promise<void> {
+async function registerAndActivate(d: RegisterDeps): Promise<{ xaiPhoneNumberId?: string }> {
   const webhookUrl = `${d.appUrl}/api/hooks/voice?channel=${d.channelId}`;
   const res = await fetch(`${XAI_BASE}/v2/phone-numbers`, {
     method: 'POST',
@@ -227,6 +233,7 @@ async function registerAndActivate(d: RegisterDeps): Promise<void> {
   console.log(`  Channel:     ${d.channelId}`);
   console.log(`  Webhook-URL: ${webhookUrl}`);
   console.log('  Kunde: Rufumleitung der bestehenden Nummer auf die Twilio-Nummer einrichten.');
+  return { xaiPhoneNumberId: xaiId };
 }
 
 async function main(): Promise<void> {
@@ -304,18 +311,64 @@ async function main(): Promise<void> {
   }
 
   // --- full provisioning flow ------------------------------------------------
-  const orgId = arg('--org');
+  // --request <uuid>: fulfil a customer request (0016) — org + type come from
+  // the phone_numbers row; the row is marked provisioning now, active at the end.
+  const requestId = arg('--request');
+  let requestRow: { org_id: string; number_type: string } | null = null;
+  if (requestId) {
+    const { data, error } = await supabase
+      .from('phone_numbers')
+      .select('org_id, number_type, status')
+      .eq('id', requestId)
+      .single();
+    if (error || !data) {
+      throw new Error(`phone_numbers request ${requestId} not found: ${error?.message ?? 'no row'}`);
+    }
+    const row = data as { org_id: string; number_type: string; status: string };
+    if (row.status === 'active') throw new Error(`request ${requestId} is already active`);
+    requestRow = row;
+    await supabase.from('phone_numbers').update({ status: 'provisioning' }).eq('id', requestId);
+  }
+
+  const orgId = arg('--org') ?? requestRow?.org_id;
   const name = arg('--name');
   const wantedNumber = arg('--number');
   const dryRun = process.argv.includes('--dry-run');
   if (!orgId || !name) {
     console.error(
       'Usage: provision-voice-number.ts --org <uuid> --name "<channel name>" --type local|mobile|national [--number +49…] [--dry-run]\n' +
+        '   or: --request <phone-number-uuid> --name "<channel name>" [--type …]   (fulfil a customer request)\n' +
         '   or: --complete-channel <channel-uuid>   (resume xAI registration, no re-buy)'
     );
     process.exit(1);
   }
-  const type = resolveType();
+  const type = resolveType(requestRow?.number_type);
+
+  // Quota pre-check BEFORE buying anything (audit 2026-07-21): the 0017 trigger
+  // would reject the channel insert AFTER the Twilio purchase, stranding a paid
+  // number. Fail fast here instead.
+  const [{ data: limitRow }, { count: voiceCount }] = await Promise.all([
+    supabase
+      .from('org_channel_limits')
+      .select('max_count')
+      .eq('org_id', orgId)
+      .eq('channel_kind', 'voice')
+      .maybeSingle(),
+    supabase
+      .from('channels')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('type', 'voice'),
+  ]);
+  const voiceLimit = (limitRow as { max_count: number } | null)?.max_count;
+  if (voiceLimit !== undefined && voiceLimit !== null && (voiceCount ?? 0) >= voiceLimit) {
+    if (requestId) {
+      await supabase.from('phone_numbers').update({ status: 'requested' }).eq('id', requestId);
+    }
+    throw new Error(
+      `voice channel limit reached for org ${orgId} (${voiceCount}/${voiceLimit}) — raise the quota in Admin → Kunde first`
+    );
+  }
 
   const accountSid = requireEnv('TWILIO_ACCOUNT_SID');
   const bundleSid = bundleForType(type);
@@ -361,28 +414,73 @@ async function main(): Promise<void> {
     maxCallSeconds: 900,
     connectionState: 'active',
   };
-  const { data: channelRow, error: channelError } = await supabase
-    .from('channels')
-    .insert({ org_id: orgId, type: 'voice', name, is_active: false, config: draftConfig })
-    .select('id')
-    .single();
-  if (channelError || !channelRow) {
-    throw new Error(`channel insert failed: ${channelError?.message}`);
-  }
-  const channelId = (channelRow as { id: string }).id;
-  console.log(`Channel ${channelId} created (inactive until secret is stored)`);
+  // Steps 3+4 run AFTER the paid purchase — on any failure, print the bought
+  // number for reuse (--number resumes without a second buy) and reset a
+  // --request row back to 'requested' so it does not strand in 'provisioning'.
+  let channelId: string;
+  let xaiPhoneNumberId: string | undefined;
+  try {
+    const { data: channelRow, error: channelError } = await supabase
+      .from('channels')
+      .insert({ org_id: orgId, type: 'voice', name, is_active: false, config: draftConfig })
+      .select('id')
+      .single();
+    if (channelError || !channelRow) {
+      throw new Error(`channel insert failed: ${channelError?.message}`);
+    }
+    channelId = (channelRow as { id: string }).id;
+    console.log(`Channel ${channelId} created (inactive until secret is stored)`);
 
-  // 4. register at xAI + store the one-time secret + activate the channel.
-  await registerAndActivate({
-    supabase,
-    xaiKey,
-    appUrl,
-    masterKey,
-    channelId,
-    name,
-    phoneNumber: bought.phone_number,
-    config: draftConfig,
-  });
+    // 4. register at xAI + store the one-time secret + activate the channel.
+    ({ xaiPhoneNumberId } = await registerAndActivate({
+      supabase,
+      xaiKey,
+      appUrl,
+      masterKey,
+      channelId,
+      name,
+      phoneNumber: bought.phone_number,
+      config: draftConfig,
+    }));
+  } catch (err) {
+    console.error(
+      `Number ${bought.phone_number} (${bought.sid}) IS BOUGHT — resume without re-buying:`
+    );
+    console.error(
+      `  … --org ${orgId} --name "${name}" --type ${type} --number ${bought.phone_number}`
+    );
+    if (requestId) {
+      await supabase.from('phone_numbers').update({ status: 'requested' }).eq('id', requestId);
+      console.error(`  Request ${requestId} reset to 'requested'.`);
+    }
+    throw err;
+  }
+
+  // 5. inventory row (0016): fulfil the request or record the number. Failures
+  // here are non-fatal — the number IS live; the row can be fixed by hand.
+  const inventoryPatch = {
+    e164: bought.phone_number,
+    number_type: type,
+    status: 'active',
+    twilio_phone_number_sid: bought.sid,
+    twilio_trunk_sid: trunkSid,
+    xai_phone_number_id: xaiPhoneNumberId ?? null,
+    channel_id: channelId,
+    activated_at: new Date().toISOString(),
+  };
+  const { error: inventoryError } = requestId
+    ? await supabase.from('phone_numbers').update(inventoryPatch).eq('id', requestId)
+    : await supabase
+        .from('phone_numbers')
+        .upsert({ org_id: orgId, ...inventoryPatch }, { onConflict: 'e164' });
+  if (inventoryError) {
+    console.error(
+      `WARNING: phone_numbers inventory update failed (${inventoryError.message}) — fix by hand:`
+    );
+    console.error(`  ${JSON.stringify({ org_id: orgId, ...inventoryPatch })}`);
+  } else {
+    console.log(requestId ? `Request ${requestId} → active.` : 'Inventory row recorded.');
+  }
 }
 
 main().catch((err: unknown) => {

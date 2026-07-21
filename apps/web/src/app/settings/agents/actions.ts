@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { agentModeSchema } from '@zendori/core';
+import { agentKindSchema, agentModeSchema, type AgentKind, type AgentMode } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 function textField(value: FormDataEntryValue | null): string {
@@ -54,22 +54,37 @@ function parseAgentFields(formData: FormData) {
     name: textField(formData.get('name')),
     identity: textField(formData.get('identity')),
     mode: textField(formData.get('mode')),
+    // Voice agents post no threshold field (hidden in the UI) — default applies.
     confidenceThreshold: textField(formData.get('confidenceThreshold')) || '0.7',
   });
+}
+
+/** 0015: voice agents know only intake_only|autopilot (no drafts on a live call). */
+function modeAllowedForKind(kind: AgentKind, mode: AgentMode): boolean {
+  return kind === 'voice' ? mode === 'intake_only' || mode === 'autopilot' : true;
 }
 
 // --- create ------------------------------------------------------------------
 
 export async function createAgent(formData: FormData): Promise<void> {
   const parsed = parseAgentFields(formData);
-  if (!parsed.success) {
+  const kindParsed = agentKindSchema.safeParse(textField(formData.get('kind')) || 'text');
+  if (!parsed.success || !kindParsed.success) {
     redirect(
       agentsUrl(textField(formData.get('org')), {
-        error: 'Bitte Name (2–80 Zeichen), Modus und Schwellwert (0–1) prüfen.',
+        error: 'Bitte Name (2–80 Zeichen), Typ, Modus und Schwellwert (0–1) prüfen.',
       })
     );
   }
   const { org, name, identity, mode, confidenceThreshold } = parsed.data;
+  const kind = kindParsed.data;
+  if (!modeAllowedForKind(kind, mode)) {
+    redirect(
+      agentsUrl(org, {
+        error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".',
+      })
+    );
+  }
   await requireOwner(org);
 
   const supabase = await createSupabaseServerClient();
@@ -79,6 +94,7 @@ export async function createAgent(formData: FormData): Promise<void> {
       org_id: org,
       name,
       identity: identity === '' ? null : identity,
+      kind,
       mode,
       confidence_threshold: confidenceThreshold,
     })
@@ -139,6 +155,20 @@ export async function updateAgent(formData: FormData): Promise<void> {
 
   const supabase = await createSupabaseServerClient();
 
+  // kind is immutable (0015 DB guard) — load it to validate the posted mode.
+  const { data: kindRow } = await supabase
+    .from('agents')
+    .select('kind')
+    .eq('org_id', org)
+    .eq('id', agentId)
+    .maybeSingle();
+  const kind = ((kindRow as { kind?: AgentKind } | null)?.kind ?? 'text') as AgentKind;
+  if (!modeAllowedForKind(kind, mode)) {
+    redirect(
+      agentsUrl(org, { error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".' })
+    );
+  }
+
   const { data: updated, error: updateError } = await supabase
     .from('agents')
     .update({
@@ -165,13 +195,20 @@ export async function updateAgent(formData: FormData): Promise<void> {
   const renderedAssigned = new Set(uuidStrings(formData.getAll('renderedAssigned')));
   const { data: channelData, error: channelLoadError } = await supabase
     .from('channels')
-    .select('id, agent_id')
+    .select('id, agent_id, type')
     .eq('org_id', org);
   if (channelLoadError) {
     redirect(agentsUrl(org, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
   }
-  const channels = (channelData ?? []) as { id: string; agent_id: string | null }[];
-  const toAssign = channels.filter((c) => selected.has(c.id) && c.agent_id !== agentId);
+  const channels = (channelData ?? []) as { id: string; agent_id: string | null; type: string }[];
+  // Kind gate (0015): a stale checklist may post channels the agent cannot
+  // serve — filter them here so one bad box does not fail the whole batch (the
+  // DB trigger would reject the update outright).
+  const kindMatches = (type: string): boolean =>
+    kind === 'voice' ? type === 'voice' : type !== 'voice';
+  const toAssign = channels.filter(
+    (c) => selected.has(c.id) && c.agent_id !== agentId && kindMatches(c.type)
+  );
   const toDetach = channels.filter(
     (c) => c.agent_id === agentId && !selected.has(c.id) && renderedAssigned.has(c.id)
   );

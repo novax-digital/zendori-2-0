@@ -29,6 +29,7 @@ type IconName =
   | 'widget'
   | 'shield'
   | 'clock'
+  | 'phone'
   | 'chevron'
   | 'signout';
 
@@ -120,6 +121,12 @@ function Icon({ name }: { name: IconName }) {
           <path d="M12 7.5V12l3 2" />
         </svg>
       );
+    case 'phone':
+      return (
+        <svg {...common}>
+          <path d="M5 4h4l1.5 4.5-2.2 1.6a12.5 12.5 0 0 0 5.6 5.6l1.6-2.2L20 15v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2Z" />
+        </svg>
+      );
     case 'chevron':
       return (
         <svg {...common}>
@@ -146,6 +153,7 @@ const NAV: NavSection[] = [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
+      { href: '/settings/phone-numbers', label: 'Telefonnummern', icon: 'phone' },
       { href: '/settings/ai', label: 'Übergabe & Zeiten', icon: 'clock' },
       { href: '/settings/canned-responses', label: 'Textbausteine', icon: 'canned' },
       { href: '/settings/members', label: 'Team', icon: 'team' },
@@ -324,14 +332,25 @@ function Sidebar() {
             <div className="app-nav-section">Zendori</div>
             <Link
               href="/admin/users"
-              className={`app-nav-item${pathname.startsWith('/admin') ? ' app-nav-item--active' : ''}`}
+              className={`app-nav-item${pathname.startsWith('/admin/users') || pathname === '/admin' ? ' app-nav-item--active' : ''}`}
               title="Admin"
-              aria-current={pathname.startsWith('/admin') ? 'page' : undefined}
+              aria-current={pathname.startsWith('/admin/users') ? 'page' : undefined}
             >
               <span className="app-nav-icon">
                 <Icon name="shield" />
               </span>
               <span className="app-nav-label">Admin</span>
+            </Link>
+            <Link
+              href="/admin/phone-numbers"
+              className={`app-nav-item${pathname.startsWith('/admin/phone-numbers') ? ' app-nav-item--active' : ''}`}
+              title="Nummern"
+              aria-current={pathname.startsWith('/admin/phone-numbers') ? 'page' : undefined}
+            >
+              <span className="app-nav-icon">
+                <Icon name="phone" />
+              </span>
+              <span className="app-nav-label">Nummern</span>
             </Link>
           </div>
         ) : null}

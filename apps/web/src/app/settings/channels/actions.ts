@@ -12,6 +12,7 @@ import { encryptSecret } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, generatePublicToken } from '@/lib/widget/session';
 import { generateIntakeAddress } from '@/lib/email/provisioning';
+import { checkChannelQuota } from '@/lib/channel-limits';
 
 function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -44,6 +45,10 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
     );
   }
   const { org, name } = parsed.data;
+
+  // Quota pre-check (0017; the DB trigger is the race-safe backstop).
+  const quotaError = await checkChannelQuota(org, 'chat');
+  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
 
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.from('channels').insert({
@@ -148,6 +153,10 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
     );
   }
   const { org, name, slugPart, purpose } = parsed.data;
+
+  // Quota pre-check: 'form' and 'email' (forwarded) count separately (0017).
+  const quotaError = await checkChannelQuota(org, purpose === 'form' ? 'form' : 'email');
+  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
 
   const supabase = await createSupabaseServerClient();
 
@@ -339,6 +348,9 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
   }
   const { org, name, sender, accountSid, authToken, messagingServiceSid } = parsed.data;
 
+  const quotaError = await checkChannelQuota(org, 'whatsapp');
+  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
+
   const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   if (!masterKey) {
     redirect(channelsUrl(org, { error: 'Verschlüsselung ist serverseitig nicht konfiguriert.' }));
@@ -390,7 +402,10 @@ const updateVoiceSettingsSchema = z.object({
   org: z.uuid(),
   channelId: z.uuid(),
   greeting: z.string().max(500),
+  greetingInterruptible: z.boolean(),
   voice: z.string().min(1).max(80),
+  /** Conversation + ASR language (UI offers a fixed list; schema keeps BCP-47ish). */
+  languageHint: z.string().regex(/^[a-z]{2}(-[A-Za-z0-9]{2,8})?$/),
   keyterms: z.string().max(4000),
   speechSpeed: z.coerce.number().min(0.7).max(1.5),
   transferNumber: z
@@ -412,7 +427,9 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     org: formData.get('org'),
     channelId: formData.get('channelId'),
     greeting: textField(formData.get('greeting')),
+    greetingInterruptible: formData.get('greetingInterruptible') === 'on',
     voice: textField(formData.get('voice')),
+    languageHint: textField(formData.get('languageHint')) || 'de',
     keyterms: textField(formData.get('keyterms')),
     speechSpeed: textField(formData.get('speechSpeed')) || '1.0',
     transferNumber: textField(formData.get('transferNumber')),
@@ -426,8 +443,18 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
       })
     );
   }
-  const { org, channelId, greeting, voice, keyterms, speechSpeed, transferNumber, recordingEnabled } =
-    parsed.data;
+  const {
+    org,
+    channelId,
+    greeting,
+    greetingInterruptible,
+    voice,
+    languageHint,
+    keyterms,
+    speechSpeed,
+    transferNumber,
+    recordingEnabled,
+  } = parsed.data;
 
   const supabase = await createSupabaseServerClient();
 
@@ -472,7 +499,9 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
 
   const overrides = {
     greeting: greeting || undefined,
+    greetingInterruptible,
     voice,
+    languageHint,
     keyterms: keytermList,
     speechSpeed,
     transferNumber: transferNumber || undefined,

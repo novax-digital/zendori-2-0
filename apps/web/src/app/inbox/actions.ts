@@ -9,6 +9,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { deliverOutboundEmail } from '@/lib/email/dispatch';
 import { deliverOutboundWhatsApp } from '@/lib/whatsapp/dispatch';
+import { checkChannelQuota } from '@/lib/channel-limits';
 
 // --- form field helpers ------------------------------------------------------
 
@@ -537,6 +538,10 @@ export async function createTestChannel(formData: FormData): Promise<void> {
     );
   }
   const { org, name } = parsed.data;
+
+  // Quota pre-check (0017; DB trigger is the backstop).
+  const quotaError = await checkChannelQuota(org, 'test');
+  if (quotaError) redirect(channelsUrl(org, quotaError));
 
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase
