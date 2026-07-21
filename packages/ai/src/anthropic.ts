@@ -127,6 +127,12 @@ export async function extract(input: ExtractInput): Promise<AiCallResult<Extract
   return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
 }
 
+/** One prior conversation turn for the draft context. */
+export interface DraftHistoryTurn {
+  role: 'customer' | 'assistant';
+  content: string;
+}
+
 export interface DraftInput {
   companyName: string;
   agentIdentity?: string | null;
@@ -135,11 +141,25 @@ export interface DraftInput {
   body: string;
   language?: string | null;
   sources: DraftSource[];
+  /**
+   * Prior turns (oldest first, capped by the caller). Without them every reply
+   * was drafted in isolation — the bot re-introduced itself on each message
+   * (live WhatsApp feedback 2026-07-21). Rendered as a DATA transcript block,
+   * not as native turns (no role-alternation constraints, injection-framed).
+   */
+  history?: DraftHistoryTurn[];
 }
 
 /** Produce a RAG answer draft with confidence and used source ids. */
 export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult>> {
   const client = getClient();
+  const history = input.history ?? [];
+  const historyBlock =
+    history.length > 0
+      ? `## Bisheriger Gesprächsverlauf (älteste zuerst)\n${history
+          .map((turn) => `${turn.role === 'customer' ? 'Kunde' : 'Assistent'}: ${turn.content}`)
+          .join('\n')}\n\n## Neue Kundennachricht\n`
+      : '';
   const message = await client.messages.create({
     model: AI_MODELS.draft,
     max_tokens: 1500,
@@ -148,15 +168,18 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
       agentIdentity: input.agentIdentity,
       sources: input.sources,
       language: input.language,
+      hasHistory: history.length > 0,
     }),
     messages: [
       {
         role: 'user',
-        content: buildUserMessage({
-          channelType: input.channelType,
-          subject: input.subject,
-          body: input.body,
-        }),
+        content:
+          historyBlock +
+          buildUserMessage({
+            channelType: input.channelType,
+            subject: input.subject,
+            body: input.body,
+          }),
       },
     ],
   });

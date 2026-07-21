@@ -13,10 +13,12 @@
 import {
   AI_MODELS,
   EMBEDDING_MODEL,
+  TRANSCRIBE_MODEL,
   classify,
   draft,
   extract,
   retrieveRelevantChunks,
+  transcribeAudio,
   type AiRunStep,
   type ClassificationResult,
   type KbChunkMatch,
@@ -27,6 +29,7 @@ import {
   autoAckTextsSchema,
   businessHoursSchema,
   selectAutoAckText,
+  sendWhatsappTypingIndicator,
 } from '@zendori/channels';
 import type {
   AgentMode,
@@ -94,6 +97,8 @@ interface LoadedMessage {
   sender_type: SenderType;
   content: string;
   content_type: ContentType;
+  /** Provider message id (e.g. Twilio SM…/MM…) — typing indicator reference. */
+  external_id: string | null;
   metadata: Record<string, unknown>;
   processing_state: ProcessingState | null;
   conversation: LoadedConversation;
@@ -136,7 +141,7 @@ export class PipelineError extends Error {
 }
 
 const MESSAGE_SELECT =
-  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, metadata, processing_state, ' +
+  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, external_id, metadata, processing_state, ' +
   'conversation:conversations!inner(id, org_id, mode, priority, contact_id, subject), ' +
   'channel:channels!inner(id, type, name, agent_id)';
 
@@ -205,8 +210,72 @@ export async function processMessage(messageId: string): Promise<void> {
     const activeAgent = agent && agent.isActive ? agent : null;
     const agentIdentity = activeAgent?.identity ?? null;
 
+    // Conversational channels: typing indicator + read receipt while the
+    // pipeline runs (~10s felt like dead air — live WhatsApp feedback
+    // 2026-07-21). Fire-and-forget; shows until the reply lands or 25s.
+    if (channel.type === 'whatsapp' && message.external_id && conv.mode === 'bot') {
+      void sendWhatsappTypingIndicator(supabase, {
+        orgId,
+        channelId: channel.id,
+        inboundMessageSid: message.external_id,
+      }).catch(() => undefined);
+    }
+
+    // --- 0. transcribe voice notes (2026-07-21) ------------------------------
+    // Inbound audio (WhatsApp Sprachnachrichten) becomes text BEFORE the rest
+    // of the funnel — classify/retrieve/draft all work off the transcript, and
+    // the inbox shows it as the message content. Idempotent via
+    // metadata.transcription (a retry after a later-step failure skips it).
+    if (message.content_type === 'audio' && !message.metadata.transcription) {
+      currentStep = 'transcribe';
+      const transcribeStart = Date.now();
+      const transcript = await transcribeInboundAudio(supabase, message);
+      if (!transcript || transcript.text.length === 0) {
+        // no usable audio/attachment — nothing to process, like spam
+        await supabase
+          .from('messages')
+          .update({ processing_state: 'skipped', metadata: updatedMetadata })
+          .eq('id', message.id);
+        return;
+      }
+      message.content = transcript.text;
+      updatedMetadata.transcription = {
+        model: TRANSCRIBE_MODEL,
+        duration_seconds: transcript.durationSeconds,
+      };
+      await supabase
+        .from('messages')
+        .update({ content: transcript.text, metadata: updatedMetadata })
+        .eq('id', message.id);
+      await logAiRun(supabase, {
+        orgId,
+        conversationId: conv.id,
+        step: 'transcribe',
+        model: TRANSCRIBE_MODEL,
+        latencyMs: Date.now() - transcribeStart,
+        costUsd: transcript.costUsd,
+        inputSummary: `channel=${channel.type} audio`,
+        outputSummary: `duration=${Math.round(transcript.durationSeconds)}s chars=${transcript.text.length}`,
+      });
+    }
+
     const cleanBody = deriveCleanBody(channel.type, message);
     const inputSummary = `channel=${channel.type} chars=${cleanBody.length}`;
+
+    // Kick retrieval off EARLY, in parallel with classify/extract — it depends
+    // only on the clean body (latency win ~2s). Early-return paths (spam,
+    // intake, no agent) waste one embedding call; the .catch keeps their
+    // floating promise from becoming an unhandled rejection.
+    const retrieveStart = Date.now();
+    const retrievalEarly = (async () => {
+      const knowledgeBaseIds =
+        activeAgent && !forceDraft ? await loadAgentKbIds(supabase, activeAgent.id) : null;
+      return retrieveRelevantChunks(supabase, orgId, cleanBody, {
+        knowledgeBaseIds,
+        companyName: orgName,
+      });
+    })();
+    retrievalEarly.catch(() => undefined);
 
     // --- 1. classify ---------------------------------------------------------
     currentStep = 'classify';
@@ -323,21 +392,14 @@ export async function processMessage(messageId: string): Promise<void> {
     }
 
     // --- 4. retrieve (two-stage funnel, shared with the voice kb_search tool) --
-    // Scoped to the agent's linked knowledge bases (0012). No agent (force-draft
-    // path) = all org knowledge; an agent with zero linked bases finds nothing.
-    // Stage 1 hybrid (vector+keyword RRF, 0013) → stage 2 Haiku rerank; both
-    // degrade gracefully (pre-0013 → legacy vector; rerank failure → RRF order).
+    // Scoped to the agent's linked knowledge bases (0012; force-draft = all org
+    // knowledge). Stage 1 hybrid (vector+keyword RRF, 0013) → stage 2 Haiku
+    // rerank; both degrade gracefully. The call was KICKED OFF before classify
+    // (parallel funnel) — here we only await it.
     currentStep = 'retrieve';
-    // force-draft deliberately bypasses the agent — a human asked for a draft,
-    // so search ALL org knowledge, not the agent's (possibly empty) base set.
-    const knowledgeBaseIds =
-      activeAgent && !forceDraft ? await loadAgentKbIds(supabase, activeAgent.id) : null;
-    const retrieveStart = Date.now();
-    const retrieval = await retrieveRelevantChunks(supabase, orgId, cleanBody, {
-      knowledgeBaseIds,
-      companyName: orgName,
-    });
+    const retrieval = await retrievalEarly;
     const { matches, embedCostUsd: embedCost } = retrieval;
+    // wall-clock since kickoff — overlaps classify/extract, logged as-is
     const retrieveLatency = Date.now() - retrieveStart;
     await logAiRun(supabase, {
       orgId,
@@ -366,6 +428,9 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 5. draft (Sonnet) ---------------------------------------------------
     currentStep = 'draft';
+    // Prior turns → the draft continues the dialog instead of restarting it
+    // (the bot re-introduced itself on every WhatsApp message, 2026-07-21).
+    const history = await loadDraftHistory(supabase, conv.id, message.id);
     const draftStart = Date.now();
     const { result: draftResult, costUsd: draftCost } = await draft({
       companyName: orgName,
@@ -373,6 +438,7 @@ export async function processMessage(messageId: string): Promise<void> {
       channelType: channel.type,
       subject: conv.subject,
       body: cleanBody,
+      history,
       // Only pin the reply language for de/en; 'other' passes null so the draft
       // prompt falls back to "answer in the customer's language" instead of the
       // literal, unhelpful hint "answer in this language: other".
@@ -903,6 +969,73 @@ async function recordSuppressedHandoff(
     reason: 'low_confidence',
     outcome: 'suppressed',
   });
+}
+
+/**
+ * Downloads the newest audio attachment of the message from storage and runs it
+ * through Whisper. Returns null when there is no usable attachment (the caller
+ * marks the message skipped); throws on download/API failures so pg-boss
+ * retries. Transcript content is never logged (§7).
+ */
+async function transcribeInboundAudio(
+  supabase: SupabaseClient,
+  message: LoadedMessage
+): Promise<{ text: string; durationSeconds: number; costUsd: number } | null> {
+  const { data: attachmentRows, error } = await supabase
+    .from('attachments')
+    .select('storage_path, mime')
+    .eq('org_id', message.org_id)
+    .eq('message_id', message.id)
+    .order('created_at', { ascending: false })
+    .limit(5);
+  if (error) throw error;
+  const audioAttachment = ((attachmentRows ?? []) as { storage_path: string; mime: string }[]).find(
+    (row) => (row.mime ?? '').startsWith('audio/')
+  );
+  if (!audioAttachment) return null;
+
+  const { data: blob, error: downloadError } = await supabase.storage
+    .from('attachments')
+    .download(audioAttachment.storage_path);
+  if (downloadError || !blob) {
+    throw downloadError ?? new Error('audio attachment download returned no data');
+  }
+  const audio = new Uint8Array(await blob.arrayBuffer());
+  const filename = audioAttachment.storage_path.split('/').pop() ?? 'sprachnachricht.ogg';
+  const result = await transcribeAudio({ audio, filename, mime: audioAttachment.mime });
+  return { text: result.text, durationSeconds: result.durationSeconds, costUsd: result.costUsd };
+}
+
+const DRAFT_HISTORY_TURNS = 12;
+const DRAFT_HISTORY_TURN_CHARS = 600;
+
+/**
+ * Last conversation turns (oldest first) for the draft context — customer and
+ * bot/agent messages only, system notices excluded, each turn capped so a long
+ * thread cannot blow up the prompt.
+ */
+async function loadDraftHistory(
+  supabase: SupabaseClient,
+  conversationId: string,
+  currentMessageId: string
+): Promise<{ role: 'customer' | 'assistant'; content: string }[]> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('id, sender_type, content, created_at')
+    .eq('conversation_id', conversationId)
+    .neq('id', currentMessageId)
+    .in('sender_type', ['contact', 'bot', 'agent'])
+    .order('created_at', { ascending: false })
+    .limit(DRAFT_HISTORY_TURNS);
+  if (error) return []; // history is an enhancement — never fail the draft over it
+  const rows = (data ?? []) as { sender_type: string; content: string | null }[];
+  return rows
+    .reverse()
+    .filter((row) => (row.content ?? '').trim().length > 0)
+    .map((row) => ({
+      role: row.sender_type === 'contact' ? ('customer' as const) : ('assistant' as const),
+      content: (row.content ?? '').replace(/\s+/g, ' ').trim().slice(0, DRAFT_HISTORY_TURN_CHARS),
+    }));
 }
 
 /** Defensively parse org_settings.auto_ack_texts; null when unset/invalid. */

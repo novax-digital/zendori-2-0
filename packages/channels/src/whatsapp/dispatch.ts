@@ -154,3 +154,60 @@ export async function deliverOutboundWhatsApp(
   // config.provider === 'meta' — built in Phase 7b
   return { ok: false, error: 'WhatsApp über Meta ist noch nicht aktiv (Phase 7b).' };
 }
+
+export interface SendTypingIndicatorParams {
+  orgId: string;
+  channelId: string;
+  /** Twilio SID (SM…/MM…) of the inbound message being responded to. */
+  inboundMessageSid: string;
+}
+
+/**
+ * WhatsApp typing indicator + read receipt (Twilio Public Beta): shows "typing…"
+ * on the customer's device until the reply is delivered or 25s pass, and marks
+ * the referenced inbound message as read. Best-effort UX sugar — any failure is
+ * swallowed (throwing would be worse than a missing indicator). Meta provider:
+ * not wired yet (Phase 7b).
+ */
+export async function sendWhatsappTypingIndicator(
+  supabase: SupabaseClient,
+  params: SendTypingIndicatorParams
+): Promise<void> {
+  const key = masterKey();
+  if (!key) return;
+  if (!/^(SM|MM)[0-9a-fA-F]{32}$/.test(params.inboundMessageSid)) return;
+
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('type, config')
+    .eq('org_id', params.orgId)
+    .eq('id', params.channelId)
+    .maybeSingle();
+  const channel = channelRow as { type: string; config: unknown } | null;
+  if (!channel || channel.type !== 'whatsapp') return;
+  const configResult = whatsappChannelConfigSchema.safeParse(channel.config);
+  if (!configResult.success || configResult.data.provider !== 'twilio') return;
+  const config = configResult.data;
+
+  let authToken: string;
+  try {
+    authToken = await decryptSecret(config.authTokenEncrypted, key);
+  } catch {
+    return;
+  }
+
+  const base = process.env.TWILIO_MESSAGING_API_BASE?.replace(/\/+$/, '') ||
+    'https://messaging.twilio.com';
+  try {
+    await fetch(`${base}/v3/Indicators/Typing.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${config.accountSid}:${authToken}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ channel: 'WHATSAPP', messageId: params.inboundMessageSid }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}

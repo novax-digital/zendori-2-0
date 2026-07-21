@@ -25,9 +25,10 @@ export const CHUNKING = {
 } as const;
 
 /** Steps logged to ai_runs ('rerank' since 0013 — stage 2 of retrieval). */
-export type AiRunStep = 'classify' | 'extract' | 'retrieve' | 'rerank' | 'draft';
+export type AiRunStep = 'transcribe' | 'classify' | 'extract' | 'retrieve' | 'rerank' | 'draft';
 
 export * from './schemas.js';
+export * from './transcribe.js';
 export * from './prompts.js';
 export * from './cost.js';
 export * from './chunking.js';
