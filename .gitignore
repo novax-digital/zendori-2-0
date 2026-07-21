@@ -7,6 +7,7 @@ out/
 dist/
 *.tsbuildinfo
 apps/web/public/widget.js
+apps/web/public/form.js
 
 # env & secrets — never commit
 .env

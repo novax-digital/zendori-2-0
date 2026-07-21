@@ -16,6 +16,18 @@ const inboundEmailConfigSchema = z.object({
 export type DeliverOutboundResult = { ok: true; messageId: string } | { ok: false; error: string };
 
 /**
+ * Mail-loop / backscatter guard: outbound mail must never target our own
+ * inbound catch-all — an attacker entering a Zendori intake address into a
+ * public form would otherwise turn an auto-send into a message loop (the reply
+ * re-enters via the catch-all → new pipeline run → next auto-send).
+ */
+export function isSuppressedEmailRecipient(email: string): boolean {
+  const domain = process.env.INBOUND_EMAIL_DOMAIN?.trim().toLowerCase();
+  if (!domain) return false;
+  return email.trim().toLowerCase().endsWith(`@${domain}`);
+}
+
+/**
  * Sends an agent/bot reply out through an inbound-email channel via Resend.
  * Resolves the recipient (conversation contact), threading headers (newest
  * inbound email of the conversation) and the sender address, then delegates to
@@ -79,6 +91,9 @@ export async function deliverOutboundEmail(
   const contactEmail = (contactRow as { email: string | null } | null)?.email;
   if (!contactEmail) {
     return { ok: false, error: 'Der Kontakt hat keine E-Mail-Adresse für den Versand.' };
+  }
+  if (isSuppressedEmailRecipient(contactEmail)) {
+    return { ok: false, error: 'Versand an Zendori-Inbound-Adressen ist gesperrt (Mail-Loop-Schutz).' };
   }
 
   // 4. threading: reference the newest inbound email of this conversation and

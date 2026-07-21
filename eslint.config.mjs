@@ -15,8 +15,9 @@ export default tseslint.config(
       // reference marketing site (separate Astro project, not part of this app)
       'Zendori-Website/**',
       'apps/web/next-env.d.ts',
-      // generated widget bundle (esbuild output, see apps/web/scripts/build-widget.mjs)
+      // generated embed bundles (esbuild output, see apps/web/scripts/build-embeds.mjs)
       'apps/web/public/widget.js',
+      'apps/web/public/form.js',
     ],
   },
   ...tseslint.configs.recommended,

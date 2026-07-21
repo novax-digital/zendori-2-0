@@ -337,7 +337,13 @@ export async function processMessage(messageId: string): Promise<void> {
     });
 
     // --- 2. extract (email or form-like bodies only) -------------------------
-    if (channel.type === 'email' || looksLikeForm(cleanBody)) {
+    // Builder-form submissions (metadata.form, Phase 10) are already fully
+    // structured: contact/subject came straight from the role fields
+    // (contact_authoritative), so the extraction Haiku call would be pure cost
+    // and its guesses must never overwrite exact user input — skip entirely.
+    const isBuilderFormSubmission =
+      message.metadata.form !== undefined && message.metadata.form !== null;
+    if (!isBuilderFormSubmission && (channel.type === 'email' || looksLikeForm(cleanBody))) {
       currentStep = 'extract';
       const extractStart = Date.now();
       const { result: extraction, costUsd: extractCost } = await extract({

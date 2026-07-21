@@ -785,6 +785,219 @@ describe.skipIf(!enabled)('RLS: agent kinds, phone numbers, channel limits (0015
   });
 });
 
+describe.skipIf(!enabled)('RLS: form builder (0019)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let member: SupabaseClient;
+  let stranger: SupabaseClient;
+  let ownerId: string;
+  let memberId: string;
+  let strangerId: string;
+  let orgId: string;
+  let builderChannelId: string;
+  let plainChannelId: string;
+  const ownerEmail = `forms-owner-${randomUUID()}@test.zendori.dev`;
+  const memberEmail = `forms-member-${randomUUID()}@test.zendori.dev`;
+  const strangerEmail = `forms-stranger-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+  const definition = {
+    fields: [{ key: 'f_email', type: 'email', label: 'E-Mail', required: true, role: 'email' }],
+    design: {
+      color: '#0bb8ba',
+      radius: 'rounded',
+      submitLabel: 'Absenden',
+      successMessage: 'Danke!',
+    },
+    locale: 'de',
+  };
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, memberEmail, strangerEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    memberId = created[1]!.data.user!.id;
+    strangerId = created[2]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Forms Org', slug: `forms-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: ownerId, role: 'owner' },
+      { org_id: orgId, user_id: memberId, role: 'agent' },
+    ]);
+
+    const { data: builderChannel } = await admin
+      .from('channels')
+      .insert({
+        org_id: orgId,
+        type: 'email',
+        name: 'Builder-Formular',
+        config: {
+          type: 'email',
+          mode: 'inbound',
+          address: `forms-${randomUUID().slice(0, 8)}@in.test.dev`,
+          purpose: 'form',
+          builderForm: true,
+        },
+      })
+      .select('id')
+      .single();
+    builderChannelId = builderChannel!.id as string;
+
+    const { data: plainChannel } = await admin
+      .from('channels')
+      .insert({
+        org_id: orgId,
+        type: 'email',
+        name: 'Normale Intake-Adresse',
+        config: {
+          type: 'email',
+          mode: 'inbound',
+          address: `plain-${randomUUID().slice(0, 8)}@in.test.dev`,
+          purpose: 'form',
+        },
+      })
+      .select('id')
+      .single();
+    plainChannelId = plainChannel!.id as string;
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    member = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    stranger = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+    expect(
+      (await member.auth.signInWithPassword({ email: memberEmail, password })).error
+    ).toBeNull();
+    expect(
+      (await stranger.auth.signInWithPassword({ email: strangerEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    for (const id of [ownerId, memberId, strangerId]) {
+      if (id) await admin.auth.admin.deleteUser(id);
+    }
+  });
+
+  it('member may create a form on a builder channel; non-builder channels are rejected', async () => {
+    const { error: badChannel } = await member.from('forms').insert({
+      org_id: orgId,
+      channel_id: plainChannelId,
+      name: 'Falsch verkabelt',
+      public_token: randomUUID().replaceAll('-', ''),
+      definition,
+    });
+    expect(badChannel).not.toBeNull(); // guard: builderForm channel required
+
+    const { error: withRecipients } = await member.from('forms').insert({
+      org_id: orgId,
+      channel_id: builderChannelId,
+      name: 'Mit Empfängern',
+      public_token: randomUUID().replaceAll('-', ''),
+      definition,
+      notification_emails: ['exfil@example.com'],
+    });
+    expect(withRecipients).not.toBeNull(); // INSERT guard: recipients owner-only
+
+    const { error: ok } = await member.from('forms').insert({
+      org_id: orgId,
+      channel_id: builderChannelId,
+      name: 'Kontaktformular',
+      public_token: randomUUID().replaceAll('-', ''),
+      definition,
+    });
+    expect(ok).toBeNull();
+  });
+
+  it('member edits content but not recipients/limits/token; owner may', async () => {
+    const { data: formRow } = await admin
+      .from('forms')
+      .select('id, public_token')
+      .eq('org_id', orgId)
+      .limit(1)
+      .single();
+    const formId = formRow!.id as string;
+
+    const { error: contentEdit } = await member
+      .from('forms')
+      .update({ name: 'Umbenannt' })
+      .eq('id', formId);
+    expect(contentEdit).toBeNull();
+
+    const { error: recipientEdit } = await member
+      .from('forms')
+      .update({ notification_emails: ['angreifer@example.com'] })
+      .eq('id', formId);
+    expect(recipientEdit).not.toBeNull(); // owner-only guard
+
+    const { error: capEdit } = await member
+      .from('forms')
+      .update({ daily_submission_limit: 9999 })
+      .eq('id', formId);
+    expect(capEdit).not.toBeNull(); // owner-only guard
+
+    const { error: ownerRecipientEdit } = await owner
+      .from('forms')
+      .update({ notification_emails: ['info@example.com'] })
+      .eq('id', formId);
+    expect(ownerRecipientEdit).toBeNull();
+
+    const { error: tokenEdit } = await owner
+      .from('forms')
+      .update({ public_token: randomUUID().replaceAll('-', '') })
+      .eq('id', formId);
+    expect(tokenEdit).not.toBeNull(); // immutable for clients
+  });
+
+  it('delete is owner-only — also via the channel cascade; strangers see nothing', async () => {
+    const { data: strangerRows } = await stranger.from('forms').select('id');
+    expect(strangerRows ?? []).toHaveLength(0);
+
+    const { data: formRow } = await admin
+      .from('forms')
+      .select('id')
+      .eq('org_id', orgId)
+      .limit(1)
+      .single();
+    const formId = formRow!.id as string;
+
+    const { data: memberDelete } = await member.from('forms').delete().eq('id', formId).select('id');
+    expect(memberDelete ?? []).toHaveLength(0); // RLS: no owner role → no rows
+
+    // bypass attempt: deleting the CHANNEL would cascade the forms row past
+    // RLS — the channels delete guard must block members for builder channels
+    const { error: channelBypass } = await member
+      .from('channels')
+      .delete()
+      .eq('id', builderChannelId);
+    expect(channelBypass).not.toBeNull();
+
+    const { data: ownerDelete } = await owner.from('forms').delete().eq('id', formId).select('id');
+    expect(ownerDelete ?? []).toHaveLength(1);
+  });
+
+  it('form_notifications: members read, nobody writes via client', async () => {
+    const { error: memberRead } = await member.from('form_notifications').select('id').limit(1);
+    expect(memberRead).toBeNull();
+
+    const { error: memberWrite } = await member.from('form_notifications').insert({
+      org_id: orgId,
+      form_id: randomUUID(),
+      message_id: randomUUID(),
+      recipients: ['x@example.com'],
+    });
+    expect(memberWrite).not.toBeNull(); // no insert policy → rejected
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

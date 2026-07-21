@@ -9,7 +9,13 @@ import { Redis } from '@upstash/redis';
  */
 
 export type RateLimitName =
-  'widget-bootstrap-ip' | 'widget-session-ip' | 'widget-message-ip' | 'widget-message-conversation';
+  | 'widget-bootstrap-ip'
+  | 'widget-session-ip'
+  | 'widget-message-ip'
+  | 'widget-message-conversation'
+  | 'form-bootstrap-ip'
+  | 'form-submit-ip'
+  | 'form-submit-token';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -43,6 +49,21 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(15, '1 m'),
       prefix: 'zendori:rl:widget-message-conversation',
+    }),
+    'form-bootstrap-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(30, '1 m'),
+      prefix: 'zendori:rl:form-bootstrap-ip',
+    }),
+    'form-submit-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(5, '1 m'),
+      prefix: 'zendori:rl:form-submit-ip',
+    }),
+    'form-submit-token': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(30, '1 m'),
+      prefix: 'zendori:rl:form-submit-token',
     }),
   };
   return limiters;

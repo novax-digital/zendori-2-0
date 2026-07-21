@@ -3,7 +3,7 @@ import type { JobWithMetadata } from 'pg-boss';
 import { z } from 'zod';
 import { createLogger, loadWorkerEnv } from '@zendori/core';
 import { writeHeartbeat } from './heartbeat.js';
-import { toErrorInfo } from './db.js';
+import { getServiceClient, toErrorInfo } from './db.js';
 import { handlePipelineFailure, processMessage } from './pipeline/process-message.js';
 import { indexSource, markIndexSourceFailed } from './pipeline/index-source.js';
 import { markHubspotSyncTerminal, syncConversation } from './pipeline/hubspot-sync.js';
@@ -23,6 +23,7 @@ import {
   markPostCallTerminal,
   processPostCall,
 } from './pipeline/post-call.js';
+import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
 
 const logger = createLogger('worker');
 
@@ -32,6 +33,7 @@ const processMessageJobSchema = z.object({ messageId: z.uuid() });
 const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
 const hubspotSyncJobSchema = z.object({ conversationId: z.uuid() });
 const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
+const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -176,6 +178,22 @@ async function main(): Promise<void> {
           }
           throw err; // let pg-boss retry
         }
+      }
+    }
+  );
+
+  // --- Phase-10 form-notification forwarding ----------------------------------
+  await ensureQueuePolicy(boss, FORM_NOTIFY_QUEUE);
+  await boss.work(
+    FORM_NOTIFY_QUEUE,
+    { includeMetadata: true },
+    async (jobs: JobWithMetadata<{ notificationId: string }>[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const parsed = formNotifyJobSchema.parse(job.data);
+        // processFormNotification handles the terminal attempt itself (state
+        // 'failed' + internal note) and only rethrows for retryable attempts.
+        await processFormNotification(supabase, logger, parsed, job.retryCount);
       }
     }
   );

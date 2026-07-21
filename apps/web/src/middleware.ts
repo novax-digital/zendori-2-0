@@ -12,7 +12,14 @@ export async function middleware(request: NextRequest) {
   // parties (customer sites, Resend/WhatsApp/voice webhooks) — never redirect
   // these to /login. Widget API + script, and provider webhooks under /api/hooks/.
   const path = request.nextUrl.pathname;
-  if (path === '/widget.js' || path.startsWith('/api/widget/') || path.startsWith('/api/hooks/')) {
+  if (
+    path === '/widget.js' ||
+    path === '/form.js' ||
+    path.startsWith('/api/widget/') ||
+    path.startsWith('/api/forms/') ||
+    path.startsWith('/api/hooks/') ||
+    path.startsWith('/f/')
+  ) {
     return NextResponse.next();
   }
 

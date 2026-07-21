@@ -15,11 +15,15 @@ const BARE_PREFIXES = [
   '/invite',
   '/widget-demo',
   '/widget-host',
+  // hosted public form page — trailing slash on purpose: startsWith('/f')
+  // would swallow every future /f* route
+  '/f/',
 ];
 
 type IconName =
   | 'inbox'
   | 'book'
+  | 'form'
   | 'channels'
   | 'ai'
   | 'canned'
@@ -57,6 +61,13 @@ function Icon({ name }: { name: IconName }) {
         <svg {...common}>
           <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z" />
           <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20" />
+        </svg>
+      );
+    case 'form':
+      return (
+        <svg {...common}>
+          <rect x="5" y="3" width="14" height="18" rx="2" />
+          <path d="M9 8h6M9 12h6M9 16h3" />
         </svg>
       );
     case 'channels':
@@ -153,6 +164,7 @@ const NAV: NavSection[] = [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
+      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
       { href: '/settings/phone-numbers', label: 'Telefonnummern', icon: 'phone' },
       { href: '/settings/ai', label: 'Übergabe & Zeiten', icon: 'clock' },
       { href: '/settings/canned-responses', label: 'Textbausteine', icon: 'canned' },

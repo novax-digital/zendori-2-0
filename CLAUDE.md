@@ -8,7 +8,7 @@ Kein Chatwoot, kein Fremd-Helpdesk — alles eigene Lösung. Ziel aller Kanäle 
 Kern-Features:
 
 - **Kanäle:** Website-Chat-Widget, E-Mail (Inbound-Adressen als universeller Intake + später angebundene Postfächer), WhatsApp, Telefon (Voice, letzte Phase)
-- **Universeller Formular-Intake:** Kontaktformulare beliebiger Websites senden einfach an eine generierte Zendori-Inbound-Adresse (Empfänger oder CC) — kein Code auf der Kundenseite nötig
+- **Universeller Formular-Intake:** Kontaktformulare beliebiger Websites senden einfach an eine generierte Zendori-Inbound-Adresse (Empfänger oder CC) — kein Code auf der Kundenseite nötig. Zusätzlich **Formular-Builder (Phase 10):** in Zendori gestaltete Formulare mit Embed-Code, eigenem Submission-Endpoint (`/api/forms/*`) und E-Mail-Weiterleitung jeder Einsendung an bis zu 10 hinterlegte Adressen
 - **Shared Inbox:** ein Posteingang für alle Kanäle, Team-Zuweisung, interne Notizen, Status
 - **Wissensdatenbank:** pro Kunde (Org), Quellen: URL-Crawl, Dateien, manuelle Texte → RAG
 - **KI-Agent:** klassifiziert, extrahiert (Ticketisierung), beantwortet mit RAG, Confidence-Gate
@@ -20,7 +20,7 @@ Kern-Features:
 
 - Kein Chatwoot, keine Chatwoot-Kompatibilität.
 - Kein n8n im Kernpfad. Die alten n8n-Workflows sind nur **Referenz/Spezifikation** (siehe §10).
-- Kein separater Form-POST-Endpoint. Formular-Intake läuft ausschließlich über Inbound-E-Mail-Adressen (§3).
+- Formular-Intake hat genau ZWEI Wege: (a) Inbound-E-Mail-Adressen (No-Code, Bestand) und (b) der Zendori-Formular-Builder mit eigenem öffentlichen Submission-Endpoint (`/api/forms/*`, Embed-Mechanik analog Chat-Widget, Phase 10). Kein dritter Weg, keine generischen Webhook-Intakes.
 - HubSpot ist nie Kern-Abhängigkeit — nur optionale, pro Org abschaltbare Integration.
 - Kein Kubernetes, keine Microservices, kein Event-Sourcing. Ein Monorepo, zwei Prozesse.
 - Keine Features außerhalb der aktuellen Phase. Keine „wo wir schon dabei sind"-Erweiterungen.
@@ -45,6 +45,7 @@ Kern-Features:
   - **Meta WhatsApp Cloud API direkt** — Kunde besitzt seine eigene Nummer/WABA, verbunden per **Embedded Signup (Tech Provider)**; Routing über `phone_number_id`, Verify `X-Hub-Signature-256`.
   - Beide hinter _einem_ Adapter (`packages/channels/whatsapp`, dispatch auf `provider`), gleiche `UnifiedInboundMessage`/`OutboundMessage`; Credentials pro Org verschlüsselt in `channels.config`. Twilio ist hier bewusst erlaubt — die frühere „kein Twilio"-Regel ist damit aufgehoben.
 - **Chat:** eigenes Embeddable Widget (ein Script-Tag) + Supabase Realtime.
+- **Formular-Builder (Phase 10):** Embeddable Script (`form.js`, Platzhalter-div + Script-Tag, Shadow DOM, analog Widget) + gehostete Formular-Seite `/f/{token}`; öffentlicher Submission-Endpoint mit Public Form Token, Upstash-Rate-Limits, Honeypot + HMAC-Render-Token (Min-Time, Key per HKDF aus `MASTER_ENCRYPTION_KEY`), Tages-Cap pro Formular; Weiterleitungs-Mails über Resend aus dem Worker (`form.notify`). Ein Builder-Formular = ein email/inbound-Channel (`config.builderForm`) + eine `forms`-Zeile; Kontakt/Betreff kommen DIREKT aus role-Feldern (kein KI-Umweg, `contact_authoritative`), Extract-Schritt wird übersprungen. Mail-Loop-Schutz: Versand an `*@INBOUND_EMAIL_DOMAIN` ist gesperrt.
 - **HubSpot (optional, Phase 6):** einseitiger Ticket-Sync pro Org mit Sync-Regeln (alle Konversationen | nur ausgewählte Kanäle | nur manuell). Kein Kern-Bestandteil.
 - **Voice (Phase 9): xAI Voice API + Twilio als reiner Nummern-/SIP-Trunk-Lieferant** (Entscheidung getroffen; ElevenLabs verworfen). Formaler Go/No-Go bleibt der deutsche Testanruf vor Phasenstart. API ist OpenAI-Realtime-kompatibel → Plan B OpenAI Realtime mit fast gleichem Code. NICHT vorab implementieren. Details §9.
 - **Deployment:** apps/web → **Vercel** (Region `fra1`), apps/worker → Docker-Container auf dem bestehenden Hetzner VPS (Details §12).
@@ -80,7 +81,7 @@ interface ChannelAdapter {
 ### Nachrichtenfluss (gilt für ALLE Kanäle)
 
 ```
-Kanal-Webhook (Resend / WhatsApp / Widget / Voice, später IMAP)
+Kanal-Webhook (Resend / WhatsApp / Widget / Voice / Form-Submit)
 → normalize → Conversation-Resolver (Threading + Dedupe via external_id)
 → persist (messages) → Realtime-Event an Inbox
 → wenn conversation.mode = 'bot': KI-Pipeline (classify+extract → retrieve → draft → confidence)
@@ -113,6 +114,8 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `kb_chunks` (source_id, org_id, content, embedding vector(1536), fts tsvector [0013, generiert/german], token_count) — Retrieval zweistufig: hybrid_kb_search (Vektor+Keyword, RRF) → Haiku-Rerank (Text-Pipeline; Voice ohne Rerank wegen Latenz)
 - `ai_runs` (conversation_id, step, model, input_summary, output_summary, confidence, latency_ms, cost_usd)
 - `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, outcome: pending_human|transferred|transfer_failed|callback_ticket|suppressed [0018, nullable — Alt-Zeilen bleiben NULL], details jsonb content-frei, triggered_by)
+- `forms` (org_id, channel_id 1:1 → email/inbound-Channel mit config.builderForm, name, public_token unique, definition jsonb [zod: formDefinitionSchema], version, notification_emails jsonb ≤10, daily_submission_limit, is_active) — Formular-Builder (0019); Inhalte member-verwaltet, Löschen + Empfänger/Limits owner-only (RLS + Guard-Trigger), public_token/channel_id immutable
+- `form_notifications` (org_id, form_id, message_id unique, recipients-Snapshot jsonb, state: pending|sent|failed, attempts, last_error, sent_at) — Weiterleitungs-Queue, Writes nur Service Role, Worker-Job `form.notify`
 - `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts, handoff_sla_minutes [0018, null = aus]) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
 
 ## 6. Human-Handoff-Logik (verbindlich)
@@ -218,6 +221,8 @@ Erstelle `docs/legacy-analysis.md`:
 **Phase 8 — IMAP/SMTP: ENTFÄLLT.** Bestehende Kundenpostfächer werden per **E-Mail-Weiterleitung auf eine Resend-Inbound-Adresse** angebunden (Phase-3-Mechanik, serverless, kein IMAP). Zwei Use-Cases, je eigene Intake-Adresse = eigener Kanal: Formular-Weiterleitung und E-Mail-Weiterleitung. Einziger Zusatz: `channels.config.purpose: 'form' | 'forwarded_email'`, damit die Phase-4-Extraktion bei weitergeleiteten Mails den echten Absender aus dem Weiterleitungs-Header (statt aus einem Formular-Block) zieht. (Klein, kann an Phase 3/4 angehängt werden.)
 
 **Phase 9 — Voice (xAI + Twilio-SIP):** erst deutscher Testanruf mit mir (Latenz, Aussprache, Custom Voice, Preis, DSGVO/DPA), dann Umsetzung gemäß §9 (Worker-WebSocket-Session, Supabase-Realtime-Trigger statt Poll, Tools im Worker mit org_id/RLS, `refer`-Handoff, Twilio-SIP-Trunk-Provisionierung, `voice_calls`-Tabelle). **STOP.**
+
+**Phase 10 — Formular-Builder:** Migration 0019 (`forms` + `form_notifications`), Builder-UI unter Einstellungen→Formulare (Feldliste mit ↑/↓, Design-Tab mit Kontrast-Check, Live-Vorschau über den EINEN geteilten Renderer, Einbetten-Tab), Embed `form.js` + gehostete Seite `/f/{token}` + iframe-Doku, Submission-Endpoint mit Honeypot/HMAC-Render-Token/Rate-Limits/Tages-Cap, Kontakt aus role-Feldern (`contact_authoritative`, Extract-Skip), Weiterleitungs-Mail (HTML-Template, Reply-To = Einsender) aus dem Worker, Consent-Feldtyp als DSGVO-Nachweis. Kontingent: gemeinsames Kind `form` mit den Intake-Adressen. Details docs/concept-form-builder.md + docs/phase-10-forms.md. **STOP.**
 
 ## 12. Deployment
 

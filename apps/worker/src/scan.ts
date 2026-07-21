@@ -7,6 +7,11 @@ import type { PgBoss } from 'pg-boss';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from './db.js';
 import { POST_CALL_QUEUE, POST_CALL_RETRY_LIMIT } from './pipeline/post-call.js';
+import {
+  FORM_NOTIFY_QUEUE,
+  FORM_NOTIFY_RETRY_LIMIT,
+  type FormNotifyJob,
+} from './pipeline/form-notify.js';
 import { remindOverdueHandoffs } from './pipeline/handoff-sla.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
@@ -16,6 +21,7 @@ export const PROCESS_MESSAGE_RETRY_LIMIT = 3;
 export const INDEX_SOURCE_RETRY_LIMIT = 2;
 export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
 const POST_CALL_BATCH = 10;
+const FORM_NOTIFY_BATCH = 20;
 
 const SCAN_INTERVAL_MS = 3_000;
 const MESSAGE_BATCH = 20;
@@ -54,6 +60,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueuePendingSources(boss, supabase);
       await enqueueDueHubspotSyncs(boss, supabase);
       await enqueueDuePostCalls(boss, supabase);
+      await enqueuePendingFormNotifications(boss, supabase);
       // 0018 v1.5: internally rate-limited to one sweep per minute.
       await remindOverdueHandoffs(supabase, logger);
     } catch (err) {
@@ -143,6 +150,32 @@ async function enqueueDueHubspotSyncs(boss: PgBoss, supabase: SupabaseClient): P
       retryBackoff: true,
     });
     enqueued += 1;
+  }
+}
+
+/** Enqueue pending form-forwarding mails (Phase 10). */
+async function enqueuePendingFormNotifications(
+  boss: PgBoss,
+  supabase: SupabaseClient
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('form_notifications')
+    .select('id')
+    .eq('state', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(FORM_NOTIFY_BATCH);
+  if (error) {
+    // form_notifications does not exist until migration 0019 is applied — stay silent.
+    if ((error as { code?: string }).code === '42P01') return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(FORM_NOTIFY_QUEUE, { notificationId: row.id } satisfies FormNotifyJob, {
+      singletonKey: row.id,
+      retryLimit: FORM_NOTIFY_RETRY_LIMIT,
+      retryBackoff: true,
+    });
   }
 }
 

@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 
-export type TileKey = 'form' | 'email' | 'whatsapp' | 'voice' | 'chat' | 'test';
+export type TileKey = 'form' | 'webform' | 'email' | 'whatsapp' | 'voice' | 'chat' | 'test';
 
 export type TileMeta = {
   key: TileKey;
@@ -29,6 +29,14 @@ function TileIcon({ tile }: { tile: TileKey }) {
         <svg {...common}>
           <rect x="5" y="3" width="14" height="18" rx="2" />
           <path d="M9 8h6M9 12h6M9 16h3" />
+        </svg>
+      );
+    case 'webform':
+      return (
+        <svg {...common}>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M7 9h10M7 12.5h10M7 16h5" />
+          <path d="M3 7.5h18" />
         </svg>
       );
     case 'email':

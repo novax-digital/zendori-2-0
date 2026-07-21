@@ -33,6 +33,12 @@ export const emailInboundConfigSchema = z.object({
   purpose: z.enum(['form', 'forwarded_email']).default('form'),
   /** Optional verified sender domain for outbound mail. */
   senderDomain: z.string().optional(),
+  /**
+   * Marks a form-builder channel (Phase 10): the channel was created by the
+   * builder and carries exactly one `forms` row (definition, embed token,
+   * notification recipients). Absent on classic intake channels.
+   */
+  builderForm: z.boolean().optional(),
 });
 
 export const emailImapConfigSchema = z.object({

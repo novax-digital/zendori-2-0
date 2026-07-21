@@ -72,6 +72,26 @@ function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
   };
 }
 
+type WebformChannelView = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  agentId: string | null;
+};
+
+/** Extracts a form-builder channel (email + config.builderForm); null otherwise. */
+function toWebformChannelView(channel: Channel): WebformChannelView | null {
+  if (channel.type !== 'email') return null;
+  const config = channel.config as { builderForm?: unknown };
+  if (config.builderForm !== true) return null;
+  return {
+    id: channel.id,
+    name: channel.name,
+    isActive: channel.is_active,
+    agentId: channel.agent_id ?? null,
+  };
+}
+
 type TestChannelView = { id: string; name: string; isActive: boolean; agentId: string | null };
 
 /** Extracts a manual test channel (type=chat, config.test); null otherwise. */
@@ -96,10 +116,17 @@ type IntakeChannelView = {
   agentId: string | null;
 };
 
-/** Extracts an inbound-email intake channel; returns null for other channels. */
+/** Extracts an inbound-email intake channel; returns null for other channels.
+ *  Builder-form channels (config.builderForm, Phase 10) have their own tile. */
 function toIntakeChannelView(channel: Channel): IntakeChannelView | null {
   if (channel.type !== 'email') return null;
-  const config = channel.config as { mode?: unknown; address?: unknown; purpose?: unknown };
+  const config = channel.config as {
+    mode?: unknown;
+    address?: unknown;
+    purpose?: unknown;
+    builderForm?: unknown;
+  };
+  if (config.builderForm === true) return null;
   if (config.mode !== 'inbound' || typeof config.address !== 'string') return null;
   return {
     id: channel.id,
@@ -359,6 +386,21 @@ export default async function ChannelsPage({
     .filter((v): v is IntakeChannelView => v !== null);
   const formChannels = intakeChannels.filter((c) => c.purpose === 'form');
   const emailChannels = intakeChannels.filter((c) => c.purpose === 'forwarded_email');
+  const webformChannels = channels
+    .map(toWebformChannelView)
+    .filter((v): v is WebformChannelView => v !== null);
+  // builder-form ids for the "Im Builder bearbeiten" links (42P01 pre-migration → empty)
+  const webformFormIds = new Map<string, string>();
+  if (webformChannels.length > 0) {
+    const supabaseForForms = await createSupabaseServerClient();
+    const { data: formRows } = await supabaseForForms
+      .from('forms')
+      .select('id, channel_id')
+      .eq('org_id', orgId);
+    for (const row of (formRows ?? []) as { id: string; channel_id: string }[]) {
+      webformFormIds.set(row.channel_id, row.id);
+    }
+  }
   const whatsappChannels = channels
     .map(toWhatsappChannelView)
     .filter((v): v is WhatsappChannelView => v !== null);
@@ -383,8 +425,13 @@ export default async function ChannelsPage({
     totalCount: list.length,
   });
 
+  // webform shares the 'form' quota kind (product decision 2026-07-21)
+  const quotaKindFor = (key: TileKey): ChannelKind =>
+    key === 'webform' ? 'form' : (key as ChannelKind);
+
   const tiles: TileMeta[] = [
-    meta('form', 'Formular', 'Kontaktformulare beliebiger Websites — als Empfänger eintragen.', formChannels),
+    meta('webform', 'Web-Formular', 'Mit dem Zendori-Builder erstellte Formulare zum Einbetten.', webformChannels),
+    meta('form', 'Formular-Weiterleitung', 'Kontaktformulare fremder Systeme per E-Mail-Empfänger anbinden.', formChannels),
     meta('email', 'E-Mail', 'Bestehende Postfächer per Weiterleitung anbinden.', emailChannels),
     meta('whatsapp', 'WhatsApp', 'WhatsApp-Nummern deines Unternehmens (Twilio).', whatsappChannels),
     meta('voice', 'Voice', 'Telefon-Anrufe nimmt der KI-Sprachassistent entgegen.', voiceChannels),
@@ -392,13 +439,13 @@ export default async function ChannelsPage({
     meta('test', 'Test', 'Nachrichten manuell einspeisen — zum Ausprobieren.', testChannels),
     // A kind locked to 0 with nothing provisioned is removed from the gallery
     // entirely ("ausgebaut") — existing channels keep their tile visible.
-  ].filter((tile) => !(quota(tile.key as ChannelKind).limit === 0 && tile.totalCount === 0));
+  ].filter((tile) => !(quota(quotaKindFor(tile.key)).limit === 0 && tile.totalCount === 0));
 
   // --- panels ------------------------------------------------------------------
 
   const formPanel: ReactNode = (
     <div className="panel">
-      <h2>Formular-Anfragen</h2>
+      <h2>Formular-Weiterleitung</h2>
       <p style={helpStyle}>
         An diese Adressen gesendete E-Mails (als Empfänger oder in CC) landen automatisch in der
         Inbox. Ideal für Kontaktformulare beliebiger Websites: einfach die Adresse als Empfänger
@@ -1013,8 +1060,58 @@ export default async function ChannelsPage({
     </div>
   );
 
+  const webformPanel: ReactNode = (
+    <div className="panel">
+      <h2>Web-Formulare</h2>
+      <p style={helpStyle}>
+        Mit dem Formular-Builder erstellte Formulare. Felder, Design und Embed-Code verwaltest du
+        unter <Link href={`/settings/forms?org=${orgId}`}>Formulare</Link> — hier weist du den
+        Agenten zu und schaltest den Kanal aktiv/inaktiv.
+      </p>
+      {webformChannels.length === 0 ? (
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+          Noch kein Web-Formular angelegt —{' '}
+          <Link href={`/settings/forms?org=${orgId}`}>jetzt im Builder erstellen</Link>.
+        </p>
+      ) : (
+        <div style={{ marginBottom: '1rem' }}>
+          {webformChannels.map((wf) => (
+            <div key={wf.id} className="chan-instance">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="chan-instance-name">{wf.name}</div>
+                <AgentSelect
+                  orgId={orgId}
+                  channelId={wf.id}
+                  channelType="email"
+                  agentId={wf.agentId}
+                  agents={agentOptions}
+                  disabled={!isOwner}
+                />
+                {webformFormIds.has(wf.id) ? (
+                  <p style={{ margin: '0.4rem 0 0', fontSize: '0.85rem' }}>
+                    <Link href={`/settings/forms/${webformFormIds.get(wf.id)}?org=${orgId}`}>
+                      Im Formular-Builder bearbeiten →
+                    </Link>
+                  </p>
+                ) : null}
+              </div>
+              <ActiveToggle orgId={orgId} channelId={wf.id} isActive={wf.isActive} />
+            </div>
+          ))}
+        </div>
+      )}
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+        ⚠️ Hinweis: Formulare sind öffentlich erreichbar und die E-Mail-Adresse der Einsendung ist
+        frei wählbar. JEDE automatische Antwort — Autopilot ebenso wie automatische
+        Empfangsbestätigungen (Auto-Ack) — geht an genau diese Adresse. Für öffentliche Formulare
+        empfehlen wir den Agent-Modus „Nur Entwürfe" und zurückhaltende Auto-Ack-Texte.
+      </p>
+    </div>
+  );
+
   const panels: Record<TileKey, ReactNode> = {
     form: formPanel,
+    webform: webformPanel,
     email: emailPanel,
     whatsapp: whatsappPanel,
     voice: voicePanel,

@@ -78,7 +78,8 @@ async function parseJson(res: Response, context: string): Promise<unknown> {
 
 export interface SendEmailParams {
   from: string;
-  to: string;
+  /** One recipient (replies) or up to 10 (form-notification fan-out). */
+  to: string | string[];
   /** Reply-To (intake address) so customer replies re-enter the inbox. */
   replyTo?: string;
   subject: string;
@@ -115,7 +116,7 @@ export async function sendEmail(
 
   const body = {
     from: params.from,
-    to: [params.to],
+    to: Array.isArray(params.to) ? params.to : [params.to],
     reply_to: params.replyTo ? [params.replyTo] : undefined,
     subject: params.subject,
     text: params.text,
