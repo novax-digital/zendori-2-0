@@ -47,14 +47,29 @@ export default async function FormBuilderPage({
     : [];
 
   return (
-    <main>
-      <p style={{ marginBottom: '0.75rem' }}>
-        <Link href={`/settings/forms?org=${orgId}`} style={{ fontSize: '0.88rem' }}>
-          ← Alle Formulare
-        </Link>
-      </p>
-      {query.error ? <p className="error">{query.error}</p> : null}
-      {query.notice ? <p className="notice">{query.notice}</p> : null}
+    <div className="shell shell--wide">
+      <div className="page-head">
+        <p style={{ marginBottom: '0.5rem' }}>
+          <Link href={`/settings/forms?org=${orgId}`} style={{ fontSize: '0.88rem' }}>
+            ← Alle Formulare
+          </Link>
+        </p>
+        <h1>{form.name}</h1>
+        <p>
+          Felder, Design und Einbettung dieses Formulars. Gespeicherte Änderungen wirken sofort
+          auf eingebettete Formulare.
+        </p>
+      </div>
+      {query.error ? (
+        <p className="error" style={{ marginBottom: '1.5rem' }}>
+          {query.error}
+        </p>
+      ) : null}
+      {query.notice ? (
+        <p className="notice" style={{ marginBottom: '1.5rem' }}>
+          {query.notice}
+        </p>
+      ) : null}
       <FormBuilder
         orgId={orgId}
         formId={form.id}
@@ -66,6 +81,6 @@ export default async function FormBuilderPage({
         isOwner={role === 'owner'}
         embedBase={appUrl().replace(/\/+$/, '')}
       />
-    </main>
+    </div>
   );
 }

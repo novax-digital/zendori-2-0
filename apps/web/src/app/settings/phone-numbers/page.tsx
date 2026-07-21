@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import type { PhoneNumberStatus, PhoneNumberType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -34,18 +33,13 @@ const STATUS_LABELS: Record<PhoneNumberStatus, string> = {
   released: 'Gekündigt',
 };
 
-const statusStyles: Record<PhoneNumberStatus, CSSProperties> = {
-  requested: { background: 'var(--warn-tint)', color: 'var(--warn)' },
-  provisioning: { background: 'var(--warn-tint)', color: 'var(--warn)' },
-  active: { background: 'var(--success-tint)', color: 'var(--success-ink)' },
-  released: { background: 'var(--danger-tint)', color: 'var(--danger)' },
+const statusClass: Record<PhoneNumberStatus, string> = {
+  requested: 'badge--warn',
+  provisioning: 'badge--warn',
+  active: 'badge--success',
+  released: 'badge--danger',
 };
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
 export default async function PhoneNumbersPage({
   searchParams,
@@ -124,7 +118,7 @@ export default async function PhoneNumbersPage({
                   </td>
                   <td>{TYPE_LABELS[n.number_type]}</td>
                   <td>
-                    <span className="badge" style={statusStyles[n.status]}>
+                    <span className={`badge ${statusClass[n.status]}`}>
                       {STATUS_LABELS[n.status]}
                     </span>
                   </td>
@@ -151,7 +145,7 @@ export default async function PhoneNumbersPage({
 
       <div className="panel">
         <h2>Neue Nummer beantragen</h2>
-        <p style={helpStyle}>
+        <p className="help">
           Zendori kauft und konfiguriert die Nummer für dich (inklusive Telefonie-Anbindung und
           Voice-Kanal). Nach der Einrichtung erscheint sie oben als „Aktiv" und kann unter
           Einstellungen → Kanäle konfiguriert werden.

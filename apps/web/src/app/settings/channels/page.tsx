@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { AgentKind, AgentMode, Channel, ChannelKind } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
@@ -231,22 +231,7 @@ const VOICE_LANGUAGES: { code: string; label: string }[] = [
   { code: 'tr', label: 'Türkisch' },
 ];
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
 /** Per-channel Aktiv/Inaktiv toggle — one click flips is_active. */
 function ActiveToggle({
@@ -446,7 +431,7 @@ export default async function ChannelsPage({
   const formPanel: ReactNode = (
     <div className="panel">
       <h2>Formular-Weiterleitung</h2>
-      <p style={helpStyle}>
+      <p className="help">
         An diese Adressen gesendete E-Mails (als Empfänger oder in CC) landen automatisch in der
         Inbox. Ideal für Kontaktformulare beliebiger Websites: einfach die Adresse als Empfänger
         eintragen — kein Code auf der Kundenseite nötig. Der echte Absender wird aus dem
@@ -509,7 +494,7 @@ export default async function ChannelsPage({
   const emailPanel: ReactNode = (
     <div className="panel">
       <h2>E-Mail-Weiterleitung</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Binde ein bestehendes Postfach an, indem du dort eine Weiterleitung auf die generierte
         Adresse einrichtest. Weitergeleitete Mails landen in der Inbox; der echte Absender wird aus
         dem Weiterleitungs-Header übernommen. Eigene Adresse je Postfach = eigener Kanal.
@@ -572,12 +557,13 @@ export default async function ChannelsPage({
   // shared by the WhatsApp and widget cards. '' = never split.
   const SPLIT_PRESETS = [24, 72, 168];
   const conversationSplitForm = (channelId: string, current: number | null): ReactNode => (
-    <form action={updateConversationSplit} style={{ marginTop: '0.6rem' }}>
+    <form action={updateConversationSplit} style={{ marginTop: '0.5rem' }}>
       <input type="hidden" name="org" value={orgId} />
       <input type="hidden" name="channelId" value={channelId} />
       <label
         htmlFor={`split-${channelId}`}
-        style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block' }}
+        className="field-label"
+        style={{ marginBottom: 0 }}
       >
         Neue Unterhaltung nach Inaktivität
       </label>
@@ -587,6 +573,7 @@ export default async function ChannelsPage({
           name="splitHours"
           defaultValue={current === null ? '' : String(current)}
           disabled={!isOwner}
+          style={{ maxWidth: '18rem' }}
         >
           <option value="">Aus — nie trennen</option>
           <option value="24">Nach 24 Stunden</option>
@@ -600,7 +587,7 @@ export default async function ChannelsPage({
           Speichern
         </button>
       </div>
-      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+      <p className="hint">
         Schreibt der Kontakt nach dieser Zeit erneut, beginnt ein neues Ticket. Unterhaltungen,
         die gerade auf euch warten, werden nie getrennt.
       </p>
@@ -610,7 +597,7 @@ export default async function ChannelsPage({
   const whatsappPanel: ReactNode = (
     <div className="panel">
       <h2>WhatsApp (Twilio)</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Eine Twilio-WhatsApp-Nummer je Kunde. Nachrichten an diese Nummer landen in der Inbox,
         Antworten gehen über Twilio zurück. Nach dem Anlegen die unten angezeigte Webhook-URL im
         Twilio-Console bei der Nummer (oder Messaging Service) unter „A message comes in" (Methode
@@ -643,7 +630,7 @@ export default async function ChannelsPage({
         </div>
       )}
       <div style={{ marginBottom: '1.5rem' }}>
-        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Webhook-URL (in Twilio eintragen)</span>
+        <span className="field-label">Webhook-URL (in Twilio eintragen)</span>
         <code className="invite-link">{whatsappTwilioWebhookUrl}</code>
       </div>
       {quotaNotice('whatsapp')}
@@ -701,7 +688,7 @@ export default async function ChannelsPage({
   const voicePanel: ReactNode = (
     <div className="panel">
       <h2>Telefon (Voice-Agent)</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Gespräche erscheinen als
         Konversationen in der Inbox. Die Nummer beantragst du unter{' '}
         <Link href={`/settings/phone-numbers?org=${orgId}`}>Einstellungen → Telefonnummern</Link>;
@@ -727,8 +714,7 @@ export default async function ChannelsPage({
             {/* header outside the settings form: ActiveToggle/AgentSelect are
                 their own forms and must never nest inside another form */}
             <div
-              className="chan-instance"
-              style={{ borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}
+              className="chan-instance chan-instance--header"
             >
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="chan-instance-name">{vc.name}</div>
@@ -741,24 +727,23 @@ export default async function ChannelsPage({
                   agents={agentOptions}
                   disabled={!isOwner}
                 />
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                <p className="hint">
                   Verhalten und Identität steuert der zugewiesene Voice-Agent (Reine Annahme oder
                   Autopilot). Ohne Agent nimmt der Assistent Anrufe im sicheren Annahme-Modus
                   entgegen.
                 </p>
                 {/* 0018: honest transfer status at a glance */}
-                <p
-                  style={{
-                    fontSize: '0.8rem',
-                    marginTop: '0.35rem',
-                    color: vc.transferNumber ? 'var(--success-ink)' : 'var(--warn)',
-                  }}
-                >
-                  {vc.transferNumber
-                    ? hoursConfigured
-                      ? `📞 Live-Weiterleitung an ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
-                      : `📞 Live-Weiterleitung an ${vc.transferNumber} (jederzeit — keine Geschäftszeiten gepflegt).`
-                    : 'Keine Transfer-Nummer — Übergaben werden als Rückruf-Ticket aufgenommen.'}
+                <p className="hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                  <span className={vc.transferNumber ? 'badge badge--success' : 'badge badge--warn'}>
+                    {vc.transferNumber ? 'Live-Weiterleitung aktiv' : 'Nur Rückruf-Ticket'}
+                  </span>
+                  <span>
+                    {vc.transferNumber
+                      ? hoursConfigured
+                        ? `An ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
+                        : `An ${vc.transferNumber}, jederzeit — keine Geschäftszeiten gepflegt.`
+                      : 'Ohne Transfer-Nummer werden Übergaben als Rückruf-Ticket aufgenommen.'}
+                  </span>
                 </p>
               </div>
               <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />
@@ -790,18 +775,18 @@ export default async function ChannelsPage({
               />
               <label
                 htmlFor={`voice-greeting-int-${vc.id}`}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', fontWeight: 400 }}
+                className="check-row"
+                style={{ marginTop: '0.5rem' }}
               >
                 <input
                   id={`voice-greeting-int-${vc.id}`}
                   name="greetingInterruptible"
                   type="checkbox"
                   defaultChecked={vc.greetingInterruptible}
-                  style={{ width: 'auto' }}
                 />
                 Anrufer darf die Begrüßung unterbrechen
               </label>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+              <p className="hint">
                 Standard: aus — die Begrüßung wird immer vollständig gesprochen, auch wenn der
                 Anrufer hineinredet.
               </p>
@@ -823,7 +808,7 @@ export default async function ChannelsPage({
                   </option>
                 ))}
               </select>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+              <p className="hint">
                 Gesprächs- und Erkennungssprache. Spricht der Anrufer eine andere Sprache, wechselt
                 der Assistent automatisch.
               </p>
@@ -868,18 +853,17 @@ export default async function ChannelsPage({
             <div>
               <label
                 htmlFor={`voice-recording-${vc.id}`}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                className="check-row"
               >
                 <input
                   id={`voice-recording-${vc.id}`}
                   name="recordingEnabled"
                   type="checkbox"
                   defaultChecked={vc.recordingEnabled}
-                  style={{ width: 'auto' }}
                 />
                 Anrufe aufzeichnen
               </label>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+              <p className="hint">
                 Der Assistent spricht zu Gesprächsbeginn einen Aufzeichnungshinweis (gesetzlich
                 erforderlich, § 201 StGB). Die Aufnahme erscheint nach dem Anruf als Anhang in der
                 Konversation und wird in der EU gespeichert.
@@ -906,7 +890,7 @@ export default async function ChannelsPage({
   const chatPanel: ReactNode = (
     <div className="panel">
       <h2>Chat-Widget</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Das Chat-Widget wird mit einem einzigen Script-Tag in beliebige Websites eingebunden.
         Nachrichten aus dem Widget erscheinen als Konversationen in der Inbox. Ausprobieren:{' '}
         <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo</Link>.
@@ -915,8 +899,7 @@ export default async function ChannelsPage({
       {widgetChannels.map((widget) => (
         <div key={widget.id} style={{ marginBottom: '2rem' }}>
           <div
-            className="chan-instance"
-            style={{ borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}
+            className="chan-instance chan-instance--header"
           >
             <div style={{ minWidth: 0, flex: 1 }}>
               <div className="chan-instance-name">{widget.name}</div>
@@ -965,7 +948,7 @@ export default async function ChannelsPage({
                 required
                 maxLength={300}
                 defaultValue={widget.theme.greeting}
-                style={textareaStyle}
+               
               />
             </div>
             <button className="primary" type="submit">
@@ -973,11 +956,11 @@ export default async function ChannelsPage({
             </button>
           </form>
           <div style={{ marginTop: '1.25rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Embed-Code</span>
+            <span className="field-label">Embed-Code</span>
             <code className="invite-link">
               {`<script src="${embedBase}/widget.js" data-zendori-token="${widget.publicToken}" async></script>`}
             </code>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+            <p className="hint">
               Diesen Code auf der Website vor dem schließenden &lt;/body&gt;-Tag einfügen. Der Token
               ist öffentlich — er identifiziert nur den Kanal und enthält keine Geheimnisse.
             </p>
@@ -1012,7 +995,7 @@ export default async function ChannelsPage({
   const testPanel: ReactNode = (
     <div className="panel">
       <h2>Test-Channel</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Ein Test-Channel dient zum manuellen Einspeisen von Nachrichten über den{' '}
         <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>. Praktisch, um Inbox, KI und
         Zuweisung ohne echten Kanal auszuprobieren.
@@ -1063,7 +1046,7 @@ export default async function ChannelsPage({
   const webformPanel: ReactNode = (
     <div className="panel">
       <h2>Web-Formulare</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Mit dem Formular-Builder erstellte Formulare. Felder, Design und Embed-Code verwaltest du
         unter <Link href={`/settings/forms?org=${orgId}`}>Formulare</Link> — hier weist du den
         Agenten zu und schaltest den Kanal aktiv/inaktiv.
@@ -1074,7 +1057,7 @@ export default async function ChannelsPage({
           <Link href={`/settings/forms?org=${orgId}`}>jetzt im Builder erstellen</Link>.
         </p>
       ) : (
-        <div style={{ marginBottom: '1rem' }}>
+        <div style={{ marginBottom: '1.5rem' }}>
           {webformChannels.map((wf) => (
             <div key={wf.id} className="chan-instance">
               <div style={{ minWidth: 0, flex: 1 }}>

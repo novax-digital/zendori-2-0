@@ -1,25 +1,9 @@
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { ingestTestMessage } from '@/app/inbox/actions';
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
 
-const helpTextStyle: CSSProperties = {
-  fontSize: '0.8rem',
-  color: 'var(--text-muted)',
-  marginTop: '0.25rem',
-};
 
 export default async function TestChannelPage({
   searchParams,
@@ -32,6 +16,14 @@ export default async function TestChannelPage({
 
   return (
     <div className="shell">
+      <div className="page-head">
+        <h1>Test-Channel</h1>
+        <p>
+          Speise eingehende Nachrichten manuell ein, als kämen sie über einen echten Kanal — sie
+          erscheinen sofort in der Inbox.
+        </p>
+      </div>
+
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
@@ -45,15 +37,10 @@ export default async function TestChannelPage({
       ) : null}
 
       <div className="panel">
-        <h2>Test-Channel — Nachricht einspeisen</h2>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Speist eine eingehende Nachricht manuell ein, als käme sie über einen echten Kanal. Die
-          Nachricht erscheint sofort in der <Link href={`/inbox?org=${orgId}`}>Inbox</Link>.
-        </p>
-
+        <h2>Nachricht einspeisen</h2>
         {activeChannels.length === 0 ? (
-          <p className="notice">
-            Kein aktiver Kanal vorhanden. Lege zuerst unter{' '}
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Kein aktiver Kanal vorhanden — lege zuerst unter{' '}
             <Link href={`/settings/channels?org=${orgId}`}>Einstellungen → Kanäle</Link> einen
             Test-Channel an.
           </p>
@@ -62,7 +49,7 @@ export default async function TestChannelPage({
             <input type="hidden" name="org" value={orgId} />
             <div>
               <label htmlFor="channelId">Kanal</label>
-              <select id="channelId" name="channelId" required style={{ width: '100%' }}>
+              <select id="channelId" name="channelId" required>
                 {activeChannels.map((channel) => (
                   <option key={channel.id} value={channel.id}>
                     {channel.name}
@@ -90,12 +77,12 @@ export default async function TestChannelPage({
             </div>
             <div>
               <label htmlFor="content">Nachricht</label>
-              <textarea id="content" name="content" rows={5} required style={textareaStyle} />
+              <textarea id="content" name="content" rows={5} required />
             </div>
             <div>
               <label htmlFor="externalId">Externe ID (optional)</label>
               <input id="externalId" name="externalId" type="text" placeholder="z. B. msg-12345" />
-              <p style={helpTextStyle}>Gleiche ID = Duplikat wird verworfen (Idempotenz-Test).</p>
+              <p className="hint">Gleiche ID = Duplikat wird verworfen (Idempotenz-Test).</p>
             </div>
             <button className="primary" type="submit">
               Nachricht einspeisen

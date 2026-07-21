@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import type { PhoneNumberStatus, PhoneNumberType } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -26,11 +25,11 @@ const STATUS_LABELS: Record<PhoneNumberStatus, string> = {
   released: 'Gekündigt',
 };
 
-const statusStyles: Record<PhoneNumberStatus, CSSProperties> = {
-  requested: { background: 'var(--warn-tint)', color: 'var(--warn)' },
-  provisioning: { background: 'var(--warn-tint)', color: 'var(--warn)' },
-  active: { background: 'var(--success-tint)', color: 'var(--success-ink)' },
-  released: { background: 'var(--danger-tint)', color: 'var(--danger)' },
+const statusClass: Record<PhoneNumberStatus, string> = {
+  requested: 'badge--warn',
+  provisioning: 'badge--warn',
+  active: 'badge--success',
+  released: 'badge--danger',
 };
 
 export default async function AdminPhoneNumbersPage() {
@@ -84,31 +83,28 @@ export default async function AdminPhoneNumbersPage() {
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Keine offenen Anfragen.</p>
         ) : (
           open.map((n) => (
-            <div
-              key={n.id}
-              style={{
-                borderBottom: '1px solid var(--border)',
-                padding: '0.75rem 0',
-              }}
-            >
-              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <strong>{orgNames.get(n.org_id) ?? n.org_id}</strong>
-                <span className="badge" style={statusStyles[n.status]}>
-                  {STATUS_LABELS[n.status]}
-                </span>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Typ: {n.number_type}
-                  {n.desired_region ? ` · Wunsch: ${n.desired_region}` : ''}
-                </span>
+            // design-system row: padding, divider and last-row behavior come from .chan-instance
+            <div key={n.id} className="chan-instance">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <strong>{orgNames.get(n.org_id) ?? n.org_id}</strong>
+                  <span className={`badge ${statusClass[n.status]}`}>
+                    {STATUS_LABELS[n.status]}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    Typ: {n.number_type}
+                    {n.desired_region ? ` · Wunsch: ${n.desired_region}` : ''}
+                  </span>
+                </div>
+                {n.note ? (
+                  <p className="hint" style={{ margin: '0.35rem 0 0' }}>
+                    Notiz: {n.note}
+                  </p>
+                ) : null}
+                <code className="invite-link" style={{ whiteSpace: 'pre' }}>
+                  {provisionCommand(n)}
+                </code>
               </div>
-              {n.note ? (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.35rem 0' }}>
-                  Notiz: {n.note}
-                </p>
-              ) : null}
-              <code className="invite-link" style={{ whiteSpace: 'pre', display: 'block', marginTop: '0.4rem' }}>
-                {provisionCommand(n)}
-              </code>
             </div>
           ))
         )}
@@ -141,7 +137,7 @@ export default async function AdminPhoneNumbersPage() {
                   <td>{orgNames.get(n.org_id) ?? n.org_id}</td>
                   <td>{n.number_type}</td>
                   <td>
-                    <span className="badge" style={statusStyles[n.status]}>
+                    <span className={`badge ${statusClass[n.status]}`}>
                       {STATUS_LABELS[n.status]}
                     </span>
                   </td>

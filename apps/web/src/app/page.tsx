@@ -25,6 +25,9 @@ export default async function DashboardPage() {
   const memberships = (data ?? []) as unknown as Membership[];
 
   if (memberships.length === 0) redirect('/onboarding');
+  // one org (the normal case): straight into the app instead of a chooser page
+  const only = memberships.length === 1 ? memberships[0]?.organizations : null;
+  if (only) redirect(`/inbox?org=${only.id}`);
 
   return (
     <div className="shell">
@@ -36,6 +39,11 @@ export default async function DashboardPage() {
           </button>
         </form>
       </header>
+
+      <div className="page-head">
+        <h1>Organisation wählen</h1>
+        <p>Du bist Mitglied in mehreren Organisationen — wähle, wo du arbeiten möchtest.</p>
+      </div>
 
       <div className="panel">
         <h2>Deine Organisationen</h2>
@@ -55,13 +63,11 @@ export default async function DashboardPage() {
                   <td>{m.organizations.name}</td>
                   <td>{m.organizations.slug}</td>
                   <td>
-                    <span className="badge">{m.role === 'owner' ? 'Owner' : 'Agent'}</span>
+                    <span className="badge">{m.role === 'owner' ? 'Inhaber' : 'Agent'}</span>
                   </td>
-                  <td>
-                    <Link href={`/inbox?org=${m.organizations.id}`}>Inbox öffnen</Link>
-                    {' · '}
-                    <Link href={`/settings/members?org=${m.organizations.id}`}>
-                      Mitglieder verwalten
+                  <td style={{ textAlign: 'right' }}>
+                    <Link className="primary" href={`/inbox?org=${m.organizations.id}`}>
+                      Inbox öffnen
                     </Link>
                   </td>
                 </tr>
@@ -71,14 +77,6 @@ export default async function DashboardPage() {
         </table>
       </div>
 
-      <div className="panel">
-        <h2>Nächste Schritte</h2>
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Die Shared Inbox ist bereit: Lege unter „Einstellungen → Kanäle" einen Test-Channel an und
-          speise über „Test-Channel" Nachrichten ein. Weitere Kanäle (Chat-Widget, E-Mail, WhatsApp)
-          folgen in den nächsten Ausbauphasen.
-        </p>
-      </div>
     </div>
   );
 }

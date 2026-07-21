@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -43,35 +43,17 @@ const statusLabels: Record<KbSourceStatus, string> = {
   error: 'Fehler',
 };
 
-// theme-token backed so the badges stay legible in dark mode
-const statusStyles: Record<KbSourceStatus, CSSProperties> = {
-  pending: { background: 'var(--warn-tint)', color: 'var(--warn)' },
-  indexed: { background: 'var(--success-tint)', color: 'var(--success-ink)' },
-  error: { background: 'var(--danger-tint)', color: 'var(--danger)' },
+const statusClass: Record<KbSourceStatus, string> = {
+  pending: 'badge--warn',
+  indexed: 'badge--success',
+  error: 'badge--danger',
 };
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
 function statusBadge(status: KbSourceStatus) {
   return (
-    <span className="badge" style={statusStyles[status]}>
-      {statusLabels[status]}
-    </span>
+    <span className={`badge ${statusClass[status]}`}>{statusLabels[status]}</span>
   );
 }
 
@@ -150,7 +132,7 @@ export default async function KnowledgePage({
       label: 'URL',
       panel: (
         <>
-          <p style={helpStyle}>
+          <p className="help">
             Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
             eingelesen.
           </p>
@@ -179,7 +161,7 @@ export default async function KnowledgePage({
       label: 'Datei',
       panel: (
         <>
-          <p style={helpStyle}>
+          <p className="help">
             PDF, DOCX, TXT oder MD, maximal 15 MB pro Datei. Mehrere Dateien auf einmal möglich —
             der Text wird aus jeder Datei extrahiert und indiziert.
           </p>
@@ -192,7 +174,7 @@ export default async function KnowledgePage({
       label: 'Text',
       panel: (
         <>
-          <p style={helpStyle}>
+          <p className="help">
             Ein manuell gepflegter Text — z. B. Rückgabebedingungen, FAQ-Antworten oder interne
             Hinweise, die der KI-Agent kennen soll.
           </p>
@@ -213,7 +195,7 @@ export default async function KnowledgePage({
             </div>
             <div>
               <label htmlFor={`text-${kb.id}`}>Text</label>
-              <textarea id={`text-${kb.id}`} name="text" rows={6} required style={textareaStyle} />
+              <textarea id={`text-${kb.id}`} name="text" rows={6} required />
             </div>
             <button className="primary" type="submit">
               Text hinzufügen
@@ -292,7 +274,7 @@ export default async function KnowledgePage({
 
         <div className="panel">
           <h2>Wissensdatenbank löschen</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Löscht „{kb.name}" mitsamt {kbSources.length === 1 ? 'ihrer Quelle' : 'allen Quellen'}{' '}
             und deren Index — Agenten verlieren die Verknüpfung. Nicht rückgängig machbar, daher
             nur nach Eingabe deines aktuellen Passworts.
@@ -306,7 +288,7 @@ export default async function KnowledgePage({
   const newPanel: ReactNode = (
     <div className="panel">
       <h2>Neue Wissensdatenbank</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Bündle Quellen thematisch (z. B. „Website-FAQ", „Interne Doku", „Produktkatalog") und
         verknüpfe sie gezielt mit Agenten — so weiß jeder Agent nur, was er wissen soll.
       </p>

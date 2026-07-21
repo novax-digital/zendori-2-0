@@ -2,6 +2,12 @@ import Link from 'next/link';
 import type { ConversationStatus } from '@zendori/core';
 import type { ConversationListItem, InboxFilters } from '@/lib/inbox/types';
 
+const STATUS_BADGE: Record<string, string> = {
+  open: 'badge--info',
+  pending: 'badge--warn',
+  resolved: 'badge--success',
+};
+
 const statusLabels: Record<ConversationStatus, string> = {
   open: 'Offen',
   pending: 'Wartend',
@@ -69,7 +75,7 @@ export default function ConversationList({
               <div className="inbox-row-preview">{item.last_message_preview}</div>
             ) : null}
             <div className="inbox-row-meta">
-              <span className={`inbox-badge inbox-badge-${item.status}`}>
+              <span className={`badge ${STATUS_BADGE[item.status] ?? 'badge--muted'}`}>
                 {statusLabels[item.status]}
               </span>
               {item.channel ? <span className="inbox-row-channel">{item.channel.name}</span> : null}

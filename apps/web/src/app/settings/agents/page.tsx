@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { AgentKind, AgentMode, Channel, ChannelType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -6,6 +6,7 @@ import { listChannels } from '@/lib/inbox/queries';
 import AgentGallery, { type AgentTileMeta } from '@/components/AgentGallery';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 import { createAgent, updateAgent, deleteAgent } from './actions';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 
 type AgentRow = {
   id: string;
@@ -31,30 +32,8 @@ const channelTypeLabels: Record<ChannelType, string> = {
   voice: 'Telefon',
 };
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
-const checkboxRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  fontWeight: 400,
-  marginBottom: '0.4rem',
-};
 
 async function supabaseForKbs(orgId: string) {
   const supabase = await createSupabaseServerClient();
@@ -118,12 +97,12 @@ function AgentFields({
           maxLength={8000}
           defaultValue={agent?.identity ?? ''}
           disabled={disabled}
-          style={textareaStyle}
+         
           placeholder={
             'Wer ist dieser Agent, wie spricht er, was darf er (nicht)?\nz. B. „Du bist Lisa, die freundliche Support-Assistentin von Strong Energy. Du duzt Kunden, hältst dich kurz und verweist bei Vertragsfragen immer an das Team."'
           }
         />
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+        <p className="hint">
           Fließt in jede Antwort dieses Agenten ein — Rolle, Tonfall, Regeln.
         </p>
       </div>
@@ -189,7 +168,7 @@ export default async function AgentsPage({
       <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
         Zugewiesene Kanäle
       </legend>
-      <p style={{ ...helpStyle, marginBottom: '0.75rem' }}>
+      <p className="help" style={{ marginBottom: '0.75rem' }}>
         Der Agent bedient die angehakten Kanäle. Ein Kanal kann nur einen Agenten haben — Anhaken
         zieht ihn ggf. von einem anderen Agenten ab. Kanäle ohne Agent bekommen keine
         KI-Antworten.
@@ -205,7 +184,7 @@ export default async function AgentsPage({
         </p>
       ) : (
         eligible.map((channel: Channel) => (
-          <label key={channel.id} style={checkboxRowStyle}>
+          <label key={channel.id} className="check-row">
             {/* render-time truth: only these may be detached by an uncheck */}
             {channel.agent_id === agent.id ? (
               <input type="hidden" name="renderedAssigned" value={channel.id} />
@@ -238,7 +217,7 @@ export default async function AgentsPage({
           <input type="hidden" name="org" value={orgId} />
           <input type="hidden" name="agentId" value={agent.id} />
           <AgentFields idPrefix={`agent-${agent.id}`} agent={agent} disabled={disabled} />
-          <label style={checkboxRowStyle}>
+          <label className="check-row">
             <input
               type="checkbox"
               name="isActive"
@@ -252,7 +231,7 @@ export default async function AgentsPage({
             <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
               Wissensdatenbanken
             </legend>
-            <p style={{ ...helpStyle, marginBottom: '0.75rem' }}>
+            <p className="help" style={{ marginBottom: '0.75rem' }}>
               Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung
               kennt er keine Inhalte und übergibt inhaltliche Fragen an das Team.
             </p>
@@ -265,7 +244,7 @@ export default async function AgentsPage({
               kbs.map((kb) => {
                 const isLinked = kbsByAgent.get(agent.id)?.has(kb.id) ?? false;
                 return (
-                  <label key={kb.id} style={checkboxRowStyle}>
+                  <label key={kb.id} className="check-row">
                     {isLinked ? (
                       <input type="hidden" name="renderedLinkedKbs" value={kb.id} />
                     ) : null}
@@ -299,9 +278,7 @@ export default async function AgentsPage({
           >
             <input type="hidden" name="org" value={orgId} />
             <input type="hidden" name="agentId" value={agent.id} />
-            <button className="ghost" type="submit">
-              Agent löschen
-            </button>
+            <ConfirmDeleteButton label="Agent löschen" confirmLabel="Endgültig löschen" />
             <p style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.4rem' }}>
               Zugewiesene Kanäle laufen danach ohne KI-Antworten weiter.
             </p>
@@ -314,7 +291,7 @@ export default async function AgentsPage({
   const newPanel: ReactNode = (
     <div className="panel">
       <h2>Neuen Agenten anlegen</h2>
-      <p style={helpStyle}>
+      <p className="help">
         Ein Agent bündelt Identität (Prompt), Verhalten und Schwellwert. Nach dem Anlegen weist du
         ihm Kanäle zu — so kann der Chat anders auftreten als E-Mail oder Telefon. Neue Agenten
         werden automatisch mit allen Wissensdatenbanken verknüpft (danach anpassbar).

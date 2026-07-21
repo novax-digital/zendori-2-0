@@ -12,20 +12,16 @@ import type { AgentInfo, DraftItem } from '@/lib/inbox/types';
 // signals how reliable the draft is.
 const CONFIDENCE_REFERENCE = 0.7;
 
-type ConfidenceTone = { label: string; background: string; color: string };
+type ConfidenceTone = { label: string; badgeClass: string };
 
 function confidenceTone(confidence: number, reference: number): ConfidenceTone {
-  if (confidence >= reference) {
-    return { label: 'Hohe Sicherheit', background: '#d1fae5', color: '#065f46' };
-  }
-  if (confidence >= 0.4) {
-    return { label: 'Mittlere Sicherheit', background: '#fef3c7', color: '#92400e' };
-  }
-  return { label: 'Niedrige Sicherheit', background: '#fee2e2', color: '#991b1b' };
+  if (confidence >= reference) return { label: 'Hohe Sicherheit', badgeClass: 'badge badge--success' };
+  if (confidence >= 0.4) return { label: 'Mittlere Sicherheit', badgeClass: 'badge badge--warn' };
+  return { label: 'Niedrige Sicherheit', badgeClass: 'badge badge--danger' };
 }
 
 const cardStyle: CSSProperties = {
-  margin: '0 0.75rem 0',
+  margin: '0 0.9rem 0',
   padding: '0.75rem 0.85rem',
   border: '1px solid var(--border)',
   borderLeft: '3px solid var(--primary)',
@@ -51,16 +47,6 @@ const titleStyle: CSSProperties = {
   color: 'var(--text-muted)',
 };
 
-const badgeStyle = (tone: ConfidenceTone): CSSProperties => ({
-  display: 'inline-block',
-  borderRadius: 999,
-  padding: '0.1rem 0.6rem',
-  fontSize: '0.72rem',
-  fontWeight: 600,
-  background: tone.background,
-  color: tone.color,
-});
-
 const bodyStyle: CSSProperties = {
   fontSize: '0.9rem',
   whiteSpace: 'pre-wrap',
@@ -69,16 +55,8 @@ const bodyStyle: CSSProperties = {
   overflowY: 'auto',
 };
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.9rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
+// global textarea skin applies; only the compact inbox font size stays
+const textareaStyle: CSSProperties = { fontSize: '0.9rem' };
 
 const sourcesStyle: CSSProperties = {
   fontSize: '0.78rem',
@@ -159,7 +137,7 @@ export default function SuggestedReply({
       ) : null}
       <div style={headerStyle}>
         <span style={titleStyle}>KI-Vorschlag{agent ? ` — ${agent.name}` : ''}</span>
-        <span style={badgeStyle(tone)} title={`Sicherheit ${confidencePercent} %`}>
+        <span className={tone.badgeClass} title={`Sicherheit ${confidencePercent} %`}>
           {tone.label} · {confidencePercent} %
         </span>
       </div>

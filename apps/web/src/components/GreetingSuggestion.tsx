@@ -29,7 +29,7 @@ export default function GreetingSuggestion({
   }
 
   return (
-    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+    <p className="hint">
       Empfehlung{agentMode === 'answer' ? ' (Autopilot)' : ' (Reine Annahme)'}:{' '}
       <button
         type="button"

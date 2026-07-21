@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
 import { autoAckTextsSchema, businessHoursSchema } from '@zendori/channels';
 import type { AutoAckTexts, BusinessHours } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
@@ -17,43 +16,6 @@ const weekdayLabels: Record<Weekday, string> = {
   fri: 'Freitag',
   sat: 'Samstag',
   sun: 'Sonntag',
-};
-
-const fieldStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  background: 'var(--surface)',
-};
-
-const timeStyle: CSSProperties = {
-  padding: '0.4rem 0.5rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.9rem',
-  background: 'var(--surface)',
-};
-
-const textareaStyle: CSSProperties = {
-  ...fieldStyle,
-  fontFamily: 'inherit',
-  resize: 'vertical',
-};
-
-const helpStyle: CSSProperties = {
-  fontSize: '0.85rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1rem',
-};
-
-const checkboxRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  fontWeight: 400,
-  marginBottom: '0.4rem',
 };
 
 type OrgSettingsRow = {
@@ -126,7 +88,7 @@ export default async function AiSettingsPage({
 
       {!isOwner ? (
         <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          Nur Owner dürfen diese Einstellungen ändern. Die aktuellen Werte werden schreibgeschützt
+          Nur Inhaber können diese Einstellungen ändern. Die aktuellen Werte werden schreibgeschützt
           angezeigt.
         </p>
       ) : null}
@@ -136,7 +98,7 @@ export default async function AiSettingsPage({
 
         <div className="panel">
           <h2>Eskalations-Keywords</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Kommagetrennte Liste. Taucht eines dieser Wörter in einer Nachricht auf, wird die
             Konversation an einen Menschen übergeben — das gilt für Text-Kanäle UND für den
             Voice-Agenten am Telefon.
@@ -147,13 +109,12 @@ export default async function AiSettingsPage({
             defaultValue={keywords.join(', ')}
             disabled={disabled}
             placeholder="kündigung, beschwerde, anwalt, datenschutz"
-            style={fieldStyle}
           />
         </div>
 
         <div className="panel">
           <h2>Geschäftszeiten</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Bestimmen, welcher Auto-Ack-Text verwendet wird. Nicht geöffnete Tage gelten als
             geschlossen.
           </p>
@@ -166,7 +127,6 @@ export default async function AiSettingsPage({
               defaultValue={businessHours.timezone}
               disabled={disabled}
               placeholder="Europe/Berlin"
-              style={fieldStyle}
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -182,7 +142,7 @@ export default async function AiSettingsPage({
                     flexWrap: 'wrap',
                   }}
                 >
-                  <label style={{ ...checkboxRowStyle, minWidth: '9rem', marginBottom: 0 }}>
+                  <label className="check-row" style={{ minWidth: '9rem', marginBottom: 0 }}>
                     <input
                       type="checkbox"
                       name={`bh_${day}_enabled`}
@@ -197,7 +157,6 @@ export default async function AiSettingsPage({
                     defaultValue={slot?.open ?? '09:00'}
                     disabled={disabled}
                     aria-label={`${weekdayLabels[day]} Öffnung`}
-                    style={timeStyle}
                   />
                   <span style={{ color: 'var(--text-muted)' }}>bis</span>
                   <input
@@ -206,7 +165,6 @@ export default async function AiSettingsPage({
                     defaultValue={slot?.close ?? '17:00'}
                     disabled={disabled}
                     aria-label={`${weekdayLabels[day]} Schließung`}
-                    style={timeStyle}
                   />
                 </div>
               );
@@ -216,7 +174,7 @@ export default async function AiSettingsPage({
 
         <div className="panel">
           <h2>SLA-Erinnerung für Übergaben</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Wartet eine Übergabe länger als die angegebene Zeit ohne Reaktion eines Mitarbeiters,
             wird eine interne Notiz an der Konversation hinterlegt. Die Erinnerung feuert nur
             innerhalb der Geschäftszeiten — nachts aufgelaufene Übergaben erinnern kurz nach
@@ -233,18 +191,17 @@ export default async function AiSettingsPage({
               defaultValue={handoffSlaMinutes ?? ''}
               disabled={disabled}
               placeholder="aus"
-              style={fieldStyle}
             />
           </div>
         </div>
 
         <div className="panel">
           <h2>Automatische Eingangsbestätigung</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Sendet bei einer Übergabe an einen Menschen automatisch eine kurze Bestätigung an den
             Kunden — je nach Geschäftszeiten unterschiedlich.
           </p>
-          <label style={checkboxRowStyle}>
+          <label className="check-row">
             <input
               type="checkbox"
               name="ack_enabled"
@@ -261,7 +218,6 @@ export default async function AiSettingsPage({
               rows={3}
               defaultValue={autoAck.in_hours}
               disabled={disabled}
-              style={textareaStyle}
             />
           </div>
           <div>
@@ -272,16 +228,15 @@ export default async function AiSettingsPage({
               rows={3}
               defaultValue={autoAck.out_of_hours}
               disabled={disabled}
-              style={textareaStyle}
             />
           </div>
-        </div>
 
-        {isOwner ? (
-          <button className="primary" type="submit">
-            Einstellungen speichern
-          </button>
-        ) : null}
+          {isOwner ? (
+            <button className="primary" type="submit" style={{ marginTop: '0.25rem' }}>
+              Einstellungen speichern
+            </button>
+          ) : null}
+        </div>
       </form>
     </div>
   );

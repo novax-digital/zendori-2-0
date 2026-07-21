@@ -45,17 +45,27 @@ export default async function FormsPage({
   };
 
   return (
-    <main style={{ maxWidth: '52rem' }}>
-      <h1>Formulare</h1>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.92rem', maxWidth: '40rem' }}>
-        Mit dem Formular-Builder erstellst du Kontaktformulare, die du per Embed-Code in beliebige
-        Websites einbindest. Jede Einsendung landet als Konversation in der Inbox, kann von einem
-        Agenten beantwortet und zusätzlich als E-Mail weitergeleitet werden.
-      </p>
-      {params.error ? <p className="error">{params.error}</p> : null}
-      {params.notice ? <p className="notice">{params.notice}</p> : null}
+    <div className="shell">
+      <div className="page-head">
+        <h1>Formulare</h1>
+        <p>
+          Mit dem Formular-Builder erstellst du Kontaktformulare, die du per Embed-Code in
+          beliebige Websites einbindest. Jede Einsendung landet als Konversation in der Inbox,
+          kann von einem Agenten beantwortet und zusätzlich als E-Mail weitergeleitet werden.
+        </p>
+      </div>
+      {params.error ? (
+        <p className="error" style={{ marginBottom: '1.5rem' }}>
+          {params.error}
+        </p>
+      ) : null}
+      {params.notice ? (
+        <p className="notice" style={{ marginBottom: '1.5rem' }}>
+          {params.notice}
+        </p>
+      ) : null}
 
-      <div className="panel" style={{ marginTop: '1rem' }}>
+      <div className="panel">
         <h2>Deine Formulare</h2>
         {forms.length === 0 ? (
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
@@ -65,20 +75,21 @@ export default async function FormsPage({
           forms.map((form) => (
             <div key={form.id} className="chan-instance">
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{form.name}</div>
+                <div
+                  className="chan-instance-name"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  {form.name}
+                  <span className={form.is_active ? 'badge badge--success' : 'badge badge--muted'}>
+                    {form.is_active ? 'Aktiv' : 'Inaktiv'}
+                  </span>
+                </div>
                 <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  {fieldCount(form.definition)} Felder ·{' '}
-                  {form.is_active ? 'aktiv' : 'inaktiv'}
+                  {fieldCount(form.definition)} Felder
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <a
-                  className="ghost"
-                  href={`/f/${form.public_token}`}
-                  target="_blank"
-                  rel="noopener"
-                  style={{ fontSize: '0.85rem' }}
-                >
+                <a className="ghost" href={`/f/${form.public_token}`} target="_blank" rel="noopener">
                   Ansehen ↗
                 </a>
                 <Link className="primary" href={`/settings/forms/${form.id}?org=${orgId}`}>
@@ -90,7 +101,7 @@ export default async function FormsPage({
         )}
       </div>
 
-      <div className="panel" style={{ marginTop: '1.25rem' }}>
+      <div className="panel">
         <h2>Neues Formular</h2>
         {quotaError ? (
           <p className="notice">{quotaError}</p>
@@ -114,11 +125,11 @@ export default async function FormsPage({
             </button>
           </form>
         )}
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.6rem' }}>
+        <p className="hint" style={{ marginTop: '0.6rem' }}>
           Formulare zählen auf dasselbe Kontingent wie Formular-Weiterleitungs-Adressen. Die
           Agent-Zuweisung findest du unter Kanäle → Web-Formular.
         </p>
       </div>
-    </main>
+    </div>
   );
 }

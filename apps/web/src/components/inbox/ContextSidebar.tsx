@@ -19,6 +19,14 @@ const statusOptions: { value: ConversationStatus; label: string }[] = [
   { value: 'resolved', label: 'Gelöst' },
 ];
 
+// urgent/high stand out; normal/low stay calm (uses existing tokens only)
+const PRIORITY_BADGE: Record<string, string> = {
+  urgent: 'badge--danger',
+  high: 'badge--warn',
+  normal: 'badge--muted',
+  low: 'badge--muted',
+};
+
 const priorityLabels: Record<ConversationPriority, string> = {
   low: 'Niedrig',
   normal: 'Normal',
@@ -165,7 +173,7 @@ export default function ContextSidebar({
 
       <section>
         <h3>Priorität</h3>
-        <span className="inbox-badge inbox-badge-neutral">
+        <span className={`badge ${PRIORITY_BADGE[conversation.priority] ?? 'badge--muted'}`}>
           {priorityLabels[conversation.priority]}
         </span>
       </section>
@@ -173,12 +181,12 @@ export default function ContextSidebar({
       <section>
         <h3>Kanal &amp; Modus</h3>
         <div className="inbox-badges-row">
-          {channel ? <span className="inbox-badge inbox-badge-neutral">{channel.name}</span> : null}
-          <span className="inbox-badge inbox-badge-mode">
+          {channel ? <span className="badge badge--muted">{channel.name}</span> : null}
+          <span className="badge">
             {conversation.mode === 'bot' ? 'Bot' : 'Mensch'}
           </span>
           <span
-            className="inbox-badge inbox-badge-neutral"
+            className="badge badge--muted"
             title={
               agent
                 ? 'Der diesem Kanal zugewiesene KI-Agent'

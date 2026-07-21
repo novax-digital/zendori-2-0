@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { CSSProperties } from 'react';
 import type { Channel, ChannelKind } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -11,11 +10,6 @@ type MemberRow = { user_id: string; role: string; created_at: string };
 
 const KIND_ORDER: ChannelKind[] = ['form', 'email', 'whatsapp', 'voice', 'chat', 'test'];
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
 export default async function AdminOrgPage({
   params,
@@ -132,7 +126,7 @@ export default async function AdminOrgPage({
 
       <div className="panel">
         <h2>Kanal-Kontingente</h2>
-        <p style={helpStyle}>
+        <p className="help">
           Wie viele Kanäle dieser Kunde je Kanalart anlegen darf. Leer = unbegrenzt, 0 = gesperrt
           (die Kanalart verschwindet beim Kunden aus der Galerie, solange keine Kanäle existieren).
           Bestehende Kanäle bleiben immer erhalten.
@@ -174,7 +168,7 @@ export default async function AdminOrgPage({
 
       <div className="panel">
         <h2>Mitglied hinzufügen</h2>
-        <p style={helpStyle}>
+        <p className="help">
           Erstellt ein neues Konto und fügt es dieser Organisation hinzu. Das Konto ist sofort aktiv.
         </p>
         <form className="stack" action={addMember} style={{ maxWidth: '28rem' }}>

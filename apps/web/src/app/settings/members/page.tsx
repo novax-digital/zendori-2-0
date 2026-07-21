@@ -1,30 +1,19 @@
-import { redirect } from 'next/navigation';
+import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 type MemberRow = { org_id: string; user_id: string; role: string; created_at: string };
 
-export default async function MembersPage() {
+export default async function MembersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
+}) {
+  const { org, error, notice } = await searchParams;
+  // like every settings page: honor the org switcher instead of pinning the first membership
+  const { orgId, orgs } = await requireActiveOrg(org);
+  const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const supabase = await createSupabaseServerClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect('/login');
-
-  // RLS shows fellow members' rows too — filter to the signed-in user
-  const { data: membershipData } = await supabase
-    .from('org_members')
-    .select('org_id, role, organizations(id, name)')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: true })
-    .limit(1);
-  const membership = membershipData?.[0] as
-    | { org_id: string; role: string; organizations: { id: string; name: string } | null }
-    | undefined;
-  if (!membership) redirect('/onboarding');
-
-  const orgId = membership.org_id;
 
   const { data: memberData } = await supabase
     .from('org_members')
@@ -47,8 +36,24 @@ export default async function MembersPage() {
 
   return (
     <div className="shell">
+      <div className="page-head">
+        <h1>Team</h1>
+        <p>Die Mitglieder von {orgName}. Neue Zugänge legt das Zendori-Team an.</p>
+      </div>
+
+      {error ? (
+        <p className="error" style={{ marginBottom: '1.5rem' }}>
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="notice" style={{ marginBottom: '1.5rem' }}>
+          {notice}
+        </p>
+      ) : null}
+
       <div className="panel">
-        <h2>Team — {membership.organizations?.name ?? 'Organisation'}</h2>
+        <h2>Mitglieder</h2>
         <table>
           <thead>
             <tr>
@@ -62,14 +67,14 @@ export default async function MembersPage() {
               <tr key={m.user_id}>
                 <td>{emailByUserId.get(m.user_id) ?? `${m.user_id.slice(0, 8)}…`}</td>
                 <td>
-                  <span className="badge">{m.role === 'owner' ? 'Owner' : 'Agent'}</span>
+                  <span className="badge">{m.role === 'owner' ? 'Inhaber' : 'Agent'}</span>
                 </td>
                 <td>{new Date(m.created_at).toLocaleDateString('de-DE')}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '1rem' }}>
+        <p className="hint" style={{ marginTop: '1rem' }}>
           Neue Zugänge werden vom Zendori-Team angelegt. Die öffentliche Registrierung ist
           deaktiviert.
         </p>

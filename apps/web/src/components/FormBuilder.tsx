@@ -184,7 +184,7 @@ export default function FormBuilder(props: {
   return (
     <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
       {/* ---------- editor column ---------- */}
-      <div style={{ flex: '1 1 26rem', minWidth: '22rem', maxWidth: '34rem' }}>
+      <div style={{ flex: '1 1 26rem', minWidth: 'min(22rem, 100%)', maxWidth: '34rem' }}>
         <div className="panel">
           <div>
             <label htmlFor="fb-name">Formular-Name</label>
@@ -200,7 +200,7 @@ export default function FormBuilder(props: {
             />
           </div>
 
-          <div className="tabbar" style={{ margin: '1rem 0' }}>
+          <div className="tabbar" style={{ marginTop: '1rem' }}>
             {tabs.map((t) => (
               <button
                 key={t.key}
@@ -293,7 +293,7 @@ export default function FormBuilder(props: {
                     </button>
                     <button
                       type="button"
-                      className="ghost"
+                      className="ghost ghost--icon"
                       aria-label={`Feld „${field.label}" nach oben`}
                       disabled={index === 0}
                       onClick={() => moveField(field.key, -1)}
@@ -302,7 +302,7 @@ export default function FormBuilder(props: {
                     </button>
                     <button
                       type="button"
-                      className="ghost"
+                      className="ghost ghost--icon"
                       aria-label={`Feld „${field.label}" nach unten`}
                       disabled={index === definition.fields.length - 1}
                       onClick={() => moveField(field.key, 1)}
@@ -311,7 +311,7 @@ export default function FormBuilder(props: {
                     </button>
                     <button
                       type="button"
-                      className="ghost"
+                      className="ghost ghost--icon"
                       aria-label={`Feld „${field.label}" duplizieren`}
                       onClick={() => duplicateField(field.key)}
                     >
@@ -319,7 +319,7 @@ export default function FormBuilder(props: {
                     </button>
                     <button
                       type="button"
-                      className="ghost"
+                      className="ghost ghost--icon"
                       aria-label={`Feld „${field.label}" löschen`}
                       disabled={definition.fields.length <= 1}
                       onClick={() => removeField(field.key)}
@@ -395,9 +395,7 @@ export default function FormBuilder(props: {
                         </div>
                       ) : null}
                       {field.type !== 'consent' ? (
-                        <label
-                          style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.88rem' }}
-                        >
+                        <label className="check-row" style={{ marginBottom: 0 }}>
                           <input
                             type="checkbox"
                             checked={field.required}
@@ -439,7 +437,7 @@ export default function FormBuilder(props: {
               ))}
 
               <div style={{ marginTop: '0.9rem' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Feld hinzufügen</span>
+                <span className="field-label">Feld hinzufügen</span>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.4rem' }}>
                   {FIELD_PALETTE.map((entry) => (
                     <button
@@ -576,21 +574,19 @@ export default function FormBuilder(props: {
           {tab === 'embed' ? (
             <div className="stack">
               <div>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
-                  Script-Embed (empfohlen)
-                </span>
+                <span className="field-label">Script-Embed (empfohlen)</span>
                 <code className="invite-link" style={{ whiteSpace: 'pre-wrap' }}>
                   {scriptSnippet}
                 </code>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                <p className="hint">
                   Das div bestimmt die Position im Layout. Der Token ist öffentlich — er
                   identifiziert nur das Formular und enthält keine Geheimnisse.
                 </p>
               </div>
               <div>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Gehosteter Link</span>
+                <span className="field-label">Gehosteter Link</span>
                 <code className="invite-link">{hostedUrl}</code>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                <p className="hint">
                   Für E-Mail-Signaturen, QR-Codes — und zum Testen:{' '}
                   <a href={hostedUrl} target="_blank" rel="noopener">
                     Formular testen ↗
@@ -598,9 +594,7 @@ export default function FormBuilder(props: {
                 </p>
               </div>
               <div>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
-                  iframe (Fallback, feste Höhe)
-                </span>
+                <span className="field-label">iframe (Fallback, feste Höhe)</span>
                 <code className="invite-link" style={{ whiteSpace: 'pre-wrap' }}>
                   {iframeSnippet}
                 </code>
@@ -631,7 +625,7 @@ export default function FormBuilder(props: {
                     disabled={!props.isOwner}
                     placeholder={'info@firma.de\nvertrieb@firma.de'}
                   />
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  <p className="hint">
                     Jede Einsendung wird als gestaltete E-Mail an diese Adressen geschickt.
                     Antworten auf diese E-Mail gehen direkt an die einsendende Person (an Zendori
                     vorbei) — nachverfolgbare Antworten kommen aus der Inbox.
@@ -648,7 +642,7 @@ export default function FormBuilder(props: {
                     defaultValue={props.dailyLimit}
                     disabled={!props.isOwner}
                   />
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  <p className="hint">
                     Schutz vor Spam-Fluten: darüber hinausgehende Einsendungen werden abgewiesen.
                   </p>
                 </div>
@@ -662,39 +656,6 @@ export default function FormBuilder(props: {
                 ) : null}
               </form>
 
-              {props.isOwner ? (
-                <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--danger, #b91c1c)' }}>
-                    Formular löschen
-                  </span>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.3rem 0 0.6rem' }}>
-                    Löscht das Formular UND alle zugehörigen Konversationen unwiderruflich. Zum
-                    Bestätigen den Formular-Namen eintippen.
-                  </p>
-                  <form
-                    action={deleteForm}
-                    style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}
-                  >
-                    <input type="hidden" name="org" value={props.orgId} />
-                    <input type="hidden" name="formId" value={props.formId} />
-                    <input
-                      type="text"
-                      placeholder={props.initialName}
-                      value={confirmDelete}
-                      onChange={(e) => setConfirmDelete(e.target.value)}
-                      style={{ maxWidth: '16rem' }}
-                    />
-                    <button
-                      className="ghost"
-                      type="submit"
-                      disabled={confirmDelete !== props.initialName}
-                      style={{ color: 'var(--danger, #b91c1c)' }}
-                    >
-                      Endgültig löschen
-                    </button>
-                  </form>
-                </div>
-              ) : null}
             </div>
           </div>
 
@@ -710,7 +671,7 @@ export default function FormBuilder(props: {
               <input type="hidden" name="name" value={name} />
               <input type="hidden" name="definition" value={serialized} />
               <button className="primary" type="submit">
-                Speichern
+                Formular speichern
               </button>
               {dirty ? (
                 <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
@@ -720,36 +681,79 @@ export default function FormBuilder(props: {
             </form>
           ) : null}
         </div>
+
+        {/* ---------- danger zone: always visible, DangerDeleteKb-style arm flow ---------- */}
+        {props.isOwner ? (
+          <div className="panel" style={{ borderColor: 'var(--danger-border)' }}>
+            <span className="field-label" style={{ color: 'var(--danger)' }}>
+              Formular löschen
+            </span>
+            <p className="hint" style={{ margin: '0.3rem 0 0.6rem' }}>
+              Löscht das Formular UND alle zugehörigen Konversationen unwiderruflich. Zum
+              Bestätigen den Formular-Namen eintippen.
+            </p>
+            <form
+              action={deleteForm}
+              style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}
+            >
+              <input type="hidden" name="org" value={props.orgId} />
+              <input type="hidden" name="formId" value={props.formId} />
+              <input
+                type="text"
+                placeholder={props.initialName}
+                value={confirmDelete}
+                onChange={(e) => setConfirmDelete(e.target.value)}
+                style={{ maxWidth: '16rem' }}
+              />
+              <button
+                className="danger"
+                type="submit"
+                disabled={confirmDelete !== props.initialName}
+              >
+                Endgültig löschen
+              </button>
+              {confirmDelete.length > 0 ? (
+                <button className="ghost" type="button" onClick={() => setConfirmDelete('')}>
+                  Abbrechen
+                </button>
+              ) : null}
+            </form>
+          </div>
+        ) : null}
       </div>
 
       {/* ---------- preview column ---------- */}
-      <div style={{ flex: '1 1 24rem', minWidth: '20rem', position: 'sticky', top: '1rem' }}>
+      <div style={{ flex: '1 1 24rem', minWidth: 'min(20rem, 100%)', position: 'sticky', top: '1rem' }}>
         <div className="panel">
           <div
             style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.8rem' }}
           >
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, flex: 1 }}>Live-Vorschau</span>
-            <button
-              type="button"
-              className={`tab${previewMobile ? '' : ' tab--active'}`}
-              onClick={() => setPreviewMobile(false)}
-            >
-              Desktop
-            </button>
-            <button
-              type="button"
-              className={`tab${previewMobile ? ' tab--active' : ''}`}
-              onClick={() => setPreviewMobile(true)}
-            >
-              Mobil
-            </button>
-            <button
-              type="button"
-              className={`tab${previewSuccess ? ' tab--active' : ''}`}
-              onClick={() => setPreviewSuccess(!previewSuccess)}
-            >
-              Erfolg
-            </button>
+            <span className="field-label" style={{ flex: 1 }}>
+              Live-Vorschau
+            </span>
+            <div className="tabbar" style={{ margin: 0 }}>
+              <button
+                type="button"
+                className={`tab${previewMobile ? '' : ' tab--active'}`}
+                onClick={() => setPreviewMobile(false)}
+              >
+                Desktop
+              </button>
+              <button
+                type="button"
+                className={`tab${previewMobile ? ' tab--active' : ''}`}
+                onClick={() => setPreviewMobile(true)}
+              >
+                Mobil
+              </button>
+              <button
+                type="button"
+                className={`tab${previewSuccess ? ' tab--active' : ''}`}
+                onClick={() => setPreviewSuccess(!previewSuccess)}
+              >
+                Erfolg
+              </button>
+            </div>
           </div>
           <div
             style={{

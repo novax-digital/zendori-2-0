@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createCustomer } from './actions';
@@ -7,11 +6,6 @@ import { createCustomer } from './actions';
 type OrgRow = { id: string; name: string; slug: string; created_at: string };
 type MemberRow = { org_id: string; user_id: string; role: string };
 
-const helpStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1.25rem',
-};
 
 export default async function AdminUsersPage({
   searchParams,
@@ -131,7 +125,7 @@ export default async function AdminUsersPage({
 
       <div className="panel">
         <h2>Neuen Kunden anlegen</h2>
-        <p style={helpStyle}>
+        <p className="help">
           Erstellt eine neue Organisation samt Owner-Konto. Das Konto ist sofort aktiv (keine
           E-Mail-Bestätigung nötig) — teile die Zugangsdaten dem Kunden sicher mit.
         </p>

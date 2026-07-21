@@ -579,7 +579,8 @@ main.centered {
    Forms & controls
    ========================================================================== */
 
-form.stack {
+/* vertical form rhythm — works on <form> AND plain <div> containers */
+.stack {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
@@ -591,6 +592,73 @@ label {
   color: var(--ink);
   display: block;
   margin-bottom: 0.35rem;
+}
+
+/* pseudo-labels (spans above code blocks / read-only values) — same weight as real labels */
+.field-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* field help text below a control */
+.hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+}
+/* panel intro text below an h2 */
+.help {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-bottom: 1.25rem;
+}
+
+/* checkboxes & radios: brand accent, uniform size, aligned rows */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--brand-600);
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: 4px;
+}
+/* a label wrapping checkbox/radio + text — reads as body text, not as a bold label */
+label.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+}
+
+/* time/date pickers: same skin as text fields, natural width (business hours rows) */
+input[type='time'],
+input[type='date'] {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--surface);
+}
+input[type='time']:focus,
+input[type='date']:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: var(--ring);
 }
 
 input[type='text'],
@@ -639,6 +707,7 @@ button {
 }
 
 button.primary,
+a.primary,
 .btn-primary {
   display: inline-flex;
   align-items: center;
@@ -658,9 +727,15 @@ button.primary,
     box-shadow 0.15s ease;
 }
 button.primary:hover,
+a.primary:hover,
 .btn-primary:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 30px rgb(11 184 186 / 0.3);
+}
+a.primary,
+a.primary:hover {
+  color: #fff;
+  text-decoration: none;
 }
 button.primary:active {
   transform: translateY(0);
@@ -672,7 +747,12 @@ button.primary:disabled {
   box-shadow: none;
 }
 
-button.ghost {
+button.ghost,
+a.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--brand-200);
@@ -687,10 +767,20 @@ button.ghost {
     border-color 0.12s ease,
     transform 0.12s ease;
 }
-button.ghost:hover {
+button.ghost:hover,
+a.ghost:hover {
   background: var(--brand-50);
   border-color: var(--brand-300);
   transform: translateY(-1px);
+}
+a.ghost,
+a.ghost:hover {
+  text-decoration: none;
+}
+/* compact ghost for icon-only actions (↑ ↓ ⧉ ✕ rows) */
+button.ghost.ghost--icon {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.85rem;
 }
 
 button.danger {
@@ -847,6 +937,10 @@ button.danger:disabled {
   margin: 0 auto;
   padding: 2rem 2rem 3rem;
 }
+/* wide variant for two-column editors (form builder) */
+.shell--wide {
+  max-width: 84rem;
+}
 .shell > header {
   display: flex;
   align-items: center;
@@ -972,6 +1066,10 @@ button.danger:disabled {
   background: color-mix(in srgb, #2563eb 14%, transparent);
   color: #2563eb;
 }
+.tile-icon--webform {
+  background: color-mix(in srgb, #0ea5e9 14%, transparent);
+  color: #0284c7;
+}
 .tile-icon--email {
   background: color-mix(in srgb, var(--brand-600) 16%, transparent);
   color: var(--brand-600);
@@ -1025,7 +1123,7 @@ button.danger:disabled {
   gap: 0.3rem;
   font-size: 0.72rem;
   font-weight: 700;
-  padding: 0.18rem 0.55rem;
+  padding: 0.15rem 0.65rem;
   border-radius: var(--r-pill);
   white-space: nowrap;
 }
@@ -1111,8 +1209,8 @@ button.danger:disabled {
 .chan-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
+  gap: 0.35rem;
+  font-size: 0.72rem;
   font-weight: 700;
   padding: 0.32rem 0.7rem;
   border-radius: var(--r-pill);
@@ -1127,8 +1225,8 @@ button.danger:disabled {
 }
 .chan-toggle::before {
   content: '';
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
 }
@@ -1170,14 +1268,58 @@ th {
   letter-spacing: 0.05em;
 }
 
+/* THE badge/status pill — one base, semantic variants. Replaces the former
+   parallel systems (.inbox-badge, per-page inline statusStyles maps). */
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   background: var(--brand-50);
   color: var(--brand-700);
   border-radius: var(--r-pill);
-  padding: 0.15rem 0.7rem;
-  font-size: 0.75rem;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.72rem;
   font-weight: 700;
+  white-space: nowrap;
+}
+.badge--success {
+  background: var(--success-tint);
+  color: var(--success-ink);
+}
+.badge--warn {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+.badge--danger {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+.badge--info {
+  background: var(--info-tint);
+  color: var(--info-ink);
+}
+.badge--muted {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.badge--dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* chan-instance row acting as a section header above a form (voice/chat panels) */
+.chan-instance.chan-instance--header {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+/* auth cards: messages need air before the form */
+.card .error,
+.card .notice {
+  margin-bottom: 1rem;
 }
 
 code.invite-link {
@@ -1189,7 +1331,7 @@ code.invite-link {
   font-size: 0.8rem;
   color: var(--ink);
   word-break: break-all;
-  margin-top: 0.45rem;
+  margin-top: 0.5rem;
 }
 
 /* ============================================================================
@@ -1358,33 +1500,7 @@ code.invite-link {
 }
 
 /* status / meta badges */
-.inbox-badge {
-  display: inline-block;
-  border-radius: var(--r-pill);
-  padding: 0.12rem 0.65rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.inbox-badge-open {
-  background: var(--info-tint);
-  color: var(--info-ink);
-}
-.inbox-badge-pending {
-  background: var(--warn-tint);
-  color: var(--warn);
-}
-.inbox-badge-resolved {
-  background: var(--success-tint);
-  color: var(--success-ink);
-}
-.inbox-badge-neutral {
-  background: var(--surface-2);
-  color: var(--text-muted);
-}
-.inbox-badge-mode {
-  background: var(--brand-50);
-  color: var(--brand-700);
-}
+/* inbox status pills now use the shared .badge system (see above) */
 
 /* conversation view */
 .inbox-view-header {

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { z } from 'zod';
 import { decryptSecret, syncRulesSchema } from '@zendori/core';
 import type { Channel, SyncRules } from '@zendori/core';
@@ -11,31 +11,6 @@ import IntegrationGallery, {
   type IntegrationTileMeta,
 } from '@/components/IntegrationGallery';
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
-
-const fieldStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  background: 'var(--surface)',
-};
-
-const helpStyle: CSSProperties = {
-  fontSize: '0.85rem',
-  color: 'var(--text-muted)',
-  marginBottom: '1rem',
-};
-
-const labelStyle: CSSProperties = { display: 'block', marginBottom: '1rem' };
-
-const checkboxRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  fontWeight: 400,
-  marginBottom: '0.4rem',
-};
 
 // listTicketPipelines returns network data → parsed defensively (labels tolerate
 // absence so a client-shape drift never crashes the settings page).
@@ -141,22 +116,22 @@ export default async function IntegrationsPage({
     <>
       <div className="panel">
         <h2>HubSpot</h2>
-        <p style={helpStyle}>
+        <p className="help">
           Einseitiger Sync: Konversationen werden als HubSpot-Tickets angelegt und aktualisiert. Der
           Private-App-Token wird verschlüsselt gespeichert und nie im Klartext angezeigt.
         </p>
         <p style={{ marginBottom: 0 }}>
           Status:{' '}
           {connected ? (
-            <span className="inbox-badge inbox-badge-resolved">
+            <span className="badge badge--success">
               Verbunden{isActive ? '' : ' (inaktiv)'}
             </span>
           ) : (
-            <span className="inbox-badge inbox-badge-neutral">Nicht verbunden</span>
+            <span className="badge badge--muted">Nicht verbunden</span>
           )}
         </p>
         {connected && config.portal_id ? (
-          <p style={{ ...helpStyle, marginTop: '0.75rem', marginBottom: 0 }}>
+          <p className="help" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
             Portal-ID: {config.portal_id}
             {config.ui_domain ? ` · ${config.ui_domain}` : ''}
           </p>
@@ -166,24 +141,24 @@ export default async function IntegrationsPage({
       {!connected ? (
         <div className="panel">
           <h2>Verbinden</h2>
-          <p style={helpStyle}>
+          <p className="help">
             Private-App-Token der HubSpot-App des Kunden. Benötigte Scopes: „tickets",
             „crm.objects.contacts.read", „crm.objects.contacts.write". Der Token wird zunächst
             getestet (Account-Info + Pipelines) und dann verschlüsselt abgelegt.
           </p>
-          <form action={connectHubspot}>
+          <form className="stack" action={connectHubspot} style={{ maxWidth: '28rem' }}>
             <input type="hidden" name="org" value={orgId} />
-            <label style={labelStyle}>
-              Private-App-Token
+            <div>
+              <label htmlFor="hs-token">Private-App-Token</label>
               <input
+                id="hs-token"
                 name="token"
                 type="password"
                 required
                 autoComplete="off"
                 placeholder="pat-eu1-…"
-                style={fieldStyle}
               />
-            </label>
+            </div>
             <button className="primary" type="submit">
               HubSpot verbinden
             </button>
@@ -199,24 +174,19 @@ export default async function IntegrationsPage({
                 Verbindung prüfen). Die zuletzt gespeicherten Werte bleiben erhalten.
               </p>
             ) : (
-              <p style={helpStyle}>
+              <p className="help">
                 Neue Tickets landen in dieser Pipeline und Stage. Bitte eine Stage wählen, die zur
                 gewählten Pipeline gehört. Die „Gelöst"-Stage ist optional — sie wird gesetzt, wenn
                 eine Konversation auf „Gelöst" gestellt wird.
               </p>
             )}
 
-            <form action={saveHubspotConfig}>
+            <form className="stack" action={saveHubspotConfig} style={{ maxWidth: '28rem' }}>
               <input type="hidden" name="org" value={orgId} />
 
-              <label style={labelStyle}>
-                Pipeline
-                <select
-                  name="pipeline_id"
-                  defaultValue={config.pipeline_id}
-                  style={fieldStyle}
-                  aria-label="Pipeline"
-                >
+              <div>
+                <label htmlFor="hs-pipeline">Pipeline</label>
+                <select id="hs-pipeline" name="pipeline_id" defaultValue={config.pipeline_id}>
                   {pipelines.length === 0 ? (
                     <option value={config.pipeline_id}>{config.pipeline_id || '—'}</option>
                   ) : null}
@@ -226,16 +196,11 @@ export default async function IntegrationsPage({
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <label style={labelStyle}>
-                Standard-Stage (neue Tickets)
-                <select
-                  name="default_stage_id"
-                  defaultValue={config.default_stage_id}
-                  style={fieldStyle}
-                  aria-label="Standard-Stage"
-                >
+              <div>
+                <label htmlFor="hs-stage">Standard-Stage (neue Tickets)</label>
+                <select id="hs-stage" name="default_stage_id" defaultValue={config.default_stage_id}>
                   {pipelines.length === 0 ? (
                     <option value={config.default_stage_id}>
                       {config.default_stage_id || '—'}
@@ -251,16 +216,11 @@ export default async function IntegrationsPage({
                     </optgroup>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <label style={labelStyle}>
-                „Gelöst"-Stage (optional)
-                <select
-                  name="resolved_stage_id"
-                  defaultValue={config.resolved_stage_id}
-                  style={fieldStyle}
-                  aria-label="Gelöst-Stage"
-                >
+              <div>
+                <label htmlFor="hs-resolved">„Gelöst"-Stage (optional)</label>
+                <select id="hs-resolved" name="resolved_stage_id" defaultValue={config.resolved_stage_id}>
                   <option value="">— kein Stage-Wechsel bei „Gelöst" —</option>
                   {pipelines.map((pipeline) => (
                     <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
@@ -272,36 +232,31 @@ export default async function IntegrationsPage({
                     </optgroup>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <h2 style={{ marginTop: '1.5rem' }}>Sync-Regeln</h2>
-              <p style={helpStyle}>
+              <h2 style={{ marginTop: '0.75rem', marginBottom: 0 }}>Sync-Regeln</h2>
+              <p className="help">
                 Legt fest, welche Konversationen automatisch an HubSpot gehen. Der Button „An
                 HubSpot senden" pro Konversation funktioniert immer, unabhängig von dieser Regel.
               </p>
-              <label style={labelStyle}>
-                Regel
-                <select
-                  name="rules_mode"
-                  defaultValue={rules.mode}
-                  style={fieldStyle}
-                  aria-label="Sync-Regel"
-                >
+              <div>
+                <label htmlFor="hs-rule">Regel</label>
+                <select id="hs-rule" name="rules_mode" defaultValue={rules.mode}>
                   <option value="all">Alle Konversationen</option>
                   <option value="channels">Nur ausgewählte Kanäle</option>
                   <option value="manual">Nur manuell</option>
                 </select>
-              </label>
+              </div>
 
-              <fieldset style={{ border: 'none', padding: 0, margin: '0 0 1rem' }}>
-                <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+              <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+                <legend className="field-label" style={{ marginBottom: '0.5rem' }}>
                   Kanäle (nur wirksam bei Regel „Nur ausgewählte Kanäle")
                 </legend>
                 {channels.length === 0 ? (
-                  <p className="inbox-sidebar-empty">Keine Kanäle vorhanden.</p>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Keine Kanäle vorhanden.</p>
                 ) : (
                   channels.map((channel) => (
-                    <label key={channel.id} style={checkboxRowStyle}>
+                    <label key={channel.id} className="check-row">
                       <input
                         type="checkbox"
                         name="channel_ids"
@@ -314,7 +269,7 @@ export default async function IntegrationsPage({
                 )}
               </fieldset>
 
-              <label style={{ ...checkboxRowStyle, marginBottom: '1.25rem' }}>
+              <label className="check-row" style={{ marginBottom: '0.35rem' }}>
                 <input type="checkbox" name="is_active" defaultChecked={isActive} />
                 Integration aktiv
               </label>
@@ -327,7 +282,7 @@ export default async function IntegrationsPage({
 
           <div className="panel">
             <h2>Verbindung trennen</h2>
-            <p style={helpStyle}>
+            <p className="help">
               Entfernt die Integration samt verschlüsseltem Token. Bereits erstellte HubSpot-Tickets
               bleiben in HubSpot bestehen.
             </p>

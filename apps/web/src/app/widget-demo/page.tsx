@@ -36,10 +36,17 @@ export default async function WidgetDemoPage({
 
   return (
     <div className="shell">
+      <header>
+        <Link href={`/settings/channels?org=${orgId}`}>Zurück zu den Kanälen</Link>
+      </header>
+      <div className="page-head">
+        <h1>Widget-Demo</h1>
+        <p>So erscheint das Chat-Widget von {orgName} auf einer Kundenwebsite.</p>
+      </div>
 
       {widget ? (
         <div className="panel">
-          <h2>Widget-Demo — {orgName}</h2>
+          <h2>So testest du das Widget</h2>
           <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
             Diese Seite bindet das Chat-Widget des Kanals „{widget.name}“ genau so ein, wie es
             später auf einer Kundenwebsite erscheint: als Chat-Bubble unten rechts.
@@ -60,7 +67,7 @@ export default async function WidgetDemoPage({
         </div>
       ) : (
         <div className="panel">
-          <h2>Widget-Demo — {orgName}</h2>
+          <h2>Noch kein Widget-Channel</h2>
           <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
             Für diese Organisation existiert noch kein Widget-Channel. Lege zuerst einen an, um das
             Chat-Widget hier auszuprobieren.

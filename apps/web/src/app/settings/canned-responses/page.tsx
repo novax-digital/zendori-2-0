@@ -1,18 +1,7 @@
-import type { CSSProperties } from 'react';
 import { requireActiveOrg } from '@/lib/org';
 import { listCannedResponses } from '@/lib/inbox/queries';
 import { deleteCannedResponse, saveCannedResponse } from '@/app/inbox/actions';
 
-const textareaStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.55rem 0.75rem',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  fontSize: '0.95rem',
-  fontFamily: 'inherit',
-  background: 'var(--surface)',
-  resize: 'vertical',
-};
 
 export default async function CannedResponsesPage({
   searchParams,
@@ -26,6 +15,13 @@ export default async function CannedResponsesPage({
 
   return (
     <div className="shell">
+      <div className="page-head">
+        <h1>Textbausteine</h1>
+        <p>
+          Wiederverwendbare Antworten von {orgName} — sie stehen beim Antworten in der Inbox zur
+          Auswahl.
+        </p>
+      </div>
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
@@ -39,7 +35,7 @@ export default async function CannedResponsesPage({
       ) : null}
 
       <div className="panel">
-        <h2>Textbausteine — {orgName}</h2>
+        <h2>Deine Textbausteine</h2>
         {responses.length === 0 ? (
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
             Noch keine Textbausteine vorhanden. Lege unten den ersten an — Textbausteine stehen beim
@@ -98,10 +94,10 @@ export default async function CannedResponsesPage({
           </div>
           <div>
             <label htmlFor="content">Text</label>
-            <textarea id="content" name="content" rows={4} required style={textareaStyle} />
+            <textarea id="content" name="content" rows={4} required />
           </div>
           <button className="primary" type="submit">
-            Speichern
+            Textbaustein speichern
           </button>
         </form>
       </div>

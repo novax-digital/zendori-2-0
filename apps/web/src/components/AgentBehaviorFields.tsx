@@ -87,7 +87,7 @@ export default function AgentBehaviorFields({
               <option value="text">Text-Agent — bedient Chat, E-Mail und WhatsApp</option>
               <option value="voice">Voice-Agent — bedient Telefon-Kanäle</option>
             </select>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+            <p className="hint">
               Ein Voice-Agent kann nur Voice-Kanälen zugewiesen werden, ein Text-Agent allen
               anderen. Der Typ ist nach dem Anlegen fest.
             </p>
@@ -112,21 +112,17 @@ export default function AgentBehaviorFields({
       </div>
       {mode !== 'intake_only' ? (
         <div>
-          <label
-            htmlFor={`${idPrefix}-handoff`}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 400 }}
-          >
+          <label htmlFor={`${idPrefix}-handoff`} className="check-row">
             <input
               id={`${idPrefix}-handoff`}
               name="handoffEnabled"
               type="checkbox"
               defaultChecked={defaultHandoffEnabled !== false}
               disabled={disabled}
-              style={{ width: 'auto' }}
             />
             Übergabe an Menschen bei Unsicherheit
           </label>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+          <p className="hint">
             Aus = bei unsicheren Antworten bleibt der Entwurf ein Vorschlag (Text) bzw. bietet der
             Assistent ein Ticket an (Telefon). Wünscht sich jemand ausdrücklich einen Menschen oder
             fällt ein Eskalations-Begriff, wird IMMER übergeben.
