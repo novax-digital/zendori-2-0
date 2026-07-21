@@ -7,7 +7,6 @@ import KbGallery, { type KbTileMeta } from '@/components/KbGallery';
 import KbFileUpload from '@/components/KbFileUpload';
 import DangerDeleteKb from '@/components/DangerDeleteKb';
 import {
-  addFileSource,
   addTextSource,
   addUrlSource,
   createKnowledgeBase,
@@ -184,7 +183,7 @@ export default async function KnowledgePage({
             PDF, DOCX, TXT oder MD, maximal 15 MB pro Datei. Mehrere Dateien auf einmal möglich —
             der Text wird aus jeder Datei extrahiert und indiziert.
           </p>
-          <KbFileUpload org={orgId} knowledgeBaseId={kb.id} action={addFileSource} />
+          <KbFileUpload org={orgId} knowledgeBaseId={kb.id} />
         </>
       ),
     },

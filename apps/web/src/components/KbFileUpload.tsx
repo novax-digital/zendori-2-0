@@ -1,18 +1,21 @@
 'use client';
 
 import { useRef, useState, type DragEvent } from 'react';
-import { useFormStatus } from 'react-dom';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
+import { finalizeKbUploads, prepareKbUploads } from '@/app/settings/knowledge/actions';
 
 /**
- * Drag-and-drop multi-file uploader for knowledge-base sources. Keeps a hidden
- * `<input type="file" multiple>` in sync with the picked/dropped files (via a
- * rebuilt DataTransfer) so a plain form submit posts every file under `file` —
- * the server action reads them with formData.getAll('file'). No client fetch:
- * progressive-enhancement-friendly, one server round-trip.
+ * Drag-and-drop multi-file uploader for knowledge-base sources. Files go
+ * DIRECTLY from the browser to Supabase Storage via signed upload URLs —
+ * routing bytes through a server action dies on Next's 1 MB action-body
+ * default and Vercel's hard 4.5 MB function limit (prod crash 2026-07-21).
+ * Flow: prepare (signed URLs) → uploadToSignedUrl per file → finalize
+ * (creates the kb_sources rows and redirects with the notice).
  */
 
 const ACCEPT = '.pdf,.docx,.txt,.md';
 const MAX_BYTES = 15 * 1024 * 1024;
+const KB_BUCKET = 'kb-files';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -25,44 +28,18 @@ function fileKey(f: File): string {
   return `${f.name}:${f.size}`;
 }
 
-function SubmitButton({ count }: { count: number }) {
-  const { pending } = useFormStatus();
-  return (
-    <button className="primary" type="submit" disabled={count === 0 || pending}>
-      {pending
-        ? 'Wird hochgeladen…'
-        : count === 0
-          ? 'Datei hochladen'
-          : count === 1
-            ? '1 Datei hochladen'
-            : `${count} Dateien hochladen`}
-    </button>
-  );
-}
-
 export default function KbFileUpload({
   org,
   knowledgeBaseId,
-  action,
 }: {
   org: string;
   knowledgeBaseId: string;
-  action: (formData: FormData) => void | Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [dragActive, setDragActive] = useState(false);
-
-  // Mirror the current file list back into the real input so the form submit
-  // carries them (input.files is not directly assignable — use DataTransfer).
-  function sync(next: File[]): void {
-    setFiles(next);
-    if (inputRef.current) {
-      const dt = new DataTransfer();
-      next.forEach((f) => dt.items.add(f));
-      inputRef.current.files = dt.files;
-    }
-  }
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function addFiles(incoming: FileList | File[]): void {
     const seen = new Set(files.map(fileKey));
@@ -73,11 +50,12 @@ export default function KbFileUpload({
         merged.push(f);
       }
     }
-    sync(merged);
+    setFiles(merged);
+    setError(null);
   }
 
   function removeAt(index: number): void {
-    sync(files.filter((_, i) => i !== index));
+    setFiles(files.filter((_, i) => i !== index));
   }
 
   function onDrop(e: DragEvent<HTMLDivElement>): void {
@@ -86,11 +64,49 @@ export default function KbFileUpload({
     if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files);
   }
 
-  return (
-    <form className="stack" action={action} style={{ maxWidth: '32rem' }}>
-      <input type="hidden" name="org" value={org} />
-      <input type="hidden" name="knowledgeBaseId" value={knowledgeBaseId} />
+  async function upload(): Promise<void> {
+    if (files.length === 0 || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const prep = await prepareKbUploads(
+        org,
+        knowledgeBaseId,
+        files.map((f) => ({ name: f.name, size: f.size }))
+      );
+      if (prep.error || !prep.uploads) {
+        setError(prep.error ?? 'Upload konnte nicht vorbereitet werden.');
+        return;
+      }
 
+      // prepare returns entries in the same order as the posted file list
+      const supabase = createSupabaseBrowserClient();
+      const uploaded: { path: string; filename: string }[] = [];
+      let failed = 0;
+      for (let i = 0; i < prep.uploads.length; i += 1) {
+        const entry = prep.uploads[i]!;
+        const file = files[i]!;
+        const { error: uploadError } = await supabase.storage
+          .from(KB_BUCKET)
+          .uploadToSignedUrl(entry.path, entry.token, file);
+        if (uploadError) failed += 1;
+        else uploaded.push({ path: entry.path, filename: entry.filename });
+      }
+      if (uploaded.length === 0) {
+        setError('Keine Datei konnte hochgeladen werden — bitte erneut versuchen.');
+        return;
+      }
+      // finalize creates the sources and redirects with the success notice
+      // (a partial client-side failure is reflected in the counts there).
+      if (failed > 0) setError(`${failed} Datei(en) konnten nicht übertragen werden.`);
+      await finalizeKbUploads(org, knowledgeBaseId, uploaded);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="stack" style={{ maxWidth: '32rem' }}>
       <div
         className={`kb-dropzone${dragActive ? ' kb-dropzone--active' : ''}`}
         role="button"
@@ -129,13 +145,14 @@ export default function KbFileUpload({
         <span className="kb-dropzone-hint">Mehrere Dateien möglich · PDF, DOCX, TXT, MD · max. 15 MB</span>
         <input
           ref={inputRef}
-          name="file"
           type="file"
           multiple
           accept={ACCEPT}
           hidden
           onChange={(e) => {
             if (e.target.files && e.target.files.length > 0) addFiles(e.target.files);
+            // allow re-picking the same file after removal
+            e.target.value = '';
           }}
         />
       </div>
@@ -158,6 +175,7 @@ export default function KbFileUpload({
                   className="kb-fileitem-remove"
                   aria-label={`${f.name} entfernen`}
                   onClick={() => removeAt(i)}
+                  disabled={pending}
                 >
                   ✕
                 </button>
@@ -167,7 +185,26 @@ export default function KbFileUpload({
         </ul>
       ) : null}
 
-      <SubmitButton count={files.length} />
-    </form>
+      {error ? (
+        <p className="error" style={{ margin: 0 }}>
+          {error}
+        </p>
+      ) : null}
+
+      <button
+        className="primary"
+        type="button"
+        disabled={files.length === 0 || pending}
+        onClick={() => void upload()}
+      >
+        {pending
+          ? 'Wird hochgeladen…'
+          : files.length === 0
+            ? 'Datei hochladen'
+            : files.length === 1
+              ? '1 Datei hochladen'
+              : `${files.length} Dateien hochladen`}
+      </button>
+    </div>
   );
 }

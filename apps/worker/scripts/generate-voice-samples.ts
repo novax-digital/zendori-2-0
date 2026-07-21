@@ -6,6 +6,7 @@
 //
 // Usage (from apps/worker, .env at repo root):
 //   npx tsx --env-file=../../.env scripts/generate-voice-samples.ts [--voices eve,ara]
+//     [--text "Eigener Testsatz"] [--out custom-name]   (--out needs exactly one voice)
 //
 // Required env: XAI_API_KEY. Optional: XAI_API_BASE.
 
@@ -14,8 +15,10 @@ import path from 'node:path';
 import WebSocket from 'ws';
 
 const VOICES = ['eve', 'ara', 'rex', 'sal', 'leo'];
+// Code-switching sentence on purpose: German with embedded English product
+// terms — exactly the hard case the voice must handle on real calls.
 const SAMPLE_TEXT =
-  'Guten Tag! So klinge ich am Telefon. Ich beantworte Fragen, nehme Anliegen auf und leite sie an Ihr Team weiter.';
+  'Guten Tag! So klinge ich am Telefon. Unser Support-Team schickt Ihnen ein Update zum All-in-One Batteriespeicher per E-Mail.';
 const OUT_DIR = path.resolve(process.cwd(), '../web/public/voice-samples');
 const SESSION_TIMEOUT_MS = 60_000;
 /** Fallback when the session does not echo an output sample rate. */
@@ -58,7 +61,12 @@ function findSampleRate(node: unknown): number | null {
   return null;
 }
 
-async function generateSample(apiKey: string, voice: string): Promise<void> {
+async function generateSample(
+  apiKey: string,
+  voice: string,
+  text: string,
+  outName: string
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(`${apiBase()}/v1/realtime`, {
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -81,10 +89,10 @@ async function generateSample(apiKey: string, voice: string): Promise<void> {
         return;
       }
       const wav = pcm16ToWav(Buffer.concat(chunks), sampleRate ?? DEFAULT_SAMPLE_RATE);
-      const file = path.join(OUT_DIR, `${voice}.wav`);
+      const file = path.join(OUT_DIR, `${outName}.wav`);
       writeFileSync(file, wav);
       console.log(
-        `  ${voice}: ${(wav.length / 1024).toFixed(0)} kB @ ${sampleRate ?? DEFAULT_SAMPLE_RATE} Hz → ${file}`
+        `  ${outName}: ${(wav.length / 1024).toFixed(0)} kB @ ${sampleRate ?? DEFAULT_SAMPLE_RATE} Hz → ${file}`
       );
       resolve();
     }
@@ -161,12 +169,21 @@ async function main(): Promise<void> {
     flagIndex >= 0 && process.argv[flagIndex + 1]
       ? process.argv[flagIndex + 1]!.split(',').map((v) => v.trim())
       : VOICES;
+  const textIndex = process.argv.indexOf('--text');
+  const text =
+    textIndex >= 0 && process.argv[textIndex + 1] ? process.argv[textIndex + 1]! : SAMPLE_TEXT;
+  const outIndex = process.argv.indexOf('--out');
+  const outOverride = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
+  if (outOverride && voices.length !== 1) {
+    console.error('--out requires exactly one voice (--voices <one>).');
+    process.exit(1);
+  }
 
   mkdirSync(OUT_DIR, { recursive: true });
   console.log(`Generating ${voices.length} voice samples → ${OUT_DIR}`);
   for (const voice of voices) {
     try {
-      await generateSample(apiKey, voice);
+      await generateSample(apiKey, voice, text, outOverride ?? voice);
     } catch (err) {
       console.error(`  ${voice}: FAILED — ${err instanceof Error ? err.message : String(err)}`);
     }

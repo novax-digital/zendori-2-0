@@ -183,115 +183,178 @@ export async function addTextSource(formData: FormData): Promise<void> {
 
 // --- add file source -------------------------------------------------------------
 
-const addFileMetaSchema = z.object({ org: z.uuid(), knowledgeBaseId: z.uuid() });
+// Files go DIRECTLY from the browser to Supabase Storage via signed upload
+// URLs — a server action carrying file bytes dies on Next's 1 MB action-body
+// default and Vercel's hard 4.5 MB function limit (prod crash 2026-07-21).
+// prepare hands out signed URLs for a temp path; the client PUTs the bytes;
+// finalize moves each file to its source path and creates the kb_sources rows.
 
-/** Uploads a single already-validated file as its own source. Returns the failed filename, or null on success. */
-async function uploadOneFile(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  admin: NonNullable<ReturnType<typeof createSupabaseAdminClient>>,
-  org: string,
-  knowledgeBaseId: string,
-  file: File
-): Promise<string | null> {
-  const filename = sanitizeFilename(file.name);
-  const { data: inserted, error } = await supabase
-    .from('kb_sources')
-    .insert({
-      org_id: org,
-      knowledge_base_id: knowledgeBaseId,
-      type: 'file',
-      uri: filename,
-      status: 'pending',
-    })
-    .select('id')
-    .single();
-  if (error || !inserted) return filename;
-  const sourceId = (inserted as { id: string }).id;
+const MAX_FILES_PER_BATCH = 20;
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const { error: uploadError } = await admin.storage
-    .from(KB_BUCKET)
-    .upload(`${org}/${sourceId}/${filename}`, buffer, {
-      contentType: file.type || 'application/octet-stream',
-      upsert: true,
-    });
-  if (uploadError) {
-    await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
-    return filename;
-  }
-
-  // TOCTOU vs deleteKnowledgeBase (see addTextSource).
-  const { data: stillThere } = await supabase
-    .from('kb_sources')
-    .select('id')
-    .eq('org_id', org)
-    .eq('id', sourceId)
-    .maybeSingle();
-  if (!stillThere) {
-    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
-    return filename;
-  }
-  return null;
+export interface PreparedUpload {
+  /** Temp storage path the signed URL is bound to. */
+  path: string;
+  /** One-time upload token for uploadToSignedUrl. */
+  token: string;
+  /** Sanitized filename (client echoes it back to finalize). */
+  filename: string;
+  /** Original name, so the client can match File objects. */
+  originalName: string;
 }
 
-export async function addFileSource(formData: FormData): Promise<void> {
-  const parsedMeta = addFileMetaSchema.safeParse({
-    org: formData.get('org'),
-    knowledgeBaseId: formData.get('knowledgeBaseId'),
-  });
-  if (!parsedMeta.success) {
-    redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Organisation wurde nicht gefunden.',
-      })
-    );
-  }
-  const { org, knowledgeBaseId } = parsedMeta.data;
+const prepareUploadsSchema = z.object({
+  org: z.uuid(),
+  knowledgeBaseId: z.uuid(),
+  files: z
+    .array(z.object({ name: z.string().min(1).max(300), size: z.number().int().positive() }))
+    .min(1)
+    .max(MAX_FILES_PER_BATCH),
+});
 
-  // Multi-file: the uploader posts every picked/dropped file under `file`.
-  const files = formData.getAll('file').filter((f): f is File => f instanceof File && f.size > 0);
-  if (files.length === 0) {
-    redirect(knowledgeUrl(org, { error: 'Bitte mindestens eine Datei auswählen.' }));
+/**
+ * Validates the batch and hands out one signed upload URL per file, bound to a
+ * temp path under `<org>/uploads/…`. Membership is proven with a user-scoped
+ * read of the target knowledge base BEFORE any service-role storage call.
+ * Returns an error string instead of redirecting — the caller is imperative
+ * client code, not a form post.
+ */
+export async function prepareKbUploads(
+  org: string,
+  knowledgeBaseId: string,
+  files: { name: string; size: number }[]
+): Promise<{ error?: string; uploads?: PreparedUpload[] }> {
+  const parsed = prepareUploadsSchema.safeParse({ org, knowledgeBaseId, files });
+  if (!parsed.success) {
+    return { error: `Bitte 1–${MAX_FILES_PER_BATCH} Dateien auswählen.` };
   }
 
-  // Validate all up front — reject the whole batch on a bad file so nothing is
-  // silently dropped (the user picked it on purpose).
   const rejected: string[] = [];
-  for (const file of files) {
+  for (const file of parsed.data.files) {
     const ext = fileExtension(sanitizeFilename(file.name));
     if (file.size > MAX_FILE_BYTES) rejected.push(`${file.name} (zu groß, max. 15 MB)`);
     else if (!ALLOWED_EXTENSIONS.includes(ext as AllowedExtension))
       rejected.push(`${file.name} (Format nicht unterstützt)`);
   }
   if (rejected.length > 0) {
-    redirect(
-      knowledgeUrl(org, {
-        error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD bis 15 MB.`,
-      })
-    );
+    return {
+      error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD bis 15 MB.`,
+    };
+  }
+
+  // Membership gate (RLS): only members see the knowledge base row.
+  const supabase = await createSupabaseServerClient();
+  const { data: kbRow } = await supabase
+    .from('knowledge_bases')
+    .select('id')
+    .eq('org_id', parsed.data.org)
+    .eq('id', parsed.data.knowledgeBaseId)
+    .maybeSingle();
+  if (!kbRow) return { error: 'Wissensdatenbank wurde nicht gefunden.' };
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { error: 'Speicher ist serverseitig nicht konfiguriert.' };
+
+  const uploads: PreparedUpload[] = [];
+  for (const file of parsed.data.files) {
+    const filename = sanitizeFilename(file.name);
+    const path = `${parsed.data.org}/uploads/${crypto.randomUUID()}/${filename}`;
+    const { data, error } = await admin.storage.from(KB_BUCKET).createSignedUploadUrl(path);
+    if (error || !data) return { error: 'Upload konnte nicht vorbereitet werden.' };
+    uploads.push({ path, token: data.token, filename, originalName: file.name });
+  }
+  return { uploads };
+}
+
+const finalizeUploadsSchema = z.object({
+  org: z.uuid(),
+  knowledgeBaseId: z.uuid(),
+  uploads: z
+    .array(z.object({ path: z.string().min(1).max(500), filename: z.string().min(1).max(300) }))
+    .min(1)
+    .max(MAX_FILES_PER_BATCH),
+});
+
+/**
+ * Registers uploaded temp files as kb_sources: move to `<org>/<source_id>/…`
+ * FIRST (pre-generated id — the worker must never see a pending source whose
+ * file is not in place yet), then insert the row via the user-scoped client
+ * (RLS + composite FK prove membership and org-match). Ends with the usual
+ * redirect so the page shows the notice.
+ */
+export async function finalizeKbUploads(
+  org: string,
+  knowledgeBaseId: string,
+  uploads: { path: string; filename: string }[]
+): Promise<void> {
+  const parsed = finalizeUploadsSchema.safeParse({ org, knowledgeBaseId, uploads });
+  if (!parsed.success) {
+    redirect(knowledgeUrl(typeof org === 'string' ? org : '', { error: 'Upload fehlgeschlagen.' }));
+  }
+
+  // Membership gate BEFORE any service-role storage op (§7).
+  const supabase = await createSupabaseServerClient();
+  const { data: kbRow } = await supabase
+    .from('knowledge_bases')
+    .select('id')
+    .eq('org_id', parsed.data.org)
+    .eq('id', parsed.data.knowledgeBaseId)
+    .maybeSingle();
+  if (!kbRow) {
+    redirect(knowledgeUrl(parsed.data.org, { error: 'Wissensdatenbank wurde nicht gefunden.' }));
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
-    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
+    redirect(knowledgeUrl(parsed.data.org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
   }
 
-  const supabase = await createSupabaseServerClient();
+  // Temp paths must belong to THIS org's upload area — a forged path may not
+  // reach into other tenants' files (prefix + strict charset, no traversal).
+  const tempPathPattern = new RegExp(
+    `^${parsed.data.org}/uploads/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[A-Za-z0-9._-]+$`
+  );
+
   const failures: string[] = [];
-  for (const file of files) {
-    const failed = await uploadOneFile(supabase, admin, org, knowledgeBaseId, file);
-    if (failed) failures.push(failed);
+  let ok = 0;
+  for (const upload of parsed.data.uploads) {
+    const filename = sanitizeFilename(upload.filename);
+    const ext = fileExtension(filename);
+    if (!tempPathPattern.test(upload.path) || !ALLOWED_EXTENSIONS.includes(ext as AllowedExtension)) {
+      failures.push(filename);
+      continue;
+    }
+    const sourceId = crypto.randomUUID();
+    const finalPath = `${parsed.data.org}/${sourceId}/${filename}`;
+    const { error: moveError } = await admin.storage.from(KB_BUCKET).move(upload.path, finalPath);
+    if (moveError) {
+      failures.push(filename);
+      continue;
+    }
+    const { error: insertError } = await supabase.from('kb_sources').insert({
+      id: sourceId,
+      org_id: parsed.data.org,
+      knowledge_base_id: parsed.data.knowledgeBaseId,
+      type: 'file',
+      uri: filename,
+      status: 'pending',
+    });
+    if (insertError) {
+      // membership/kb gone mid-flight — remove the moved file again
+      await admin.storage.from(KB_BUCKET).remove([finalPath]);
+      failures.push(filename);
+      continue;
+    }
+    ok += 1;
   }
 
-  const ok = files.length - failures.length;
   revalidatePath('/settings/knowledge');
   if (ok === 0) {
-    redirect(knowledgeUrl(org, { error: 'Keine Datei konnte hochgeladen werden.' }));
+    redirect(knowledgeUrl(parsed.data.org, { error: 'Keine Datei konnte hochgeladen werden.' }));
   }
   const noticeCount = ok === 1 ? 'Datei hochgeladen' : `${ok} Dateien hochgeladen`;
   const suffix = failures.length > 0 ? ` (${failures.length} fehlgeschlagen)` : '';
   redirect(
-    knowledgeUrl(org, {
+    knowledgeUrl(parsed.data.org, {
       notice: `${noticeCount}${suffix} — die Indizierung startet in Kürze.`,
     })
   );
