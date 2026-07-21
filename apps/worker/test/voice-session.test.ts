@@ -162,6 +162,8 @@ function startSession(fake: ReturnType<typeof makeFakeSupabase>): CallSession {
     context: { companyName: 'Testfirma' },
     onClosed: () => undefined,
     wsUrl: `ws://127.0.0.1:${port}`,
+    // Tests must not sit through the real playback-drain grace before hangup.
+    hangupGraceMs: 30,
   });
   session.start();
   return session;
@@ -409,6 +411,47 @@ describe('CallSession protocol', () => {
         (e as { item?: { type?: string } }).item?.type === 'force_message'
     );
     expect(force.length).toBe(1);
+  });
+
+  it('end_call waits out the playback grace before the REST hangup (farewell not cut off)', async () => {
+    const fake = makeFakeSupabase();
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000008',
+      providerCallId: 'call-grace',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: CONFIG,
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+      hangupGraceMs: 400,
+    });
+    session.start();
+    await completeHandshake();
+
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.audio_transcript.delta',
+      delta: 'Ihr Ticket ist angelegt. Vielen Dank für Ihren Anruf — auf Wiederhören!',
+    });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-e',
+      name: 'end_call',
+      arguments: '{}',
+    });
+    serverSend({ type: 'response.done' });
+
+    // The farewell is still playing: no hangup within the grace window …
+    await new Promise((r) => setTimeout(r, 150));
+    expect(fetchCalls.find((c) => c.url.includes('/hangup'))).toBeUndefined();
+    // … but after it, the REST hangup goes out.
+    await waitFor(() => fetchCalls.find((c) => c.url.includes('/call-grace/hangup')), 3000);
   });
 
   it('failed refer: function outputs sent, response.create deferred to the hold turn response.done', async () => {

@@ -82,6 +82,8 @@ export interface CallSessionParams {
   wsUrl?: string;
   /** Test seam: overrides the greeting-fallback delay (defaults to GREET_FALLBACK_MS). */
   greetFallbackMs?: number;
+  /** Test seam: overrides the post-end_call playback grace before hangup. */
+  hangupGraceMs?: number;
 }
 
 export class CallSession {
@@ -116,6 +118,8 @@ export class CallSession {
    */
   private pendingResponseCreate = false;
   private responseCreateFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Grace timer between end_call and the actual hangup (playback drain). */
+  private endCallTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -393,8 +397,10 @@ export class CallSession {
   }
 
   private async onResponseDone(): Promise<void> {
-    // 1. Persist the assistant turn.
-    if (this.botBuffer.trim().length > 0) {
+    // 1. Persist the assistant turn. Remember its length BEFORE the flush — the
+    //    end_call grace period below estimates the remaining playback from it.
+    const lastTurnChars = this.botBuffer.trim().length;
+    if (lastTurnChars > 0) {
       await this.insertMessage('out', 'bot', this.botBuffer.trim());
       this.botBuffer = '';
       this.sawAudioDelta = false;
@@ -484,16 +490,23 @@ export class CallSession {
         for (const r of results) {
           if (r.output !== null) this.send(functionCallOutputEvent(r.callId, r.output));
         }
-        // Farewell was already spoken before the tool call; hang up now.
-        try {
-          await hangupCall(this.p.apiKey, this.p.providerCallId);
-        } catch (err) {
-          this.p.logger.warn(
-            { voiceCallId: this.p.voiceCallId, err: toErrorInfo(err) },
-            'voice hangup failed'
-          );
-          this.ws?.close();
-        }
+        // response.done means the farewell is fully GENERATED, not fully PLAYED
+        // — the SIP/carrier pipeline buffers several seconds, and an immediate
+        // hangup cut the goodbye mid-word (live 2026-07-21: "Dein Ticket
+        // wurde—" *click*). Wait roughly the spoken duration of the final turn
+        // (~14 chars/s German speech) before hanging up; the caller hanging up
+        // first during the grace just finalizes normally.
+        const graceMs =
+          this.p.hangupGraceMs ?? Math.min(9_000, Math.max(2_500, lastTurnChars * 70 + 1_200));
+        this.endCallTimer = setTimeout(() => {
+          void hangupCall(this.p.apiKey, this.p.providerCallId).catch((err: unknown) => {
+            this.p.logger.warn(
+              { voiceCallId: this.p.voiceCallId, err: toErrorInfo(err) },
+              'voice hangup failed'
+            );
+            this.ws?.close();
+          });
+        }, graceMs);
         return;
       }
 
@@ -732,6 +745,7 @@ export class CallSession {
     if (this.setupTimer) clearTimeout(this.setupTimer);
     if (this.greetFallbackTimer) clearTimeout(this.greetFallbackTimer);
     if (this.responseCreateFallbackTimer) clearTimeout(this.responseCreateFallbackTimer);
+    if (this.endCallTimer) clearTimeout(this.endCallTimer);
 
     // Persist any tail turns: pending user transcripts AND a bot turn that was
     // cut off mid-response (finding: botBuffer lost on early close).
