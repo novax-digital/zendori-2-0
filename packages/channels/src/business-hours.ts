@@ -99,6 +99,25 @@ function partsInTimezone(now: Date, timezone: string): { key: WeekdayKey; minute
 }
 
 /**
+ * True when at least one weekday has a usable open/close slot. The settings UI
+ * always persists a non-null {timezone, hours} object — even with zero enabled
+ * weekdays — so "no slots at all" must be treated as NOT CONFIGURED (not as
+ * "always closed"): gating a voice live transfer on always-closed hours would
+ * silently disable it for every org that saved keywords before hours (audit
+ * finding 2026-07-21). Pure.
+ */
+export function hasConfiguredHours(hours: BusinessHours | null): boolean {
+  if (!hours) return false;
+  return WEEKDAY_KEYS.some((key) => {
+    const slot = hours.hours[key];
+    if (!slot) return false;
+    const open = toMinutes(slot.open);
+    const close = toMinutes(slot.close);
+    return open !== null && close !== null && close > open;
+  });
+}
+
+/**
  * True when `now` falls inside the open/close slot of its weekday in
  * `hours.timezone`. Missing/null slot for that day, an invalid timezone, or a
  * non-positive slot (close <= open) all count as closed. `open` is inclusive,

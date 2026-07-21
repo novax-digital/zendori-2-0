@@ -38,10 +38,14 @@ function makeFakeSupabase(seed: { maybeSingle?: Record<string, unknown> } = {}) 
     const self = new Proxy(chain, {
       get(_t, prop: string) {
         if (prop === 'then') {
+          // updates affect one row so conditional claims (.eq('mode','bot')
+          // .select('id')) observe a successful flip.
           const result =
             op.kind === 'single' || op.kind === 'maybeSingle'
               ? { data: singleData, error: null }
-              : { data: [], error: null };
+              : op.kind === 'update'
+                ? { data: [{ id: `${table}-row` }], error: null }
+                : { data: [], error: null };
           return (resolve: (v: unknown) => void) => resolve(result);
         }
         if (prop === 'maybeSingle' || prop === 'single') {
@@ -158,7 +162,8 @@ function startSession(fake: ReturnType<typeof makeFakeSupabase>): CallSession {
     channelId: '00000000-0000-4000-8000-0000000000bb',
     conversationId: '00000000-0000-4000-8000-0000000000cc',
     channelConfig: CONFIG,
-    agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+    agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
     context: { companyName: 'Testfirma' },
     onClosed: () => undefined,
     wsUrl: `ws://127.0.0.1:${port}`,
@@ -216,7 +221,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, recordingEnabled: true },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       recordingEnabled: true,
       greetFallbackMs: 40,
@@ -374,7 +380,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       onClosed: () => undefined,
       wsUrl: `ws://127.0.0.1:${port}`,
@@ -425,7 +432,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: CONFIG,
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       onClosed: () => undefined,
       wsUrl: `ws://127.0.0.1:${port}`,
@@ -473,7 +481,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       greetFallbackMs: 5_000,
       onClosed: () => undefined,
@@ -572,7 +581,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, recordingEnabled: true },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       recordingEnabled: true,
       onClosed: () => undefined,
@@ -687,7 +697,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, ...configOverrides },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       onClosed: () => undefined,
       wsUrl: `ws://127.0.0.1:${port}`,
@@ -748,7 +759,8 @@ describe('CallSession protocol', () => {
       channelId: '00000000-0000-4000-8000-0000000000bb',
       conversationId: '00000000-0000-4000-8000-0000000000cc',
       channelConfig: { ...CONFIG, greeting: 'Willkommen!', recordingEnabled: true },
-      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null, handoffEnabled: true },
+    allowTransfer: true,
       context: { companyName: 'Testfirma' },
       recordingEnabled: true,
       onClosed: () => undefined,

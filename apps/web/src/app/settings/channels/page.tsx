@@ -20,6 +20,7 @@ import GreetingSuggestion from '@/components/GreetingSuggestion';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
 import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
+import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
 
 type AgentOption = { id: string; name: string; is_active: boolean; kind: AgentKind; mode: AgentMode };
 
@@ -298,11 +299,24 @@ export default async function ChannelsPage({
   const { orgId, orgs, role } = await requireActiveOrg(org);
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const isOwner = role === 'owner';
-  const [channels, agentOptions, limits] = await Promise.all([
+  const [channels, agentOptions, limits, hoursRow] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),
     loadChannelLimits(orgId),
+    (await createSupabaseServerClient())
+      .from('org_settings')
+      .select('business_hours')
+      .eq('org_id', orgId)
+      .maybeSingle(),
   ]);
+  // 0018: the voice card shows an honest transfer-status line based on hours.
+  let businessHours: BusinessHours | null = null;
+  const rawHours = (hoursRow.data as { business_hours: unknown } | null)?.business_hours;
+  if (rawHours != null) {
+    const parsedHours = businessHoursSchema.safeParse(rawHours);
+    businessHours = parsedHours.success ? parsedHours.data : null;
+  }
+  const hoursConfigured = hasConfiguredHours(businessHours);
 
   // Quotas (0017): no limit row = unlimited. `blocked` gates the create forms;
   // a kind with limit 0 and no existing channels disappears from the gallery.
@@ -632,6 +646,20 @@ export default async function ChannelsPage({
                   Verhalten und Identität steuert der zugewiesene Voice-Agent (Reine Annahme oder
                   Autopilot). Ohne Agent nimmt der Assistent Anrufe im sicheren Annahme-Modus
                   entgegen.
+                </p>
+                {/* 0018: honest transfer status at a glance */}
+                <p
+                  style={{
+                    fontSize: '0.8rem',
+                    marginTop: '0.35rem',
+                    color: vc.transferNumber ? 'var(--success-ink)' : 'var(--warn)',
+                  }}
+                >
+                  {vc.transferNumber
+                    ? hoursConfigured
+                      ? `📞 Live-Weiterleitung an ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
+                      : `📞 Live-Weiterleitung an ${vc.transferNumber} (jederzeit — keine Geschäftszeiten gepflegt).`
+                    : 'Keine Transfer-Nummer — Übergaben werden als Rückruf-Ticket aufgenommen.'}
                 </p>
               </div>
               <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />

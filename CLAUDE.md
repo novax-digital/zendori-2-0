@@ -97,7 +97,7 @@ Kanal-Webhook (Resend / WhatsApp / Widget / Voice, später IMAP)
 Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel (Idempotenz).
 
 - `organizations` (Zendori-Kunden), `org_members` (user_id, role: owner|agent)
-- `agents` (org_id, name, **identity — der System-Prompt/die Identität des Agenten**, mode: draft_only|autopilot|intake_only, confidence_threshold default 0.7, is_active) — KI-Agenten als eigene Entität (Migration 0011): ein Agent bedient beliebig viele Kanäle; Kanal ohne Agent = keine Drafts/Auto-Sends (Klassifikation+Extraktion laufen immer). Writes owner-only.
+- `agents` (org_id, name, **identity — der System-Prompt/die Identität des Agenten**, kind: text|voice [0015], mode: draft_only|autopilot|intake_only [voice: nur intake_only|autopilot], confidence_threshold default 0.7, handoff_enabled default true [0018, §6], is_active) — KI-Agenten als eigene Entität (Migration 0011): ein Agent bedient beliebig viele Kanäle; Kanal ohne Agent = keine Drafts/Auto-Sends (Klassifikation+Extraktion laufen immer). Writes owner-only.
 - `channels` (org_id, type: chat|email|whatsapp|voice, name, config jsonb, is_active, agent_id → agents; same-org per Composite-FK, Zuweisung owner-only per DB-Trigger)
   - email-Channel: `config.mode: 'inbound' | 'imap'`; bei inbound: `config.address` (die generierte Adresse), bei imap: verschlüsselte Credentials (§7)
 - `integrations` (org_id, type: hubspot, config jsonb — Token verschlüsselt wie §7, rules jsonb — Sync-Regeln: all | channel_ids[] | manual, is_active, last_sync_at)
@@ -112,19 +112,24 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `agent_knowledge_bases` (org_id, agent_id, knowledge_base_id) — n:m: welche Datenbanken ein Agent nutzt (owner-only; RAG-Suche filtert darauf, Agent ohne Verknüpfung findet nichts)
 - `kb_chunks` (source_id, org_id, content, embedding vector(1536), fts tsvector [0013, generiert/german], token_count) — Retrieval zweistufig: hybrid_kb_search (Vektor+Keyword, RRF) → Haiku-Rerank (Text-Pipeline; Voice ohne Rerank wegen Latenz)
 - `ai_runs` (conversation_id, step, model, input_summary, output_summary, confidence, latency_ms, cost_usd)
-- `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, triggered_by)
-- `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
+- `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, outcome: pending_human|transferred|transfer_failed|callback_ticket|suppressed [0018, nullable — Alt-Zeilen bleiben NULL], details jsonb content-frei, triggered_by)
+- `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts, handoff_sla_minutes [0018, null = aus]) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
 
 ## 6. Human-Handoff-Logik (verbindlich)
 
 Default: `mode = 'bot'`. Handoff-Trigger:
 
-1. `confidence < threshold` (org-konfigurierbar)
-2. Kunde verlangt explizit einen Menschen (Klassifikations-Flag)
-3. Eskalations-Keywords (Kündigung, Beschwerde, Anwalt, Datenschutz — org-konfigurierbar)
-4. Agent klickt „Übernehmen" in der Inbox
+1. `confidence < threshold` (org-konfigurierbar) — **nur wenn `agents.handoff_enabled` (0018) an ist.** Schalter aus ⇒ Trigger unterdrückt: KEIN Auto-Send der unsicheren Antwort (Entwurf bleibt Vorschlag — der Agent verhält sich für diese Nachricht wie draft_only; Voice: ehrliches „kann ich gerade nicht sagen" + Ticket-Angebot) und ein `handoff_events`-Eintrag mit `outcome='suppressed'` macht die Unterdrückung zählbar.
+2. Kunde verlangt explizit einen Menschen (Klassifikations-Flag) — **übergeht den Schalter immer.**
+3. Eskalations-Keywords (org-konfigurierbar in „Übergabe & Zeiten"; die Liste gilt für Text UND Voice — sie wird in den Voice-Prompt injiziert) — **übergeht den Schalter immer** (deaktivieren = Liste leeren).
+4. Agent klickt „Übernehmen" in der Inbox — immer.
 
-Bei Handoff: `mode = 'human'`, `status = 'pending'`, `handoff_events`-Eintrag, Realtime-Notification, optional Auto-Ack an den Kunden („Ein Mitarbeiter übernimmt…", pro Org konfigurierbar, außerhalb Geschäftszeiten anderer Text).
+Bei Handoff: `mode = 'human'`, `status = 'pending'`, `handoff_events`-Eintrag (0018: mit `outcome` pending_human|transferred|transfer_failed|callback_ticket|suppressed und content-freiem `details` jsonb), Realtime-Notification, optional Auto-Ack an den Kunden („Ein Mitarbeiter übernimmt…", pro Org konfigurierbar, außerhalb Geschäftszeiten anderer Text). Text übergibt innerhalb UND außerhalb der Geschäftszeiten — nur der Ack-Text unterscheidet sich.
+
+**Voice (Geschäftszeiten-Gate im Moment des Tool-Aufrufs, nicht bei Anrufbeginn):** innerhalb der Zeiten + Transfer-Nummer ⇒ Live-Transfer (SIP REFER) mit Erwartungs-Ansage („…sollten Sie niemanden erreichen, melden wir uns zurück" — nach erfolgreichem REFER ist Nicht-Abheben nicht beobachtbar); außerhalb / ohne Nummer ⇒ Rückruf-Ticket. Geschäftszeiten ohne einen einzigen gepflegten Tag = NICHT konfiguriert ⇒ Transfer erlaubt (die Nummer ist das Opt-in). Der agentenlose Safe-Intake-Fallback transferiert nie. Jedes Rückruf-Versprechen (auch `create_ticket` ohne Handoff) setzt `status='pending'` — EINE Warteschlange für alles.
+
+**SLA-Erinnerung:** `org_settings.handoff_sla_minutes` (leer = aus) — wartende Übergabe ohne Mitarbeiter-Reaktion bekommt nach Ablauf eine interne Notiz; nur innerhalb der Geschäftszeiten, idempotent pro Event, `outcome='transferred'` ausgenommen.
+
 Agent kann per Klick an den Bot zurückgeben (`mode = 'bot'`).
 Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, außer Agent fordert explizit einen Draft an.
 

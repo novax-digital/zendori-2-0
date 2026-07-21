@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import type { Logger, SupabaseClient } from '@zendori/core';
-import type { VoiceChannelConfig } from '@zendori/channels';
+import type { BusinessHours, VoiceChannelConfig } from '@zendori/channels';
 import { toErrorInfo } from '../db.js';
 import {
   buildSessionConfig,
@@ -31,7 +31,11 @@ import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from '.
 // every exit path. Never logs transcript content or audio (§7) — only ids,
 // event types and error shapes.
 
-const TRANSFER_HOLD_TEXT = 'Einen Moment bitte, ich verbinde Sie mit einem Mitarbeiter.';
+// Expectation-setting on purpose (0018): after a successful SIP REFER we cannot
+// observe ring-no-answer — the promise of a callback is the caller-side safety
+// net when nobody picks up.
+const TRANSFER_HOLD_TEXT =
+  'Einen Moment bitte, ich verbinde Sie mit einem Mitarbeiter. Sollten Sie niemanden erreichen, melden wir uns schnellstmöglich bei Ihnen zurück.';
 /** Mandatory §201-StGB consent notice — spoken verbatim BEFORE the greeting. */
 const RECORDING_NOTICE_TEXT =
   'Dieses Gespräch wird zur Qualitätssicherung aufgezeichnet.';
@@ -68,6 +72,10 @@ export interface CallSessionParams {
   /** Assigned agent's behavior (0011), resolved by dispatch. */
   agent: VoiceAgentBehavior;
   context: SessionContext;
+  /** Org business hours (0018) — the handoff tool gates transfers on them. */
+  businessHours?: BusinessHours | null;
+  /** False in the agent-less safe-intake fallback: never live-transfer. */
+  allowTransfer?: boolean;
   /**
    * True when the channel opted into recording. The actual capture is done at
    * the Twilio trunk level (Elastic SIP Trunking calls are not recordable via
@@ -429,6 +437,7 @@ export class CallSession {
       let endCallRequested = false;
       let transferNumber: string | null = null;
       let transferCallId: string | null = null;
+      let transferEventId: string | null = null;
 
       const results = await Promise.all(
         calls.map(async (call) => {
@@ -437,6 +446,10 @@ export class CallSession {
             if ((output as { action?: string }).action === 'transfer') {
               transferNumber = (output as { transfer_number?: string }).transfer_number ?? null;
               transferCallId = call.callId;
+              // Internal correlation id for the REFER outcome — NEVER sent to
+              // the model (stripped below before function_call_output).
+              transferEventId = (output as { eventId?: string }).eventId ?? null;
+              delete (output as { eventId?: string }).eventId;
             }
           }
           if (call.name === 'end_call') endCallRequested = true;
@@ -453,6 +466,14 @@ export class CallSession {
           await referCall(this.p.apiKey, this.p.providerCallId, `tel:${transferNumber}`);
           this.state = 'ending';
           this.endedReason = 'handoff_transfer';
+          // Outcome funnel (0018): best-effort — the transfer already happened.
+          if (transferEventId) {
+            await this.p.supabase
+              .from('handoff_events')
+              .update({ outcome: 'transferred' })
+              .eq('org_id', this.p.orgId)
+              .eq('id', transferEventId);
+          }
           // xAI tears the session down after the transfer; onWsClose finalizes.
           return;
         } catch (err) {
@@ -460,6 +481,13 @@ export class CallSession {
             { voiceCallId: this.p.voiceCallId, err: toErrorInfo(err) },
             'voice refer failed — falling back to callback flow'
           );
+          if (transferEventId) {
+            await this.p.supabase
+              .from('handoff_events')
+              .update({ outcome: 'transfer_failed' })
+              .eq('org_id', this.p.orgId)
+              .eq('id', transferEventId);
+          }
           for (const r of results) {
             const output =
               r.callId === transferCallId
@@ -532,6 +560,9 @@ export class CallSession {
       channelConfig: this.p.channelConfig,
       agentMode: this.p.agent.mode,
       knowledgeBaseIds: this.p.agent.knowledgeBaseIds,
+      handoffEnabled: this.p.agent.handoffEnabled,
+      businessHours: this.p.businessHours ?? null,
+      allowTransfer: this.p.allowTransfer ?? false,
     };
     try {
       switch (name) {

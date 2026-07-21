@@ -15,6 +15,7 @@ type AgentRow = {
   mode: AgentMode;
   confidence_threshold: number;
   is_active: boolean;
+  handoff_enabled: boolean;
 };
 
 const MODE_LABELS: Record<AgentMode, string> = {
@@ -76,7 +77,7 @@ async function listAgents(orgId: string): Promise<AgentRow[]> {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('agents')
-    .select('id, name, identity, kind, mode, confidence_threshold, is_active')
+    .select('id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled')
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
   return (data ?? []) as unknown as AgentRow[];
@@ -132,6 +133,7 @@ function AgentFields({
         kindFixed={agent?.kind}
         defaultMode={agent?.mode}
         defaultThreshold={agent?.confidence_threshold}
+        defaultHandoffEnabled={agent?.handoff_enabled}
         disabled={disabled}
       />
     </>

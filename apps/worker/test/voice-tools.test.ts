@@ -18,7 +18,9 @@ vi.mock('@zendori/ai', () => ({
 }));
 
 // Imported AFTER the mock is registered.
-const { kbSearchTool, createTicketTool, handoffTool } = await import('../src/voice/tools.js');
+const { kbSearchTool, createTicketTool, handoffTool, decideVoiceHandoff } = await import(
+  '../src/voice/tools.js'
+);
 
 // --- fake supabase ---------------------------------------------------------------
 
@@ -46,9 +48,14 @@ function makeFake(
       {
         get(_t, prop: string) {
           if (prop === 'then') {
+            // updates report one affected row so conditional claims
+            // (.update()…eq('mode','bot').select('id')) see a successful flip.
             const result =
               kind === 'update'
-                ? { data: null, error: updateError.has(table) ? { message: 'update failed' } : null }
+                ? {
+                    data: updateError.has(table) ? null : [{ id: `${table}-row` }],
+                    error: updateError.has(table) ? { message: 'update failed' } : null,
+                  }
                 : { data: [], error: null };
             return (resolve: (v: unknown) => void) => resolve(result);
           }
@@ -108,6 +115,10 @@ function ctxWith(
     channelConfig: CONFIG,
     agentMode: 'answer',
     knowledgeBaseIds: null,
+    // 0018 defaults: real active agent, toggle on, hours unconfigured.
+    handoffEnabled: true,
+    businessHours: null,
+    allowTransfer: true,
     ...over,
   };
 }
@@ -309,5 +320,135 @@ describe('handoffTool', () => {
     const fake = makeFake();
     const result = await handoffTool(ctxWith(fake), { reason: 'because' });
     expect(result).toEqual({ ok: false, error: 'invalid arguments' });
+  });
+
+  // --- 0018: toggle + business hours ------------------------------------------
+
+  it('toggle OFF + low_confidence: no mode flip, suppressed event, no_handoff instruction', async () => {
+    const fake = makeFake();
+    const result = await handoffTool(
+      ctxWith(fake, {
+        handoffEnabled: false,
+        channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+      }),
+      { reason: 'low_confidence' }
+    );
+    expect((result as { action: string }).action).toBe('no_handoff');
+    // conversation untouched, but the suppression is countable
+    expect(fake.updates.some((u) => u.table === 'conversations')).toBe(false);
+    const event = fake.inserts.find((i) => i.table === 'handoff_events');
+    expect(event?.row.outcome).toBe('suppressed');
+  });
+
+  it('toggle OFF still transfers on user_request (never stonewall a human wish)', async () => {
+    const fake = makeFake();
+    const result = await handoffTool(
+      ctxWith(fake, {
+        handoffEnabled: false,
+        channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+      }),
+      { reason: 'user_request' }
+    );
+    expect((result as { action: string }).action).toBe('transfer');
+  });
+
+  it('outside business hours: callback instead of transfer, with honest wording', async () => {
+    vi.useFakeTimers({ now: new Date('2026-07-22T20:00:00Z') }); // Mi 22:00 Berlin
+    try {
+      const fake = makeFake();
+      const result = await handoffTool(
+        ctxWith(fake, {
+          businessHours: {
+            timezone: 'Europe/Berlin',
+            hours: { mon: null, tue: null, wed: { open: '08:00', close: '17:00' }, thu: null, fri: null, sat: null, sun: null },
+          },
+          channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+        }),
+        { reason: 'user_request' }
+      );
+      expect((result as { action: string }).action).toBe('callback');
+      expect((result as { instruction: string }).instruction).toContain('Geschäftszeiten');
+      const event = fake.inserts.find((i) => i.table === 'handoff_events');
+      expect(event?.row.outcome).toBe('callback_ticket');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('agent-less fallback (allowTransfer=false) never transfers even with a number', async () => {
+    const fake = makeFake();
+    const result = await handoffTool(
+      ctxWith(fake, {
+        allowTransfer: false,
+        channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+      }),
+      { reason: 'user_request' }
+    );
+    expect((result as { action: string }).action).toBe('callback');
+  });
+});
+
+// --- decideVoiceHandoff (pure matrix) ---------------------------------------------
+
+describe('decideVoiceHandoff', () => {
+  const HOURS = {
+    timezone: 'Europe/Berlin',
+    hours: {
+      mon: null,
+      tue: null,
+      wed: { open: '08:00', close: '17:00' },
+      thu: null,
+      fri: null,
+      sat: null,
+      sun: null,
+    },
+  };
+  const WITHIN = new Date('2026-07-22T08:00:00Z'); // Mi 10:00 Berlin (CEST)
+  const OUTSIDE = new Date('2026-07-22T20:00:00Z'); // Mi 22:00 Berlin
+
+  const base = {
+    reason: 'user_request' as const,
+    handoffEnabled: true,
+    allowTransfer: true,
+    transferNumber: '+491701112233',
+    businessHours: HOURS,
+    now: WITHIN,
+  };
+
+  it('transfers within hours with a number', () => {
+    expect(decideVoiceHandoff(base)).toBe('transfer');
+  });
+
+  it('falls back to callback outside hours', () => {
+    expect(decideVoiceHandoff({ ...base, now: OUTSIDE })).toBe('callback');
+  });
+
+  it('unconfigured hours (null or zero weekdays) allow the transfer — the number is the opt-in', () => {
+    expect(decideVoiceHandoff({ ...base, businessHours: null, now: OUTSIDE })).toBe('transfer');
+    expect(
+      decideVoiceHandoff({
+        ...base,
+        businessHours: { timezone: 'Europe/Berlin', hours: {} },
+        now: OUTSIDE,
+      })
+    ).toBe('transfer');
+  });
+
+  it('suppresses ONLY low_confidence when the toggle is off', () => {
+    expect(decideVoiceHandoff({ ...base, handoffEnabled: false, reason: 'low_confidence' })).toBe(
+      'suppress'
+    );
+    expect(decideVoiceHandoff({ ...base, handoffEnabled: false, reason: 'user_request' })).toBe(
+      'transfer'
+    );
+    expect(decideVoiceHandoff({ ...base, handoffEnabled: false, reason: 'keyword' })).toBe(
+      'transfer'
+    );
+  });
+
+  it('no number or no transfer permission → callback', () => {
+    expect(decideVoiceHandoff({ ...base, transferNumber: undefined })).toBe('callback');
+    expect(decideVoiceHandoff({ ...base, transferNumber: '   ' })).toBe('callback');
+    expect(decideVoiceHandoff({ ...base, allowTransfer: false })).toBe('callback');
   });
 });

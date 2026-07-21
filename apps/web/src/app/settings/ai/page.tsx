@@ -60,6 +60,7 @@ type OrgSettingsRow = {
   business_hours?: unknown;
   auto_ack_texts?: unknown;
   escalation_keywords?: unknown;
+  handoff_sla_minutes?: unknown;
 };
 
 export default async function AiSettingsPage({
@@ -75,7 +76,7 @@ export default async function AiSettingsPage({
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('org_settings')
-    .select('business_hours, auto_ack_texts, escalation_keywords')
+    .select('business_hours, auto_ack_texts, escalation_keywords, handoff_sla_minutes')
     .eq('org_id', orgId)
     .maybeSingle();
   const settings = (data ?? {}) as OrgSettingsRow;
@@ -94,6 +95,9 @@ export default async function AiSettingsPage({
         (keyword): keyword is string => typeof keyword === 'string'
       )
     : [];
+
+  const handoffSlaMinutes =
+    typeof settings.handoff_sla_minutes === 'number' ? settings.handoff_sla_minutes : null;
 
   const disabled = !isOwner;
 
@@ -134,7 +138,8 @@ export default async function AiSettingsPage({
           <h2>Eskalations-Keywords</h2>
           <p style={helpStyle}>
             Kommagetrennte Liste. Taucht eines dieser Wörter in einer Nachricht auf, wird die
-            Konversation an einen Menschen übergeben.
+            Konversation an einen Menschen übergeben — das gilt für Text-Kanäle UND für den
+            Voice-Agenten am Telefon.
           </p>
           <input
             name="escalation_keywords"
@@ -206,6 +211,30 @@ export default async function AiSettingsPage({
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        <div className="panel">
+          <h2>SLA-Erinnerung für Übergaben</h2>
+          <p style={helpStyle}>
+            Wartet eine Übergabe länger als die angegebene Zeit ohne Reaktion eines Mitarbeiters,
+            wird eine interne Notiz an der Konversation hinterlegt. Die Erinnerung feuert nur
+            innerhalb der Geschäftszeiten — nachts aufgelaufene Übergaben erinnern kurz nach
+            Öffnung. Leer = aus.
+          </p>
+          <div style={{ maxWidth: '16rem' }}>
+            <label htmlFor="handoff_sla_minutes">Erinnerung nach (Minuten)</label>
+            <input
+              id="handoff_sla_minutes"
+              name="handoff_sla_minutes"
+              type="number"
+              min={5}
+              max={1440}
+              defaultValue={handoffSlaMinutes ?? ''}
+              disabled={disabled}
+              placeholder="aus"
+              style={fieldStyle}
+            />
           </div>
         </div>
 

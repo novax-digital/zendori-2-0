@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   autoAckTextsSchema,
   businessHoursSchema,
+  hasConfiguredHours,
   isWithinBusinessHours,
   selectAutoAckText,
   type BusinessHours,
@@ -60,6 +61,34 @@ describe('autoAckTextsSchema', () => {
     });
     expect(parsed.enabled).toBe(true);
     expect(parsed.in_hours).toBe('Ein Mitarbeiter übernimmt gleich.');
+  });
+});
+
+describe('hasConfiguredHours', () => {
+  it('is false for null and for zero enabled weekdays (settings UI persists {} for "none")', () => {
+    // "Always closed" must count as NOT CONFIGURED — gating a voice transfer on
+    // it would silently disable live handoff for orgs that saved keywords
+    // before hours (0018 audit finding).
+    expect(hasConfiguredHours(null)).toBe(false);
+    expect(hasConfiguredHours({ timezone: 'Europe/Berlin', hours: {} })).toBe(false);
+  });
+
+  it('is false when the only slot is non-positive (close <= open)', () => {
+    expect(
+      hasConfiguredHours({
+        timezone: 'Europe/Berlin',
+        hours: { mon: { open: '17:00', close: '08:00' } },
+      })
+    ).toBe(false);
+  });
+
+  it('is true as soon as one weekday has a usable slot', () => {
+    expect(
+      hasConfiguredHours({
+        timezone: 'Europe/Berlin',
+        hours: { wed: { open: '08:00', close: '17:00' } },
+      })
+    ).toBe(true);
   });
 });
 

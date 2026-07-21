@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { loadWorkerEnv } from '@zendori/core';
-import { voiceChannelConfigSchema } from '@zendori/channels';
+import {
+  businessHoursSchema,
+  voiceChannelConfigSchema,
+  type BusinessHours,
+} from '@zendori/channels';
 import { getServiceClient, toErrorInfo } from '../db.js';
 import { CallSession } from './call-session.js';
 import type { VoiceAgentBehavior } from './session-config.js';
@@ -116,9 +120,17 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         .select('contact_id, contacts(name)')
         .eq('id', call.conversation_id)
         .maybeSingle(),
+      // 0018: handoff needs business hours + the org keyword list. Best-effort —
+      // a failure here degrades to "hours unconfigured/default keywords", it
+      // must never block answering the call.
+      supabase
+        .from('org_settings')
+        .select('business_hours, escalation_keywords')
+        .eq('org_id', call.org_id)
+        .maybeSingle(),
     ]);
     let channelRes = loads[0];
-    const [, orgRes, contactRes] = loads;
+    const [, orgRes, contactRes, settingsRes] = loads;
     if (isUndefinedColumn(channelRes.error)) {
       // channels.agent_id not migrated yet (worker ahead of 0011): answer the
       // call anyway — retry without the column; the null agent below falls back
@@ -171,17 +183,51 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         null) ||
       null;
 
+    // Defensive parse of the 0018 handoff inputs (best-effort — see above).
+    const settingsRow = settingsRes.error
+      ? null
+      : (settingsRes.data as {
+          business_hours: unknown;
+          escalation_keywords: unknown;
+        } | null);
+    let businessHours: BusinessHours | null = null;
+    if (settingsRow?.business_hours != null) {
+      const parsed = businessHoursSchema.safeParse(settingsRow.business_hours);
+      businessHours = parsed.success ? parsed.data : null;
+    }
+    const keywordsParsed = z.array(z.string()).safeParse(settingsRow?.escalation_keywords);
+    const escalationKeywords = keywordsParsed.success ? keywordsParsed.data : [];
+
     // Resolve the assigned agent (0011). A live call cannot simply "not answer",
     // so a missing/paused agent falls back to safe intake mode (take the case,
     // no RAG answers) with a warning; transient load errors release the claim.
     const agentId = (channelRes.data as { agent_id?: string | null }).agent_id ?? null;
-    let agent: VoiceAgentBehavior = { mode: 'intake_only', identity: null, knowledgeBaseIds: null };
+    // Agent-less fallback: safe intake, handoff on user_request possible but
+    // NEVER a live transfer (allowTransfer stays false — no owner-configured
+    // behavior to trust).
+    let agent: VoiceAgentBehavior = {
+      mode: 'intake_only',
+      identity: null,
+      knowledgeBaseIds: null,
+      handoffEnabled: true,
+    };
+    let allowTransfer = false;
     if (agentId) {
+      // Column-skew chain: handoff_enabled is 0018, kind is 0015 — degrade
+      // select-by-select while migrations are pending.
       let agentRes = await supabase
         .from('agents')
-        .select('identity, mode, is_active, kind')
+        .select('identity, mode, is_active, kind, handoff_enabled')
         .eq('id', agentId)
         .maybeSingle();
+      if (isUndefinedColumn(agentRes.error)) {
+        logger.warn({ voiceCallId }, 'agents.handoff_enabled missing — is migration 0018 applied?');
+        agentRes = (await supabase
+          .from('agents')
+          .select('identity, mode, is_active, kind')
+          .eq('id', agentId)
+          .maybeSingle()) as typeof agentRes;
+      }
       if (isUndefinedColumn(agentRes.error)) {
         // agents.kind not migrated yet (worker ahead of 0015): retry without it.
         logger.warn({ voiceCallId }, 'agents.kind missing — is migration 0015 applied?');
@@ -208,6 +254,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         mode: string;
         is_active: boolean;
         kind?: string;
+        handoff_enabled?: boolean;
       } | null;
       if (row && row.kind === 'text') {
         // A text agent on a voice channel (pre-0015 data — the DB guard blocks
@@ -240,7 +287,11 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
           mode: row.mode === 'autopilot' ? 'answer' : 'intake_only',
           identity: row.identity ?? null,
           knowledgeBaseIds,
+          // pre-0018 rows: default ON = today's behavior
+          handoffEnabled: row.handoff_enabled !== false,
         };
+        // A real, active, owner-configured agent answered — live transfer allowed.
+        allowTransfer = true;
       } else {
         logger.warn({ voiceCallId }, 'voice agent missing/paused — falling back to intake mode');
       }
@@ -265,7 +316,9 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       conversationId: call.conversation_id,
       channelConfig: configResult.data,
       agent,
-      context: { companyName, contactName },
+      context: { companyName, contactName, escalationKeywords },
+      businessHours,
+      allowTransfer,
       recordingEnabled,
       onClosed: (providerCallId) => {
         sessions.delete(providerCallId);

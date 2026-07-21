@@ -81,6 +81,8 @@ interface LoadedAgent {
   mode: AgentMode;
   confidenceThreshold: number;
   isActive: boolean;
+  /** 0018: OFF suppresses only the low_confidence handoff trigger. */
+  handoffEnabled: boolean;
 }
 
 interface LoadedMessage {
@@ -425,8 +427,13 @@ export async function processMessage(messageId: string): Promise<void> {
       wantsHuman: classification.wants_human,
       body: cleanBody,
       keywords: settings.escalationKeywords,
+      handoffEnabled: activeAgent.handoffEnabled,
     });
-    const action = decideDraftAction(detection.handoff, activeAgent.mode === 'autopilot');
+    const action = decideDraftAction(
+      detection.handoff,
+      activeAgent.mode === 'autopilot',
+      detection.suppressed
+    );
 
     if (action === 'auto_send') {
       // No handoff ⇒ confidence ≥ threshold. Auto-send delivers a real reply to
@@ -474,8 +481,14 @@ export async function processMessage(messageId: string): Promise<void> {
         businessHours: settings.businessHours,
       });
     } else {
-      // Autopilot off, no handoff: keep the draft as a suggestion (Phase-4).
+      // No handoff: keep the draft as a suggestion (Phase-4 behavior). When the
+      // 0018 toggle SWALLOWED a low_confidence trigger, record a countable
+      // 'suppressed' outcome event — these conversations must never be
+      // invisible (no mode flip, no ack; the draft waits in the inbox).
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
+      if (detection.suppressed) {
+        await recordSuppressedHandoff(supabase, orgId, conv.id);
+      }
     }
 
     // --- 6. done -------------------------------------------------------------
@@ -766,11 +779,20 @@ async function loadAgentKbIds(
 
 /** Load the channel's assigned agent (0011). Unknown mode values → draft_only. */
 async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<LoadedAgent | null> {
-  const { data, error } = await supabase
+  // handoff_enabled is 0018: retry without it while the migration is pending
+  // (same schema-skew pattern as the 42703 guards elsewhere).
+  let { data, error } = await supabase
     .from('agents')
-    .select('id, name, identity, mode, confidence_threshold, is_active')
+    .select('id, name, identity, mode, confidence_threshold, is_active, handoff_enabled')
     .eq('id', agentId)
     .maybeSingle();
+  if (error && (error as { code?: string }).code === '42703') {
+    ({ data, error } = await supabase
+      .from('agents')
+      .select('id, name, identity, mode, confidence_threshold, is_active')
+      .eq('id', agentId)
+      .maybeSingle());
+  }
   if (error) throw error;
   if (!data) return null;
   const row = data as {
@@ -780,6 +802,7 @@ async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<Loa
     mode: string;
     confidence_threshold: number | string | null;
     is_active: boolean;
+    handoff_enabled?: boolean;
   };
   const mode: AgentMode =
     row.mode === 'autopilot' || row.mode === 'intake_only' ? row.mode : 'draft_only';
@@ -790,6 +813,8 @@ async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<Loa
     mode,
     confidenceThreshold: parseThreshold(row.confidence_threshold),
     isActive: row.is_active === true,
+    // pre-0018 rows: default ON = today's behavior
+    handoffEnabled: row.handoff_enabled !== false,
   };
 }
 
@@ -818,11 +843,11 @@ async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): P
     .eq('id', args.conv.id);
   if (convUpdate.error) throw convUpdate.error;
 
-  const eventInsert = await supabase.from('handoff_events').insert({
+  const eventInsert = await insertHandoffEvent(supabase, {
     org_id: args.orgId,
     conversation_id: args.conv.id,
     reason: args.reason,
-    triggered_by: null,
+    outcome: 'pending_human',
   });
   if (eventInsert.error) throw eventInsert.error;
 
@@ -835,6 +860,48 @@ async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): P
     channel: args.channel,
     content: text,
     senderType: 'system',
+  });
+}
+
+/**
+ * Insert a handoff_events row with the 0018 outcome; while the migration is
+ * pending (42703 undefined column) retry the legacy shape so the pipeline
+ * keeps working during the deploy window.
+ */
+async function insertHandoffEvent(
+  supabase: SupabaseClient,
+  row: { org_id: string; conversation_id: string; reason: string; outcome: string }
+): Promise<{ error: unknown | null }> {
+  const { error } = await supabase
+    .from('handoff_events')
+    .insert({ ...row, triggered_by: null });
+  if (error && (error as { code?: string }).code === '42703') {
+    const { error: legacyError } = await supabase.from('handoff_events').insert({
+      org_id: row.org_id,
+      conversation_id: row.conversation_id,
+      reason: row.reason,
+      triggered_by: null,
+    });
+    return { error: legacyError };
+  }
+  return { error };
+}
+
+/**
+ * Countable trace of a toggle-swallowed low_confidence trigger (0018): one
+ * event per suppressed message, no mode flip, no ack. Best-effort — a failure
+ * here must never fail the pipeline (the draft suggestion is already saved).
+ */
+async function recordSuppressedHandoff(
+  supabase: SupabaseClient,
+  orgId: string,
+  conversationId: string
+): Promise<void> {
+  await insertHandoffEvent(supabase, {
+    org_id: orgId,
+    conversation_id: conversationId,
+    reason: 'low_confidence',
+    outcome: 'suppressed',
   });
 }
 

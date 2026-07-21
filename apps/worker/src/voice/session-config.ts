@@ -13,10 +13,24 @@ Arbeitsweise:
 - Bevor du etwas nachschlägst, kündige es kurz und natürlich an — z. B. „Einen Moment bitte, das schaue ich kurz nach." — und rufe DANN kb_search auf.
 - Formuliere die Suchanfrage präzise und nutze Produkt- und Eigennamen, wenn der Anrufer welche genannt hat. Liefert die Suche nichts Passendes, versuche genau EINE zweite Suche mit anderen Begriffen (Synonym, Produktname, Oberbegriff), bevor du sagst, dass du es nicht weißt.
 - Wenn der Anrufer ausdrücklich einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
-- Bei den Themen Kündigung, Beschwerde, Anwalt oder Datenschutz rufe handoff_human mit reason="keyword" auf.
-- Wenn du unsicher bist oder das Anliegen komplex ist, rufe handoff_human mit reason="low_confidence" auf.
+- Bei den Themen {keywords} rufe handoff_human mit reason="keyword" auf.
+{lowConfidenceRule}
 - Nimm bei Bedarf ein Anliegen strukturiert auf: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
 - Wenn das Gespräch erledigt ist: bestätige zuerst vollständig, was du getan hast, verabschiede dich mit einem ganzen Satz (z. B. „Vielen Dank für Ihren Anruf — auf Wiederhören!") und rufe erst DANACH end_call auf. Beende niemals mitten im Satz.`;
+
+/**
+ * The low_confidence bullet depends on the agent's handoff toggle (0018):
+ * enabled → escalate uncertainty to a human; disabled → admit the limit and
+ * offer a ticket instead (the tool additionally refuses reason='low_confidence'
+ * server-side — the prompt is UX, the tool is the guarantee).
+ */
+const LOW_CONFIDENCE_HANDOFF_ON =
+  '- Wenn du unsicher bist oder das Anliegen komplex ist, rufe handoff_human mit reason="low_confidence" auf.';
+const LOW_CONFIDENCE_HANDOFF_OFF =
+  '- Wenn du unsicher bist oder das Anliegen komplex ist, rufe NICHT handoff_human auf — sage ehrlich, dass du das gerade nicht beantworten kannst, und biete an, das Anliegen aufzunehmen (create_ticket).';
+
+/** Default escalation topics when the org has not configured its own list. */
+const DEFAULT_ESCALATION_TOPICS = ['Kündigung', 'Beschwerde', 'Anwalt', 'Datenschutz'];
 
 const INTAKE_TEMPLATE = `Du bist der telefonische Annahme-Assistent von {company}. Deine einzige Aufgabe ist es, Anliegen aufzunehmen — du beantwortest KEINE inhaltlichen Fragen.
 Sprich natürlich, kurz und klar (Höflichkeitsform). Du telefonierst — halte dich kurz, keine Aufzählungen.
@@ -126,6 +140,12 @@ const END_CALL_TOOL: FunctionTool = {
 export interface SessionContext {
   companyName: string;
   contactName?: string | null;
+  /**
+   * Org escalation keywords (/settings/ai) — injected into the prompt so the
+   * SAME list governs voice and text (it used to be hardcoded here). Empty/
+   * absent → the default topics.
+   */
+  escalationKeywords?: string[];
 }
 
 /**
@@ -143,6 +163,8 @@ export interface VoiceAgentBehavior {
    * (fallback contexts); [] = the agent knows nothing.
    */
   knowledgeBaseIds: string[] | null;
+  /** 0018: OFF suppresses only the low_confidence handoff trigger. */
+  handoffEnabled: boolean;
 }
 
 /** Builds the session.update payload from channel config + assigned agent. */
@@ -151,7 +173,21 @@ export function buildSessionConfig(
   agent: VoiceAgentBehavior,
   context: SessionContext
 ): SessionConfig {
-  const template = agent.mode === 'intake_only' ? INTAKE_TEMPLATE : ANSWER_TEMPLATE;
+  // Escalation keywords are DATA in the prompt: strip quotes/newlines so the
+  // org-configured list cannot masquerade as instructions.
+  const keywords = (context.escalationKeywords ?? [])
+    .map((k) => k.trim().replace(/\s+/g, ' ').replaceAll('"', ''))
+    .filter((k) => k.length > 0 && k.length <= 60)
+    .slice(0, 30);
+  const keywordList = (keywords.length > 0 ? keywords : DEFAULT_ESCALATION_TOPICS).join(', ');
+
+  const template =
+    agent.mode === 'intake_only'
+      ? INTAKE_TEMPLATE
+      : ANSWER_TEMPLATE.replace('{keywords}', keywordList).replace(
+          '{lowConfidenceRule}',
+          agent.handoffEnabled ? LOW_CONFIDENCE_HANDOFF_ON : LOW_CONFIDENCE_HANDOFF_OFF
+        );
   const parts = [
     template.replaceAll('{company}', context.companyName),
     languageRules(config.languageHint),

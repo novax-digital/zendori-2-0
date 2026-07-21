@@ -16,11 +16,24 @@ export interface DetectHandoffInput {
   body: string;
   /** Org escalation_keywords, matched case-insensitively as substrings. */
   keywords: string[];
+  /**
+   * agents.handoff_enabled (0018). OFF suppresses ONLY the low_confidence
+   * trigger — user_request and keyword ALWAYS hand off (a bot refusing an
+   * explicit human wish is the worst loss path; keywords are org policy).
+   */
+  handoffEnabled: boolean;
 }
 
 export interface DetectHandoffResult {
   handoff: boolean;
   reason: HandoffReason | null;
+  /**
+   * True when a low_confidence trigger fired but was swallowed by the toggle.
+   * A suppressed detection must NEVER auto-send (the confidence threshold
+   * keeps gating quality even when it no longer escalates) — the draft stays
+   * a pending suggestion, and a 'suppressed' outcome event keeps it countable.
+   */
+  suppressed: boolean;
 }
 
 /**
@@ -34,15 +47,18 @@ export interface DetectHandoffResult {
  */
 export function detectHandoff(input: DetectHandoffInput): DetectHandoffResult {
   if (matchesEscalationKeyword(input.body, input.keywords)) {
-    return { handoff: true, reason: 'keyword' };
+    return { handoff: true, reason: 'keyword', suppressed: false };
   }
   if (input.wantsHuman) {
-    return { handoff: true, reason: 'user_request' };
+    return { handoff: true, reason: 'user_request', suppressed: false };
   }
   if (input.confidence < input.threshold) {
-    return { handoff: true, reason: 'low_confidence' };
+    if (!input.handoffEnabled) {
+      return { handoff: false, reason: null, suppressed: true };
+    }
+    return { handoff: true, reason: 'low_confidence', suppressed: false };
   }
-  return { handoff: false, reason: null };
+  return { handoff: false, reason: null, suppressed: false };
 }
 
 /** Case-insensitive substring match of any non-empty escalation keyword. Pure. */
@@ -59,12 +75,19 @@ export function matchesEscalationKeyword(body: string, keywords: string[]): bool
 export type DraftAction = 'handoff' | 'auto_send' | 'pending';
 
 /**
- * Gate the drafted reply (§4 message-flow): a required handoff always wins;
- * otherwise auto-send only when the channel's assigned agent runs in autopilot
- * mode (0011); else keep the draft as a suggestion. Pure.
+ * Gate the drafted reply (§4 message-flow): a required handoff always wins; a
+ * SUPPRESSED low-confidence detection (0018 toggle off) must never auto-send —
+ * the draft below threshold stays a suggestion (the agent effectively behaves
+ * like draft_only for that message); otherwise auto-send only when the
+ * channel's assigned agent runs in autopilot mode (0011). Pure.
  */
-export function decideDraftAction(handoff: boolean, autopilotEnabled: boolean): DraftAction {
+export function decideDraftAction(
+  handoff: boolean,
+  autopilotEnabled: boolean,
+  suppressed = false
+): DraftAction {
   if (handoff) return 'handoff';
+  if (suppressed) return 'pending';
   if (autopilotEnabled) return 'auto_send';
   return 'pending';
 }

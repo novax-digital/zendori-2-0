@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { retrieveRelevantChunks, EMBEDDING_MODEL } from '@zendori/ai';
 import type { SupabaseClient } from '@zendori/core';
-import type { VoiceChannelConfig } from '@zendori/channels';
+import {
+  hasConfiguredHours,
+  isWithinBusinessHours,
+  type BusinessHours,
+  type VoiceChannelConfig,
+} from '@zendori/channels';
 
 // Voice function-tool handlers. All run in the worker with the org_id bound
 // from the voice_calls row (server truth — never from the model), so RLS-scoped
@@ -19,6 +24,20 @@ export interface ToolContext {
   agentMode: 'answer' | 'intake_only';
   /** Agent's linked knowledge bases (0012): null = all, [] = none. */
   knowledgeBaseIds: string[] | null;
+  /** 0018: OFF suppresses only the low_confidence handoff trigger. */
+  handoffEnabled: boolean;
+  /**
+   * Org business hours (defensively parsed) — the live-transfer gate is
+   * evaluated HERE at tool-call time, not at call start, so the mid-call
+   * boundary (call starts 16:58, handoff 17:02) is correct by construction.
+   */
+  businessHours: BusinessHours | null;
+  /**
+   * Explicit transfer permission: false in the agent-less safe-intake fallback
+   * (no owner-configured behavior → never transfer). Deliberately its own flag
+   * — overloading businessHours=null would give null two meanings.
+   */
+  allowTransfer: boolean;
 }
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
@@ -101,9 +120,12 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
   const args = parsed.data;
   const email = validEmailOrUndefined(args.email);
 
+  // status='pending' (one-queue principle, 0018): every promised callback —
+  // also from the intake/suppressed flows that never flip mode — is visible in
+  // the inbox pending queue and covered by the SLA reminder.
   const { error: convError } = await ctx.supabase
     .from('conversations')
-    .update({ subject: args.subject })
+    .update({ subject: args.subject, status: 'pending' })
     .eq('org_id', ctx.orgId)
     .eq('id', ctx.conversationId);
   if (convError) return { ok: false, error: 'Ticket konnte nicht gespeichert werden' };
@@ -157,43 +179,157 @@ const handoffArgsSchema = z.object({
   reason: z.enum(['user_request', 'low_confidence', 'keyword']),
 });
 
+export type VoiceHandoffDecision = 'transfer' | 'callback' | 'suppress';
+
+export interface DecideVoiceHandoffInput {
+  reason: 'user_request' | 'low_confidence' | 'keyword';
+  /** agents.handoff_enabled (0018). */
+  handoffEnabled: boolean;
+  /** Agent-less safe-intake fallback sets this false — never transfer. */
+  allowTransfer: boolean;
+  /** Voice channel transferNumber (may be absent/blank). */
+  transferNumber: string | undefined;
+  /** Org business hours; null = never configured. */
+  businessHours: BusinessHours | null;
+  now: Date;
+}
+
+/**
+ * The v1 handoff decision matrix (owner decision 2026-07-21), pure:
+ * - Toggle OFF suppresses ONLY reason='low_confidence' — user_request and
+ *   keyword always hand off (never stonewall an explicit human wish; keywords
+ *   are org policy). The reason enum is model-chosen, so this is a best-effort
+ *   gate, not a guarantee — documented residual risk.
+ * - Live transfer requires: allowed (real agent), a transfer number, and being
+ *   within business hours. Hours with NO configured weekday (or null) count as
+ *   NOT CONFIGURED → transfer allowed (the number is the opt-in).
+ * - Everything else → callback ticket flow.
+ */
+export function decideVoiceHandoff(input: DecideVoiceHandoffInput): VoiceHandoffDecision {
+  if (!input.handoffEnabled && input.reason === 'low_confidence') return 'suppress';
+  const number = input.transferNumber?.trim();
+  if (!input.allowTransfer || !number) return 'callback';
+  const hoursConfigured = hasConfiguredHours(input.businessHours);
+  const within = hoursConfigured
+    ? isWithinBusinessHours(input.now, input.businessHours!)
+    : true; // not configured → the transfer number alone is the opt-in
+  return within ? 'transfer' : 'callback';
+}
+
 export type HandoffOutcome =
-  | { ok: true; action: 'transfer'; transfer_number: string }
+  | { ok: true; action: 'transfer'; transfer_number: string; eventId?: string }
   | { ok: true; action: 'callback'; instruction: string }
+  | { ok: true; action: 'no_handoff'; instruction: string }
   | { ok: false; error: string };
 
 /**
- * Hand the conversation to a human (§6): flip mode/status, record the
- * handoff_event, then either signal a live transfer (config.transferNumber set —
- * the CallSession performs the REST refer) or instruct the model to offer a
- * callback and finish via create_ticket + end_call.
+ * Insert a handoff event with the 0018 outcome; pre-migration (42703) retries
+ * the legacy shape. Returns the new event id when available.
+ */
+async function insertVoiceHandoffEvent(
+  ctx: ToolContext,
+  reason: string,
+  outcome: string
+): Promise<string | null> {
+  const { data, error } = await ctx.supabase
+    .from('handoff_events')
+    .insert({
+      org_id: ctx.orgId,
+      conversation_id: ctx.conversationId,
+      reason,
+      outcome,
+      triggered_by: null,
+    })
+    .select('id')
+    .single();
+  if (error && (error as { code?: string }).code === '42703') {
+    await ctx.supabase.from('handoff_events').insert({
+      org_id: ctx.orgId,
+      conversation_id: ctx.conversationId,
+      reason,
+      triggered_by: null,
+    });
+    return null;
+  }
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+/**
+ * Hand the conversation to a human (§6 + 0018): decide transfer vs callback vs
+ * suppress via the pure matrix above (business hours evaluated NOW), then flip
+ * mode/status idempotently (conditional claim on mode='bot' — model retries of
+ * handoff_human never produce duplicate events) and record the outcome.
+ * The eventId in the transfer outcome is for the CallSession's REFER-result
+ * correlation ONLY — it is stripped before the output reaches the model.
  */
 export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<HandoffOutcome> {
   const parsed = handoffArgsSchema.safeParse(rawArgs);
   if (!parsed.success) return { ok: false, error: 'invalid arguments' };
+  const reason = parsed.data.reason;
 
-  const { error: convError } = await ctx.supabase
+  const decision = decideVoiceHandoff({
+    reason,
+    handoffEnabled: ctx.handoffEnabled,
+    allowTransfer: ctx.allowTransfer,
+    transferNumber: ctx.channelConfig.transferNumber,
+    businessHours: ctx.businessHours,
+    now: new Date(),
+  });
+
+  if (decision === 'suppress') {
+    // No mode flip, no transfer — but countable (one event per conversation).
+    const { data: existing } = await ctx.supabase
+      .from('handoff_events')
+      .select('id')
+      .eq('org_id', ctx.orgId)
+      .eq('conversation_id', ctx.conversationId)
+      .eq('outcome', 'suppressed')
+      .limit(1);
+    if (!existing || existing.length === 0) {
+      await insertVoiceHandoffEvent(ctx, reason, 'suppressed');
+    }
+    return {
+      ok: true,
+      action: 'no_handoff',
+      instruction:
+        'Eine Übergabe ist hierfür nicht vorgesehen. Sage ehrlich, dass du das gerade nicht beantworten kannst, und biete an, das Anliegen aufzunehmen (create_ticket) — ein Kollege meldet sich dann.',
+    };
+  }
+
+  // Idempotent claim: only the bot→human transition inserts the event. A
+  // duplicate handoff_human (model retry) recomputes the action without a
+  // second event.
+  const { data: claimed, error: convError } = await ctx.supabase
     .from('conversations')
     .update({ mode: 'human', status: 'pending' })
     .eq('org_id', ctx.orgId)
-    .eq('id', ctx.conversationId);
+    .eq('id', ctx.conversationId)
+    .eq('mode', 'bot')
+    .select('id');
   if (convError) return { ok: false, error: 'Übergabe fehlgeschlagen' };
+  const isFirstHandoff = (claimed ?? []).length > 0;
 
-  await ctx.supabase.from('handoff_events').insert({
-    org_id: ctx.orgId,
-    conversation_id: ctx.conversationId,
-    reason: parsed.data.reason,
-    triggered_by: null,
-  });
-
-  const transferNumber = ctx.channelConfig.transferNumber;
-  if (transferNumber && transferNumber.trim().length > 0) {
-    return { ok: true, action: 'transfer', transfer_number: transferNumber.trim() };
+  if (decision === 'transfer') {
+    const eventId = isFirstHandoff
+      ? await insertVoiceHandoffEvent(ctx, reason, 'pending_human')
+      : null;
+    return {
+      ok: true,
+      action: 'transfer',
+      transfer_number: ctx.channelConfig.transferNumber!.trim(),
+      ...(eventId ? { eventId } : {}),
+    };
   }
+
+  if (isFirstHandoff) await insertVoiceHandoffEvent(ctx, reason, 'callback_ticket');
+  const hoursConfigured = hasConfiguredHours(ctx.businessHours);
+  const outsideHours =
+    hoursConfigured && !isWithinBusinessHours(new Date(), ctx.businessHours!);
   return {
     ok: true,
     action: 'callback',
-    instruction:
-      'Kein Live-Transfer verfügbar. Biete dem Anrufer einen Rückruf an: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, rufe create_ticket auf und beende dann das Gespräch mit end_call.',
+    instruction: outsideHours
+      ? 'Wir sind gerade außerhalb der Geschäftszeiten — kein Live-Transfer. Sage das ehrlich, biete einen Rückruf am nächsten Werktag an: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, rufe create_ticket auf und beende dann das Gespräch mit end_call.'
+      : 'Kein Live-Transfer verfügbar. Biete dem Anrufer einen Rückruf an: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, rufe create_ticket auf und beende dann das Gespräch mit end_call.',
   };
 }

@@ -87,6 +87,9 @@ export async function createAgent(formData: FormData): Promise<void> {
   }
   await requireOwner(org);
 
+  // 0018: intake_only has no toggle (Annahme IST die Übergabe) — force true.
+  const handoffEnabled = mode === 'intake_only' ? true : formData.get('handoffEnabled') === 'on';
+
   const supabase = await createSupabaseServerClient();
   const { data: created, error } = await supabase
     .from('agents')
@@ -97,6 +100,7 @@ export async function createAgent(formData: FormData): Promise<void> {
       kind,
       mode,
       confidence_threshold: confidenceThreshold,
+      handoff_enabled: handoffEnabled,
     })
     .select('id')
     .single();
@@ -177,6 +181,8 @@ export async function updateAgent(formData: FormData): Promise<void> {
       mode,
       confidence_threshold: confidenceThreshold,
       is_active: isActive,
+      // 0018: intake_only forces the toggle on (no UI checkbox in that mode)
+      handoff_enabled: mode === 'intake_only' ? true : formData.get('handoffEnabled') === 'on',
     })
     .eq('org_id', org)
     .eq('id', agentId)

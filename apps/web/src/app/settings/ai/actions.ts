@@ -98,6 +98,21 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
     );
   }
 
+  // 0018 v1.5: handoff SLA in minutes — empty = reminder off.
+  const slaRaw = textField(formData.get('handoff_sla_minutes'));
+  let handoffSlaMinutes: number | null = null;
+  if (slaRaw !== '') {
+    const value = Number(slaRaw);
+    if (!Number.isInteger(value) || value < 5 || value > 1440) {
+      redirect(
+        aiSettingsUrl(org, {
+          error: 'Die SLA-Erinnerung muss leer (aus) oder 5–1440 Minuten sein.',
+        })
+      );
+    }
+    handoffSlaMinutes = value;
+  }
+
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from('org_settings')
@@ -105,6 +120,7 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
       escalation_keywords: keywordsParsed.data,
       business_hours: businessHoursParsed.data,
       auto_ack_texts: autoAck,
+      handoff_sla_minutes: handoffSlaMinutes,
     })
     .eq('org_id', org)
     .select('org_id');

@@ -7,6 +7,7 @@ import type { PgBoss } from 'pg-boss';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from './db.js';
 import { POST_CALL_QUEUE, POST_CALL_RETRY_LIMIT } from './pipeline/post-call.js';
+import { remindOverdueHandoffs } from './pipeline/handoff-sla.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -53,6 +54,8 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueuePendingSources(boss, supabase);
       await enqueueDueHubspotSyncs(boss, supabase);
       await enqueueDuePostCalls(boss, supabase);
+      // 0018 v1.5: internally rate-limited to one sweep per minute.
+      await remindOverdueHandoffs(supabase, logger);
     } catch (err) {
       logger.error({ err: toErrorInfo(err) }, 'scan tick failed');
     } finally {

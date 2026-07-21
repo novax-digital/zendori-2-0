@@ -33,6 +33,7 @@ export default function AgentBehaviorFields({
   kindFixed,
   defaultMode,
   defaultThreshold,
+  defaultHandoffEnabled,
   disabled,
 }: {
   idPrefix: string;
@@ -40,14 +41,18 @@ export default function AgentBehaviorFields({
   kindFixed?: AgentKind;
   defaultMode?: AgentMode;
   defaultThreshold?: number;
+  /** 0018: per-agent human-handoff master switch (default on). */
+  defaultHandoffEnabled?: boolean;
   disabled: boolean;
 }) {
   const [kind, setKind] = useState<AgentKind>(kindFixed ?? 'text');
   const options = MODE_OPTIONS[kind];
   const fallbackMode: AgentMode = kind === 'voice' ? 'intake_only' : 'draft_only';
   const effectiveDefault = options.some((o) => o.value === defaultMode)
-    ? defaultMode
+    ? (defaultMode as AgentMode)
     : fallbackMode;
+  // Mode is controlled: the handoff toggle only renders for non-intake modes.
+  const [mode, setMode] = useState<AgentMode>(effectiveDefault);
 
   return (
     <>
@@ -70,7 +75,14 @@ export default function AgentBehaviorFields({
               name="kind"
               value={kind}
               disabled={disabled}
-              onChange={(e) => setKind(e.target.value === 'voice' ? 'voice' : 'text')}
+              onChange={(e) => {
+                const nextKind = e.target.value === 'voice' ? 'voice' : 'text';
+                setKind(nextKind);
+                // reset an invalid mode when the kind flips
+                if (!MODE_OPTIONS[nextKind].some((o) => o.value === mode)) {
+                  setMode(nextKind === 'voice' ? 'intake_only' : 'draft_only');
+                }
+              }}
             >
               <option value="text">Text-Agent — bedient Chat, E-Mail und WhatsApp</option>
               <option value="voice">Voice-Agent — bedient Telefon-Kanäle</option>
@@ -84,13 +96,12 @@ export default function AgentBehaviorFields({
       </div>
       <div>
         <label htmlFor={`${idPrefix}-mode`}>Verhalten</label>
-        {/* key remounts the select when the kind switches so the default applies */}
         <select
-          key={kind}
           id={`${idPrefix}-mode`}
           name="mode"
-          defaultValue={effectiveDefault}
+          value={mode}
           disabled={disabled}
+          onChange={(e) => setMode(e.target.value as AgentMode)}
         >
           {options.map((o) => (
             <option key={o.value} value={o.value}>
@@ -99,6 +110,29 @@ export default function AgentBehaviorFields({
           ))}
         </select>
       </div>
+      {mode !== 'intake_only' ? (
+        <div>
+          <label
+            htmlFor={`${idPrefix}-handoff`}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 400 }}
+          >
+            <input
+              id={`${idPrefix}-handoff`}
+              name="handoffEnabled"
+              type="checkbox"
+              defaultChecked={defaultHandoffEnabled !== false}
+              disabled={disabled}
+              style={{ width: 'auto' }}
+            />
+            Übergabe an Menschen bei Unsicherheit
+          </label>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+            Aus = bei unsicheren Antworten bleibt der Entwurf ein Vorschlag (Text) bzw. bietet der
+            Assistent ein Ticket an (Telefon). Wünscht sich jemand ausdrücklich einen Menschen oder
+            fällt ein Eskalations-Begriff, wird IMMER übergeben.
+          </p>
+        </div>
+      ) : null}
       {kind === 'text' ? (
         <div>
           <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1, nur Autopilot)</label>
