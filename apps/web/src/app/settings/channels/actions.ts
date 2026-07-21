@@ -55,7 +55,13 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
     org_id: org,
     type: 'chat',
     name,
-    config: { widget: true, public_token: generatePublicToken(), theme: DEFAULT_THEME },
+    config: {
+      widget: true,
+      public_token: generatePublicToken(),
+      theme: DEFAULT_THEME,
+      // ticket separation default for NEW widgets: next day = new conversation
+      conversation_split_hours: 24,
+    },
   });
   if (error) {
     redirect(channelsUrl(org, { error: 'Widget-Channel konnte nicht angelegt werden.' }));
@@ -264,6 +270,95 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
   );
 }
 
+// --- ticket separation: inactivity window per channel -----------------------------
+
+const updateConversationSplitSchema = z.object({
+  org: z.uuid(),
+  channelId: z.uuid(),
+  /** '' = never split; otherwise hours (UI offers 24 / 72 / 168). */
+  splitHours: z
+    .literal('')
+    .or(z.coerce.number().int().min(1).max(8760))
+    .transform((v) => (v === '' ? null : v)),
+});
+
+/**
+ * Sets "Neue Unterhaltung nach Inaktivität" on a WhatsApp or widget channel.
+ * Owner-only (channel mechanics, like the voice settings). The value lives in
+ * channels.config — camelCase `conversationSplitHours` for WhatsApp (schema in
+ * packages/channels), snake_case `conversation_split_hours` for the widget
+ * (schema in lib/widget/session.ts).
+ */
+export async function updateConversationSplit(formData: FormData): Promise<void> {
+  const errorText = 'Einstellung konnte nicht gespeichert werden.';
+  const parsed = updateConversationSplitSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+    splitHours: textField(formData.get('splitHours')),
+  });
+  if (!parsed.success) {
+    redirect(channelsUrl(textField(formData.get('org')), { error: errorText }));
+  }
+  const { org, channelId, splitHours } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  const { data: memberRow } = await supabase
+    .from('org_members')
+    .select('role')
+    .eq('org_id', org)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if ((memberRow as { role: string } | null)?.role !== 'owner') {
+    redirect(channelsUrl(org, { error: 'Nur Inhaber können diese Einstellung ändern.' }));
+  }
+
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('id, type, config')
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .maybeSingle();
+  const channel = channelRow as {
+    id: string;
+    type: string;
+    config: Record<string, unknown>;
+  } | null;
+  const isWhatsapp = channel?.type === 'whatsapp';
+  const isWidget = channel?.type === 'chat' && channel.config['widget'] === true;
+  if (!channel || (!isWhatsapp && !isWidget)) {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+
+  const key = isWhatsapp ? 'conversationSplitHours' : 'conversation_split_hours';
+  const nextConfig: Record<string, unknown> = { ...channel.config };
+  if (splitHours === null) delete nextConfig[key];
+  else nextConfig[key] = splitHours;
+
+  const { data, error } = await supabase
+    .from('channels')
+    .update({ config: nextConfig })
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(channelsUrl(org, { error: errorText }));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(
+    channelsUrl(org, {
+      notice:
+        splitHours === null
+          ? 'Ticket-Trennung deaktiviert — Nachrichten laufen in der bestehenden Unterhaltung weiter.'
+          : 'Ticket-Trennung gespeichert.',
+    })
+  );
+}
+
 // --- activate / deactivate a channel ---------------------------------------------
 
 const setChannelActiveSchema = z.object({
@@ -364,6 +459,8 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
     accountSid,
     authTokenEncrypted,
     ...(messagingServiceSid ? { messagingServiceSid } : {}),
+    // ticket separation default for NEW channels: 3 days of silence = new ticket
+    conversationSplitHours: 72,
   });
   if (!config.success) {
     redirect(channelsUrl(org, { error: 'WhatsApp-Kanal konnte nicht angelegt werden.' }));

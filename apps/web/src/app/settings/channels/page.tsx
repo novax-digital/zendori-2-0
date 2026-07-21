@@ -8,6 +8,7 @@ import { createTestChannel } from '@/app/inbox/actions';
 import {
   createWidgetChannel,
   updateWidgetTheme,
+  updateConversationSplit,
   createIntakeAddress,
   createWhatsappTwilioChannel,
   updateVoiceChannelSettings,
@@ -40,6 +41,7 @@ type WidgetChannelView = {
   name: string;
   publicToken: string;
   theme: WidgetTheme;
+  splitHours: number | null;
   isActive: boolean;
   agentId: string | null;
 };
@@ -50,6 +52,7 @@ function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
     widget?: unknown;
     public_token?: unknown;
     theme?: { color?: unknown; title?: unknown; greeting?: unknown };
+    conversation_split_hours?: unknown;
   };
   if (config.widget !== true || typeof config.public_token !== 'string') return null;
   const theme = config.theme ?? {};
@@ -62,6 +65,8 @@ function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
       title: typeof theme.title === 'string' ? theme.title : DEFAULT_THEME.title,
       greeting: typeof theme.greeting === 'string' ? theme.greeting : DEFAULT_THEME.greeting,
     },
+    splitHours:
+      typeof config.conversation_split_hours === 'number' ? config.conversation_split_hours : null,
     isActive: channel.is_active,
     agentId: channel.agent_id ?? null,
   };
@@ -111,6 +116,7 @@ type WhatsappChannelView = {
   id: string;
   name: string;
   sender: string;
+  splitHours: number | null;
   isActive: boolean;
   agentId: string | null;
 };
@@ -118,12 +124,18 @@ type WhatsappChannelView = {
 /** Extracts a Twilio WhatsApp channel; returns null for other channels/providers. */
 function toWhatsappChannelView(channel: Channel): WhatsappChannelView | null {
   if (channel.type !== 'whatsapp') return null;
-  const config = channel.config as { provider?: unknown; sender?: unknown };
+  const config = channel.config as {
+    provider?: unknown;
+    sender?: unknown;
+    conversationSplitHours?: unknown;
+  };
   if (config.provider !== 'twilio' || typeof config.sender !== 'string') return null;
   return {
     id: channel.id,
     name: channel.name,
     sender: config.sender,
+    splitHours:
+      typeof config.conversationSplitHours === 'number' ? config.conversationSplitHours : null,
     isActive: channel.is_active,
     agentId: channel.agent_id ?? null,
   };
@@ -509,6 +521,45 @@ export default async function ChannelsPage({
     </div>
   );
 
+  // Ticket separation ("Neue Unterhaltung nach Inaktivität") — owner-only,
+  // shared by the WhatsApp and widget cards. '' = never split.
+  const SPLIT_PRESETS = [24, 72, 168];
+  const conversationSplitForm = (channelId: string, current: number | null): ReactNode => (
+    <form action={updateConversationSplit} style={{ marginTop: '0.6rem' }}>
+      <input type="hidden" name="org" value={orgId} />
+      <input type="hidden" name="channelId" value={channelId} />
+      <label
+        htmlFor={`split-${channelId}`}
+        style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block' }}
+      >
+        Neue Unterhaltung nach Inaktivität
+      </label>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.3rem' }}>
+        <select
+          id={`split-${channelId}`}
+          name="splitHours"
+          defaultValue={current === null ? '' : String(current)}
+          disabled={!isOwner}
+        >
+          <option value="">Aus — nie trennen</option>
+          <option value="24">Nach 24 Stunden</option>
+          <option value="72">Nach 3 Tagen</option>
+          <option value="168">Nach 7 Tagen</option>
+          {current !== null && !SPLIT_PRESETS.includes(current) ? (
+            <option value={String(current)}>Nach {current} Stunden</option>
+          ) : null}
+        </select>
+        <button className="ghost" type="submit" disabled={!isOwner}>
+          Speichern
+        </button>
+      </div>
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+        Schreibt der Kontakt nach dieser Zeit erneut, beginnt ein neues Ticket. Unterhaltungen,
+        die gerade auf euch warten, werden nie getrennt.
+      </p>
+    </form>
+  );
+
   const whatsappPanel: ReactNode = (
     <div className="panel">
       <h2>WhatsApp (Twilio)</h2>
@@ -537,6 +588,7 @@ export default async function ChannelsPage({
                   agents={agentOptions}
                   disabled={!isOwner}
                 />
+                {conversationSplitForm(wa.id, wa.splitHours)}
               </div>
               <ActiveToggle orgId={orgId} channelId={wa.id} isActive={wa.isActive} />
             </div>
@@ -829,6 +881,7 @@ export default async function ChannelsPage({
                 agents={agentOptions}
                 disabled={!isOwner}
               />
+              {conversationSplitForm(widget.id, widget.splitHours)}
             </div>
             <ActiveToggle orgId={orgId} channelId={widget.id} isActive={widget.isActive} />
           </div>

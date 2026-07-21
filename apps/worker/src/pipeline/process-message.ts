@@ -279,6 +279,13 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 1. classify ---------------------------------------------------------
     currentStep = 'classify';
+    // Prior turns, loaded ONCE: a compact slice gives classify the context for
+    // the is_new_topic measurement signal; the draft (step 5) reuses the full
+    // window. One cheap indexed query, replacing the former draft-time load.
+    const history = await loadDraftHistory(supabase, conv.id, message.id);
+    const classifyHistory = history
+      .slice(-CLASSIFY_HISTORY_TURNS)
+      .map((turn) => ({ ...turn, content: turn.content.slice(0, CLASSIFY_HISTORY_TURN_CHARS) }));
     const classifyStart = Date.now();
     const { result: classification, costUsd: classifyCost } = await classify({
       companyName: orgName,
@@ -286,6 +293,7 @@ export async function processMessage(messageId: string): Promise<void> {
       channelType: channel.type,
       subject: conv.subject,
       body: cleanBody,
+      history: classifyHistory,
     });
     const classifyLatency = Date.now() - classifyStart;
     updatedMetadata.classification = classification;
@@ -428,9 +436,8 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 5. draft (Sonnet) ---------------------------------------------------
     currentStep = 'draft';
-    // Prior turns → the draft continues the dialog instead of restarting it
-    // (the bot re-introduced itself on every WhatsApp message, 2026-07-21).
-    const history = await loadDraftHistory(supabase, conv.id, message.id);
+    // Prior turns (loaded before classify) → the draft continues the dialog
+    // instead of restarting it (re-introduction bug, 2026-07-21).
     const draftStart = Date.now();
     const { result: draftResult, costUsd: draftCost } = await draft({
       companyName: orgName,
@@ -1008,6 +1015,9 @@ async function transcribeInboundAudio(
 
 const DRAFT_HISTORY_TURNS = 12;
 const DRAFT_HISTORY_TURN_CHARS = 600;
+/** Compact slice for classify (is_new_topic signal) — keep the Haiku call cheap. */
+const CLASSIFY_HISTORY_TURNS = 6;
+const CLASSIFY_HISTORY_TURN_CHARS = 200;
 
 /**
  * Last conversation turns (oldest first) for the draft context — customer and
@@ -1097,7 +1107,8 @@ function draftLanguage(language: ClassificationResult['language']): 'de' | 'en' 
 function summarizeClassification(c: ClassificationResult): string {
   return (
     `lang=${c.language} intent=${c.intent} priority=${c.priority} ` +
-    `spam=${c.is_spam} auto_reply=${c.is_auto_reply} wants_human=${c.wants_human}`
+    `spam=${c.is_spam} auto_reply=${c.is_auto_reply} wants_human=${c.wants_human} ` +
+    `new_topic=${c.is_new_topic}`
   );
 }
 

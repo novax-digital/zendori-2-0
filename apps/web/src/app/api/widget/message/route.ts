@@ -136,6 +136,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'Sitzung ist ungültig oder abgelaufen.' }, 401);
   }
   const session = verified.session;
+  // AUTHORITATIVE conversation: may differ from the client-sent id when the
+  // session was rotated by ticket separation (stale tab) — messages must land
+  // in the session's CURRENT conversation, never in the abandoned one.
+  const targetConversationId = session.conversation_id;
 
   await admin
     .from('widget_sessions')
@@ -148,7 +152,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const contactEmail = contact?.email ? contact.email.trim().toLowerCase() : undefined;
   const contactSaved = await applyContactUpdate(admin, {
     orgId: channel.org_id,
-    conversationId,
+    conversationId: targetConversationId,
     contactId: session.contact_id,
     name: contactName,
     email: contactEmail,
@@ -164,7 +168,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // --- message insert, idempotent via external_id (unique per channel)
   const { error: messageError } = await admin.from('messages').insert({
     org_id: channel.org_id,
-    conversation_id: conversationId,
+    conversation_id: targetConversationId,
     channel_id: channel.id,
     direction: 'in',
     sender_type: 'contact',
@@ -184,7 +188,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   await admin
     .from('conversations')
     .update({ status: 'open' })
-    .eq('id', conversationId)
+    .eq('id', targetConversationId)
     .eq('org_id', channel.org_id)
     .eq('status', 'resolved');
 

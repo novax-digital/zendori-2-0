@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@zendori/core';
 import {
   normalizeWhatsAppTwilio,
   parseTwilioInbound,
+  shouldStartNewConversation,
   twilioStatusSchema,
   verifyTwilioSignature,
   whatsappTwilioConfigSchema,
@@ -399,18 +400,37 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'persist failed' }, 500);
   }
 
-  // Threading: newest open/pending conversation for (org, channel, contact), else create.
+  // Threading: newest open/pending conversation for (org, channel, contact),
+  // else create. Ticket separation: when the channel has an inactivity window
+  // configured and every candidate OPEN conversation is past it, the message
+  // starts a NEW conversation (`pending` never splits — §6 waiting queue).
+  // A few candidates (not one) are scanned so that a conversation a CONCURRENT
+  // delivery just created (last_message_at still null until its message
+  // commits) is reused instead of tearing a message burst into several fresh
+  // tickets; nullsFirst puts exactly those rows in front.
   const { data: convRows } = await admin
     .from('conversations')
-    .select('id')
+    .select('id, status, last_message_at')
     .eq('org_id', orgId)
     .eq('channel_id', channelId)
     .eq('contact_id', contactId)
     .in('status', ['open', 'pending'])
-    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .order('last_message_at', { ascending: false, nullsFirst: true })
     .order('created_at', { ascending: false })
-    .limit(1);
-  let conversationId = ((convRows ?? [])[0] as { id: string } | undefined)?.id ?? null;
+    .limit(3);
+  const candidates = (convRows ?? []) as {
+    id: string;
+    status: string;
+    last_message_at: string | null;
+  }[];
+  const appendTarget = candidates.find(
+    (c) =>
+      !shouldStartNewConversation(
+        { status: c.status, lastMessageAt: c.last_message_at },
+        configResult.data.conversationSplitHours
+      )
+  );
+  let conversationId = appendTarget?.id ?? null;
   let createdConversationId: string | null = null;
   if (!conversationId) {
     const { data: convo, error: convError } = await admin

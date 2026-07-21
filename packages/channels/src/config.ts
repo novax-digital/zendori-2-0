@@ -3,6 +3,11 @@ import { z } from 'zod';
 // channels.config shapes per channel type. Secrets inside configs are stored
 // encrypted (core encryptSecret) — schemas here only see the ciphertext strings.
 
+// NOTE: the widget channels created by apps/web actually use a different,
+// snake_case config shape ({ widget: true, public_token, theme,
+// conversation_split_hours }) parsed by apps/web/src/lib/widget/session.ts —
+// that schema is the source of truth for widget lookups. This one predates it
+// and is kept only for the config union; align them before reusing it.
 export const chatChannelConfigSchema = z.object({
   type: z.literal('chat'),
   publicToken: z.string().min(1),
@@ -72,6 +77,10 @@ export const whatsappMetaConfigSchema = z.object({
   appSecretEncrypted: z.string().optional(),
   graphVersion: z.string().default('v25.0'),
   fallbackServiceTemplate: whatsappTemplateConfigSchema.optional(),
+  /** Hours of inactivity after which a new inbound message starts a NEW
+   *  conversation (ticket separation). Absent = never split. `pending`
+   *  conversations are never split regardless (see conversation-split.ts). */
+  conversationSplitHours: z.number().int().min(1).max(8760).optional(),
   connectionState: z.enum(['active', 'needs_reconnect']).default('active'),
 });
 
@@ -88,6 +97,10 @@ export const whatsappTwilioConfigSchema = z.object({
   /** Encrypted Auth Token ("v1:…") — used BOTH to verify X-Twilio-Signature AND to send. */
   authTokenEncrypted: z.string(),
   fallbackServiceTemplate: whatsappTemplateConfigSchema.optional(),
+  /** Hours of inactivity after which a new inbound message starts a NEW
+   *  conversation (ticket separation). Absent = never split. `pending`
+   *  conversations are never split regardless (see conversation-split.ts). */
+  conversationSplitHours: z.number().int().min(1).max(8760).optional(),
   connectionState: z.enum(['active', 'needs_reconnect']).default('active'),
 });
 

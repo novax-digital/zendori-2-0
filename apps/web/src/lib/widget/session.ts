@@ -7,7 +7,14 @@ import type { SupabaseClient } from '@zendori/core';
 
 export type WidgetTheme = { color: string; title: string; greeting: string };
 
-export type WidgetChannelConfig = { widget: true; public_token: string; theme: WidgetTheme };
+export type WidgetChannelConfig = {
+  widget: true;
+  public_token: string;
+  theme: WidgetTheme;
+  /** Ticket separation: hours of inactivity after which a returning visitor
+   *  starts a new conversation (rotation on resume). Absent = never split. */
+  conversation_split_hours?: number;
+};
 
 export const DEFAULT_THEME: WidgetTheme = {
   color: '#4f46e5',
@@ -26,6 +33,7 @@ const widgetChannelConfigSchema = z.object({
       greeting: z.string().default(DEFAULT_THEME.greeting),
     })
     .default(DEFAULT_THEME),
+  conversation_split_hours: z.number().int().min(1).max(8760).optional(),
 });
 
 /**
@@ -92,8 +100,12 @@ export async function findWidgetChannelByToken(
 
 /**
  * Verifies a widget session by conversation id + secret (sha256 compare).
- * The caller must additionally check session.channel_id against the channel
- * resolved from the public token (token → channel → session chain).
+ * When the conversation id no longer resolves (the session was rotated onto a
+ * new conversation by ticket separation), the session is found via the secret
+ * hash instead — the returned session.conversation_id is therefore the
+ * AUTHORITATIVE current conversation, which may differ from the id the client
+ * sent. The caller must additionally check session.channel_id against the
+ * channel resolved from the public token (token → channel → session chain).
  * Returns null for unknown sessions or wrong secrets; throws WidgetDbError
  * on database errors.
  */
@@ -109,30 +121,53 @@ export async function verifySession(
     conversation_id: string;
     contact_id: string | null;
   };
+  /** Conversation state for the ticket-separation check on resume. */
+  conversation: { status: string; lastMessageAt: string | null };
 } | null> {
-  const { data, error } = await admin
-    .from('widget_sessions')
-    .select('id, org_id, channel_id, conversation_id, secret_hash')
-    .eq('conversation_id', conversationId)
-    .maybeSingle();
-  if (error) throw new WidgetDbError('widget_sessions lookup');
-  if (!data) return null;
-  const row = data as {
+  type SessionRow = {
     id: string;
     org_id: string;
     channel_id: string;
     conversation_id: string;
     secret_hash: string;
   };
-  if (!hashesMatch(hashSecret(secret), row.secret_hash)) return null;
+  const providedHash = hashSecret(secret);
+
+  const { data, error } = await admin
+    .from('widget_sessions')
+    .select('id, org_id, channel_id, conversation_id, secret_hash')
+    .eq('conversation_id', conversationId)
+    .maybeSingle();
+  if (error) throw new WidgetDbError('widget_sessions lookup');
+  let row = data as SessionRow | null;
+
+  if (!row) {
+    // Ticket separation may have rotated the session away from the id this
+    // client stored. The 192-bit random secret itself identifies the session:
+    // fall back to a lookup by its hash so stale tabs / lost rotation
+    // responses converge on the CURRENT conversation instead of expiring.
+    const { data: bySecret, error: bySecretError } = await admin
+      .from('widget_sessions')
+      .select('id, org_id, channel_id, conversation_id, secret_hash')
+      .eq('secret_hash', providedHash)
+      .limit(1);
+    if (bySecretError) throw new WidgetDbError('widget_sessions secret lookup');
+    row = ((bySecret ?? [])[0] as SessionRow | undefined) ?? null;
+    if (!row) return null;
+  }
+  if (!hashesMatch(providedHash, row.secret_hash)) return null;
 
   const { data: conversationRow, error: conversationError } = await admin
     .from('conversations')
-    .select('contact_id')
-    .eq('id', conversationId)
+    .select('contact_id, status, last_message_at')
+    .eq('id', row.conversation_id)
     .maybeSingle();
   if (conversationError) throw new WidgetDbError('conversations lookup');
-  const contactId = (conversationRow as { contact_id: string | null } | null)?.contact_id ?? null;
+  const conversation = conversationRow as {
+    contact_id: string | null;
+    status: string | null;
+    last_message_at: string | null;
+  } | null;
 
   return {
     session: {
@@ -140,7 +175,11 @@ export async function verifySession(
       org_id: row.org_id,
       channel_id: row.channel_id,
       conversation_id: row.conversation_id,
-      contact_id: contactId,
+      contact_id: conversation?.contact_id ?? null,
+    },
+    conversation: {
+      status: conversation?.status ?? 'open',
+      lastMessageAt: conversation?.last_message_at ?? null,
     },
   };
 }

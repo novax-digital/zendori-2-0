@@ -13,6 +13,12 @@ export const ClassificationResultSchema = z.object({
   wants_human: z.boolean(),
   is_spam: z.boolean(),
   is_auto_reply: z.boolean(),
+  /**
+   * True when the message starts a NEW request unrelated to the provided
+   * conversation history (also true without history). Currently a measurement
+   * only — logged to ai_runs, drives no behavior (ticket-separation signal).
+   */
+  is_new_topic: z.boolean().default(false),
   /** Exactly one German sentence summarising the request (no PII). */
   summary: z.string().max(300),
 });
