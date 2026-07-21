@@ -113,17 +113,10 @@ export function responseCreateEvent(instructions?: string): string {
   );
 }
 
-/**
- * Toggles server-VAD barge-in mid-session (partial session.update, merged by the
- * server). `false` (turn_detection: null) disables interruption — used to
- * protect the greeting; re-enabled on its response.done.
- */
-export function turnDetectionEvent(enabled: boolean): string {
-  return JSON.stringify({
-    type: 'session.update',
-    session: { turn_detection: enabled ? { type: 'server_vad' } : null },
-  });
-}
+// NOTE: a turnDetectionEvent helper (session.update with turn_detection:null)
+// existed briefly for a non-interruptible greeting — REMOVED: live evidence
+// (2026-07-21) showed it derails the session (silence after the §201 notice).
+// Non-interruptible speech is done via force_message's interruptible flag.
 
 export function functionCallOutputEvent(callId: string, output: unknown): string {
   return JSON.stringify({

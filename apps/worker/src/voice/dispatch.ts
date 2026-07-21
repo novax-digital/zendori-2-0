@@ -177,11 +177,20 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
     const agentId = (channelRes.data as { agent_id?: string | null }).agent_id ?? null;
     let agent: VoiceAgentBehavior = { mode: 'intake_only', identity: null, knowledgeBaseIds: null };
     if (agentId) {
-      const agentRes = await supabase
+      let agentRes = await supabase
         .from('agents')
-        .select('identity, mode, is_active')
+        .select('identity, mode, is_active, kind')
         .eq('id', agentId)
         .maybeSingle();
+      if (isUndefinedColumn(agentRes.error)) {
+        // agents.kind not migrated yet (worker ahead of 0015): retry without it.
+        logger.warn({ voiceCallId }, 'agents.kind missing — is migration 0015 applied?');
+        agentRes = (await supabase
+          .from('agents')
+          .select('identity, mode, is_active')
+          .eq('id', agentId)
+          .maybeSingle()) as typeof agentRes;
+      }
       if (agentRes.error && isMissingTable(agentRes.error)) {
         // agents table not migrated yet: answer in safe intake mode instead of
         // release-looping the call into 'missed'.
@@ -198,8 +207,14 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         identity: string | null;
         mode: string;
         is_active: boolean;
+        kind?: string;
       } | null;
-      if (row && row.is_active) {
+      if (row && row.kind === 'text') {
+        // A text agent on a voice channel (pre-0015 data — the DB guard blocks
+        // this going forward): its identity is written for chat/mail, not for a
+        // live call. Fall back to the neutral intake mode.
+        logger.warn({ voiceCallId }, 'text agent assigned to voice channel — intake fallback');
+      } else if (row && row.is_active) {
         // autopilot → live answering; draft_only/intake_only → intake (a call
         // cannot present a draft for human review first). kb_search is scoped
         // to the agent's linked bases (0012); pre-0012 table → null = all.

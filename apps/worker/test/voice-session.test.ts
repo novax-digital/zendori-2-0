@@ -202,35 +202,40 @@ describe('CallSession protocol', () => {
     );
   });
 
-  it('greeting is non-interruptible: disables server VAD, re-enables on its response.done', async () => {
+  it('recording: greeting still fires if the notice never emits response.done (fallback timer)', async () => {
     const fake = makeFakeSupabase();
-    startSession(fake);
-    await completeHandshake();
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000004',
+      providerCallId: 'call-fallback',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: { ...CONFIG, recordingEnabled: true },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      recordingEnabled: true,
+      greetFallbackMs: 40,
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    });
+    session.start();
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
 
-    const turnDetectionOff = (e: unknown): boolean =>
-      (e as { type?: string }).type === 'session.update' &&
-      (e as { session?: { turn_detection?: unknown } }).session?.turn_detection === null;
-    const countVadOn = (): number =>
-      received.filter(
+    // The §201 notice force_message is spoken …
+    await waitFor(() =>
+      received.find(
         (e) =>
-          e.type === 'session.update' &&
-          (e as { session?: { turn_detection?: { type?: string } } }).session?.turn_detection
-            ?.type === 'server_vad'
-      ).length;
-
-    // barge-in is disabled for the greeting: a turn_detection:null update was
-    // sent and it precedes the greeting response.create.
-    const vadOffIdx = received.findIndex(turnDetectionOff);
-    const greetIdx = received.findIndex((e) => e.type === 'response.create');
-    expect(vadOffIdx).toBeGreaterThan(-1);
-    expect(vadOffIdx).toBeLessThan(greetIdx);
-    // only the initial full-config server_vad update so far (greeting VAD is off)
-    expect(countVadOn()).toBe(1);
-
-    // greeting completes → server VAD re-enabled for the conversation.
-    serverSend({ type: 'response.created' });
-    serverSend({ type: 'response.done' });
-    await waitFor(() => (countVadOn() === 2 ? true : undefined));
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'force_message'
+      )
+    );
+    // … and WITHOUT any response.done for the notice, the fallback timer must
+    // still fire the greeting so the caller is never left in silence.
+    await waitFor(() => received.find((e) => e.type === 'response.create'));
   });
 
   it('handles the CUMULATIVE transcript without double-counting', async () => {
@@ -406,6 +411,67 @@ describe('CallSession protocol', () => {
     expect(force.length).toBe(1);
   });
 
+  it('failed refer: function outputs sent, response.create deferred to the hold turn response.done', async () => {
+    const fake = makeFakeSupabase();
+    // refer fails with 500; everything else keeps succeeding
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      fetchCalls.push({ url, method: init?.method ?? 'GET' });
+      return new Response('{}', { status: url.includes('/refer') ? 500 : 200 });
+    }) as typeof fetch;
+
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000007',
+      providerCallId: 'call-refer-fail',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      greetFallbackMs: 5_000,
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    });
+    session.start();
+    await completeHandshake();
+    // the model-generated greeting IS a response.create — count from here on
+    const countCreates = () => received.filter((e) => e.type === 'response.create').length;
+    const baseline = countCreates();
+
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-h',
+      name: 'handoff_human',
+      arguments: JSON.stringify({ reason: 'user_request' }),
+    });
+    serverSend({ type: 'response.done' });
+
+    // The callback-instruction function output goes out after the failed refer …
+    await waitFor(() =>
+      received.find(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'function_call_output'
+      )
+    );
+    // … but the response.create is DEFERRED (hold force_message still speaking).
+    expect(countCreates()).toBe(baseline);
+
+    // The hold turn completes → the deferred response.create fires.
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.done' });
+    await waitFor(() => (countCreates() === baseline + 1 ? true : undefined));
+    // the session stays live (no transferred/failed finalization)
+    expect(
+      fake.updates.find((u) => u.table === 'voice_calls' && u.patch.status === 'transferred')
+    ).toBeUndefined();
+  });
+
   it('accumulates MULTIPLE text deltas when no audio transcript stream exists', async () => {
     const fake = makeFakeSupabase();
     startSession(fake);
@@ -551,5 +617,156 @@ describe('CallSession protocol', () => {
     // still exactly ONE inbound message (correction updates, not duplicates)
     const inbound = fake.inserts.filter((i) => i.table === 'messages' && i.row.direction === 'in');
     expect(inbound).toHaveLength(1);
+  });
+
+  // --- configured greeting via force_message (2026-07-21) -------------------------
+
+  const findForceMessage = () =>
+    received.find(
+      (e) =>
+        e.type === 'conversation.item.create' &&
+        (e as { item?: { type?: string } }).item?.type === 'force_message'
+    ) as
+      | { item: { interruptible?: boolean; content: { text?: string }[] } }
+      | undefined;
+
+  function startGreetingSession(
+    fake: ReturnType<typeof makeFakeSupabase>,
+    configOverrides: Partial<VoiceChannelConfig>
+  ): CallSession {
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000005',
+      providerCallId: 'call-greet',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: { ...CONFIG, ...configOverrides },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    });
+    session.start();
+    return session;
+  }
+
+  it('configured greeting is spoken via force_message, non-interruptible by default', async () => {
+    const fake = makeFakeSupabase();
+    startGreetingSession(fake, { greeting: 'Willkommen bei Testfirma!' });
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
+
+    const force = await waitFor(findForceMessage);
+    expect(force.item.interruptible).toBe(false);
+    expect(force.item.content[0]?.text).toBe('Willkommen bei Testfirma!');
+    // The greeting IS the turn — no response.create alongside it.
+    expect(received.find((e) => e.type === 'response.create')).toBeUndefined();
+  });
+
+  it('greetingInterruptible=true is passed through to the force_message', async () => {
+    const fake = makeFakeSupabase();
+    startGreetingSession(fake, {
+      greeting: 'Willkommen!',
+      greetingInterruptible: true,
+    });
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
+
+    const force = await waitFor(findForceMessage);
+    expect(force.item.interruptible).toBe(true);
+  });
+
+  it('config.recordingEnabled alone (without the session param) does NOT trigger the notice', async () => {
+    // The notice is driven by the recordingEnabled SESSION PARAM (dispatch
+    // resolves it) — a stale config flag alone must not speak the notice.
+    const fake = makeFakeSupabase();
+    startGreetingSession(fake, {
+      greeting: 'Willkommen bei Testfirma!',
+      recordingEnabled: true,
+    });
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
+    const force = await waitFor(findForceMessage);
+    expect(force.item.content[0]?.text).toBe('Willkommen bei Testfirma!');
+  });
+
+  it('recording session + configured greeting: notice force_message, then greeting force_message', async () => {
+    const fake = makeFakeSupabase();
+    const session = new CallSession({
+      supabase: fake.client,
+      logger: silentLogger,
+      apiKey: 'test-key',
+      voiceCallId: '00000000-0000-4000-8000-000000000006',
+      providerCallId: 'call-rec-greet',
+      orgId: '00000000-0000-4000-8000-0000000000aa',
+      channelId: '00000000-0000-4000-8000-0000000000bb',
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      channelConfig: { ...CONFIG, greeting: 'Willkommen!', recordingEnabled: true },
+      agent: { mode: 'answer', identity: null, knowledgeBaseIds: null },
+      context: { companyName: 'Testfirma' },
+      recordingEnabled: true,
+      onClosed: () => undefined,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    });
+    session.start();
+    await waitFor(() => received.find((e) => e.type === 'session.update'));
+    serverSend({ type: 'session.updated' });
+
+    // First force_message = the §201 notice.
+    await waitFor(findForceMessage);
+    const forceMessages = () =>
+      received.filter(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'force_message'
+      ) as { item: { content: { text?: string }[] } }[];
+    expect(forceMessages()[0]!.item.content[0]?.text).toContain('Qualitätssicherung');
+    expect(forceMessages()).toHaveLength(1); // greeting deferred
+
+    // Notice turn completes → the greeting force_message follows, verbatim.
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.done' });
+    await waitFor(() => (forceMessages().length === 2 ? true : undefined));
+    expect(forceMessages()[1]!.item.content[0]?.text).toBe('Willkommen!');
+    // Never a response.create — both turns are force_messages.
+    expect(received.find((e) => e.type === 'response.create')).toBeUndefined();
+  });
+
+  // --- remote hangup finalization (2026-07-21 live evidence) -----------------------
+
+  it('caller hangup (abnormal close, rejoin refused) finalizes as completed/remote_close', async () => {
+    const fake = makeFakeSupabase();
+    startSession(fake);
+    await completeHandshake();
+    await waitFor(() =>
+      fake.updates.find((u) => u.table === 'voice_calls' && u.patch.status === 'active')
+    );
+
+    // Caller hangs up: xAI tears the socket down abnormally. Shut the mock
+    // server down FIRST so the automatic rejoin is refused (an ended call).
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((r) => wss.close(() => r()));
+
+    // rejoin happens after ~2s, its refusal closes the session → completed.
+    const update = await waitFor(
+      () =>
+        fake.updates.find(
+          (u) =>
+            u.table === 'voice_calls' &&
+            u.patch.status === 'completed' &&
+            u.patch.ended_reason === 'remote_close'
+        ),
+      8000
+    );
+    expect(update).toBeDefined();
+    // no failed/reconnect_failed finalization anywhere
+    expect(
+      fake.updates.find(
+        (u) => u.table === 'voice_calls' && u.patch.ended_reason === 'reconnect_failed'
+      )
+    ).toBeUndefined();
   });
 });

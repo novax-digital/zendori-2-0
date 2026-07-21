@@ -118,11 +118,16 @@ export const voiceChannelConfigSchema = z.object({
   // still present in old config jsonb are stripped on parse.
   /** Exact opening line the bot must speak (channel-specific, stays here).
    *  Bounded so a jsonb written past the app-layer cap fails the worker's
-   *  re-parse instead of injecting an oversized prompt block. */
+   *  re-parse instead of injecting an oversized prompt block. Spoken verbatim
+   *  via force_message; when absent the model generates the greeting itself. */
   greeting: z.string().max(500).optional(),
+  /** Whether the caller may barge into the configured greeting (default: no —
+   *  the opening plays out fully). Only meaningful when `greeting` is set. */
+  greetingInterruptible: z.boolean().default(false),
   /** eve|ara|rex|sal|leo or a custom voice id. */
   voice: z.string().default('eve'),
-  /** BCP-47 ASR language hint. */
+  /** BCP-47 ASR language hint — doubles as the conversation language (the
+   *  session prompt instructs the model to converse in this language). */
   languageHint: z.string().default('de'),
   /** Brand/product names improving German ASR (xAI: max 100 × 50 chars). */
   keyterms: z.array(z.string().max(50)).max(100).default([]),

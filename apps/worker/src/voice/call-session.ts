@@ -21,7 +21,6 @@ import {
   sessionUpdateEvent,
   transcriptionCompletedSchema,
   transcriptionUpdatedSchema,
-  turnDetectionEvent,
 } from './xai-realtime.js';
 import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from './tools.js';
 
@@ -41,6 +40,16 @@ const GOODBYE_TIMEOUT_TEXT =
 const PING_INTERVAL_MS = 15_000;
 /** Covers connecting AND configuring — a session must reach 'active' within this. */
 const SETUP_TIMEOUT_MS = 15_000;
+/**
+ * Safety net for the §201-notice → greeting handoff: the greeting is normally
+ * fired on the notice force_message's `response.done`. xAI emitting that event
+ * for a force_message turn is UNVERIFIED live — if it never comes, the greeting
+ * would hang forever (dead air after the notice). This timer fires the greeting
+ * once the notice has surely finished, so the caller is never left in silence.
+ * Long enough that it can only elapse after the short notice has played out
+ * (firing mid-notice would drop the greeting — see greetPending).
+ */
+const GREET_FALLBACK_MS = 6_000;
 const DRAIN_FAREWELL_MS = 4_000;
 const DRAIN_MAX_WAIT_MS = 10_000;
 
@@ -71,6 +80,8 @@ export interface CallSessionParams {
   onClosed: (providerCallId: string) => void;
   /** Test seam: overrides the WS URL (mock server). */
   wsUrl?: string;
+  /** Test seam: overrides the greeting-fallback delay (defaults to GREET_FALLBACK_MS). */
+  greetFallbackMs?: number;
 }
 
 export class CallSession {
@@ -95,11 +106,16 @@ export class CallSession {
    * leaving dead air until the caller speaks.
    */
   private greetPending = false;
+  /** Safety-net timer that fires the deferred greeting if the notice's response.done never arrives. */
+  private greetFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * True while the greeting is being spoken with server-VAD disabled (barge-in
-   * blocked). Re-enabled on the greeting's response.done.
+   * Set by the failed-transfer fallback: the response.create that lets the model
+   * continue is deferred to the hold force_message's response.done (sending it
+   * mid-force_message drops it — the greeting bug's sibling). Fallback timer
+   * mirrors the greeting one.
    */
-  private greetingInFlight = false;
+  private pendingResponseCreate = false;
+  private responseCreateFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -303,8 +319,14 @@ export class CallSession {
       if (this.p.recordingEnabled) {
         this.send(forceMessageEvent(RECORDING_NOTICE_TEXT));
         // Defer the greeting to the notice's response.done — sending it now,
-        // while the force_message turn is still active, drops it.
+        // while the force_message turn is still active, drops it. If that event
+        // never arrives (unverified for force_message turns), the fallback timer
+        // fires the greeting once the notice has surely finished.
         this.greetPending = true;
+        this.greetFallbackTimer = setTimeout(
+          () => this.fireDeferredGreeting(),
+          this.p.greetFallbackMs ?? GREET_FALLBACK_MS
+        );
       } else {
         // Greet the caller (first activation only — a rejoin must not re-greet).
         this.sendGreeting();
@@ -312,19 +334,61 @@ export class CallSession {
     }
 
     // Ping is per-connection: clear a previous connection's timer before re-arming.
+    // OPEN guard is load-bearing (audit 2026-07-21): ws.ping() THROWS synchronously
+    // on a CONNECTING socket — an unguarded tick during the rejoin handshake was
+    // an uncaught exception that killed the whole worker process.
     if (this.pingTimer) clearInterval(this.pingTimer);
-    this.pingTimer = setInterval(() => this.ws?.ping(), PING_INTERVAL_MS);
+    this.pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.ping();
+    }, PING_INTERVAL_MS);
   }
 
   /**
-   * Speaks the greeting with barge-in disabled: server VAD is turned off first
-   * so the caller cannot interrupt the opening, then re-enabled on the
-   * greeting's response.done (onResponseDone). The greeting itself stays
-   * model-generated (keeps the style rules / pronunciation handling).
+   * Greets the caller. A CONFIGURED greeting is spoken verbatim via
+   * force_message — exact wording, and the channel's greetingInterruptible
+   * toggle decides whether the caller can barge in (default: no, the opening
+   * plays out fully). Without a configured greeting the model generates one
+   * (response.create; barge-in applies as in any normal turn). Live evidence
+   * (2026-07-21): force_message turns DO stream transcript deltas + response.done,
+   * so the greeting is persisted through the normal transcript path.
    */
   private sendGreeting(): void {
-    this.send(turnDetectionEvent(false));
-    this.greetingInFlight = true;
+    const greeting = this.p.channelConfig.greeting?.trim();
+    if (greeting) {
+      this.send(forceMessageEvent(greeting, this.p.channelConfig.greetingInterruptible === true));
+    } else {
+      this.send(responseCreateEvent());
+    }
+  }
+
+  /**
+   * Fires the greeting deferred behind the §201 notice — idempotent, so the
+   * notice's response.done and the fallback timer can race without double-
+   * greeting (whichever wins clears greetPending; the other becomes a no-op).
+   * The flag is ALWAYS consumed: a non-active session gives the greeting up
+   * instead of leaving it armed — a stuck flag would re-greet mid-call after a
+   * rejoin and swallow that turn's tool calls (audit 2026-07-21).
+   */
+  private fireDeferredGreeting(): void {
+    if (!this.greetPending) return;
+    this.greetPending = false;
+    if (this.greetFallbackTimer) {
+      clearTimeout(this.greetFallbackTimer);
+      this.greetFallbackTimer = null;
+    }
+    if (this.state !== 'active') return;
+    this.sendGreeting();
+  }
+
+  /** Deferred response.create twin of fireDeferredGreeting (failed-transfer path). */
+  private fireDeferredResponseCreate(): void {
+    if (!this.pendingResponseCreate) return;
+    this.pendingResponseCreate = false;
+    if (this.responseCreateFallbackTimer) {
+      clearTimeout(this.responseCreateFallbackTimer);
+      this.responseCreateFallbackTimer = null;
+    }
+    if (this.state !== 'active') return;
     this.send(responseCreateEvent());
   }
 
@@ -337,17 +401,18 @@ export class CallSession {
     }
 
     // 1a. The §201 notice just finished — now greet, back-to-back, no dead air.
-    if (this.greetPending && this.state === 'active') {
-      this.greetPending = false;
-      this.sendGreeting();
-      return; // the notice carries no tool calls
+    if (this.greetPending) {
+      this.fireDeferredGreeting();
+      // The notice carries no tool calls — but a rejoin edge can route a REAL
+      // turn's response.done here; never swallow its tool calls.
+      if (this.pendingToolCalls.length === 0) return;
     }
 
-    // 1b. The greeting just finished — re-enable barge-in for the conversation.
-    if (this.greetingInFlight) {
-      this.greetingInFlight = false;
-      this.send(turnDetectionEvent(true));
-      // greeting carries no tool calls — fall through ends the handler.
+    // 1b. A deferred response.create (failed-transfer fallback) waits for the
+    // hold force_message's response.done — same drop semantics as the greeting.
+    if (this.pendingResponseCreate) {
+      this.fireDeferredResponseCreate();
+      if (this.pendingToolCalls.length === 0) return;
     }
 
     // 2. Execute collected tool calls (possibly several in parallel), answer
@@ -401,7 +466,14 @@ export class CallSession {
                 : r.output;
             if (output !== null) this.send(functionCallOutputEvent(r.callId, output));
           }
-          this.send(responseCreateEvent());
+          // The hold force_message is still speaking — a response.create sent
+          // now gets dropped (live-verified drop semantics, audit 2026-07-21).
+          // Defer it to the hold turn's response.done; fallback after 6s.
+          this.pendingResponseCreate = true;
+          this.responseCreateFallbackTimer = setTimeout(
+            () => this.fireDeferredResponseCreate(),
+            this.p.greetFallbackMs ?? GREET_FALLBACK_MS
+          );
           return;
         }
       }
@@ -567,8 +639,13 @@ export class CallSession {
         this.ws?.terminate();
       }
     } else {
+      // Non-active (connecting/rejoin gap/configuring): the socket may already
+      // be closed, so terminate() emits no close event — finalize directly
+      // instead of waiting for one that never comes (audit 2026-07-21). The
+      // endedReason set here also cancels a scheduled rejoin connect().
       this.endedReason = this.endedReason ?? 'worker_shutdown';
       this.ws?.terminate();
+      await this.finalize(this.startedAtMs !== null ? 'completed' : 'failed', this.endedReason);
     }
     // Wait for finalize (bounded — never block shutdown forever).
     await Promise.race([this.closed, new Promise((r) => setTimeout(r, DRAIN_MAX_WAIT_MS))]);
@@ -576,6 +653,12 @@ export class CallSession {
 
   private async onWsClose(code?: number): Promise<void> {
     if (this.state === 'closed') return;
+    // Close codes are diagnostic gold (which code does a caller hangup use?) —
+    // log them always; content-free, §7-safe.
+    this.p.logger.info(
+      { voiceCallId: this.p.voiceCallId, closeCode: code ?? null, state: this.state },
+      'voice ws closed'
+    );
 
     // Connection never reached 'active': that is a setup failure, not a
     // completed call (finding: connect failure was finalized as 'completed').
@@ -596,21 +679,39 @@ export class CallSession {
     ) {
       this.reconnectAttempted = true;
       this.state = 'connecting';
+      // Stop pinging the dead/handshaking socket — re-armed on session.updated.
+      if (this.pingTimer) clearInterval(this.pingTimer);
       this.p.logger.warn({ voiceCallId: this.p.voiceCallId }, 'voice ws dropped — rejoining once');
       setTimeout(() => {
-        if (this.state === 'connecting') this.connect();
+        // endedReason set = drain()/shutdown intervened — do NOT open a fresh
+        // socket mid-shutdown (audit 2026-07-21).
+        if (this.state === 'connecting' && this.endedReason === null) this.connect();
       }, 2_000);
       return;
     }
 
-    // Rejoin attempt itself failed → the call is lost.
+    // Rejoin attempt itself failed. Live evidence (2026-07-21): xAI closes the
+    // WS abnormally (non-1000) when the CALLER hangs up, so every normal remote
+    // hangup used to land here and was finalized as failed/reconnect_failed.
+    // A call that already had an active phase is therefore treated as a remote
+    // hangup (an ended call's ?call_id join is refused); only a call that never
+    // became active stays a real failure.
     if (
       this.reconnectAttempted &&
       this.endedReason === null &&
       this.state !== 'ending' &&
       !normalClose
     ) {
-      await this.finalize('failed', 'reconnect_failed');
+      if (this.startedAtMs !== null) {
+        // Almost certainly a caller hangup — but if the call is actually still
+        // alive at xAI (worker-side outage), a best-effort hangup ends it there
+        // instead of leaving the caller in dead air (audit 2026-07-21). An
+        // already-ended call just 404s.
+        void hangupCall(this.p.apiKey, this.p.providerCallId).catch(() => undefined);
+        await this.finalize('completed', 'remote_close');
+      } else {
+        await this.finalize('failed', 'reconnect_failed');
+      }
       return;
     }
 
@@ -629,6 +730,8 @@ export class CallSession {
     if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);
     if (this.setupTimer) clearTimeout(this.setupTimer);
+    if (this.greetFallbackTimer) clearTimeout(this.greetFallbackTimer);
+    if (this.responseCreateFallbackTimer) clearTimeout(this.responseCreateFallbackTimer);
 
     // Persist any tail turns: pending user transcripts AND a bot turn that was
     // cut off mid-response (finding: botBuffer lost on early close).
