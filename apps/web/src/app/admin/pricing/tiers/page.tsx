@@ -9,19 +9,14 @@ import { loadBillingCatalog } from '@/lib/billing';
 import {
   BILLING_CATEGORY_LABELS,
   MARKUP_PRICED_CATEGORIES,
-  UNIT_COST_USD,
   UNIT_PRICED_CATEGORIES,
   recommendedUnitPriceEur,
-  type PricingContext,
+  unitCostEur,
 } from '@zendori/core';
 import { createTier, deleteTier, updateTier } from '../actions';
 
 function fmtUnit(value: number): string {
   return `${new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value)} €`;
-}
-
-function unitCostEur(category: (typeof UNIT_PRICED_CATEGORIES)[number], ctx: PricingContext): number {
-  return UNIT_COST_USD[category] * ctx.usdToEur;
 }
 
 export default async function PriceTiersPage({
@@ -99,7 +94,11 @@ export default async function PriceTiersPage({
                   const recommended = recommendedUnitPriceEur(category, ctx);
                   const belowCost = stored !== undefined && stored < cost;
                   const unitWord =
-                    category === 'voice' ? '/Min.' : category === 'numbers' ? '/Nummer' : '/Stück';
+                    category === 'voice'
+                      ? '/Min.'
+                      : category === 'numbers_mobile' || category === 'numbers_landline'
+                        ? '/Nummer'
+                        : '/Stück';
                   return (
                     <tr key={category}>
                       <td>

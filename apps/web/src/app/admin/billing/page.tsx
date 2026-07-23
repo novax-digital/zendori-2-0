@@ -149,7 +149,8 @@ export default async function AdminBillingPage({
         <p className="help">
           Ziel-Marge = empfohlener Aufschlag auf den Einkauf; gilt als Standard für jede Kategorie
           ohne eigenen Preis in der Preisstaffel. Wechselkurs rechnet unsere USD-Einkaufskosten in
-          Euro um.
+          Euro um. Die Rufnummern-Kosten sind unser monatlicher Einkauf je Nummer (Mobil bzw.
+          Festnetz).
         </p>
         <form className="stack" action={updateGlobalPricing} style={{ maxWidth: '22rem' }}>
           <div>
@@ -172,6 +173,28 @@ export default async function AdminBillingPage({
               inputMode="decimal"
               required
               defaultValue={String(catalog.ctx.usdToEur)}
+            />
+          </div>
+          <div>
+            <label htmlFor="numberCostMobileEur">Rufnummer Mobil — Kosten/Monat (€)</label>
+            <input
+              id="numberCostMobileEur"
+              name="numberCostMobileEur"
+              type="text"
+              inputMode="decimal"
+              required
+              defaultValue={String(catalog.ctx.numberCostMobileEur)}
+            />
+          </div>
+          <div>
+            <label htmlFor="numberCostLandlineEur">Rufnummer Festnetz — Kosten/Monat (€)</label>
+            <input
+              id="numberCostLandlineEur"
+              name="numberCostLandlineEur"
+              type="text"
+              inputMode="decimal"
+              required
+              defaultValue={String(catalog.ctx.numberCostLandlineEur)}
             />
           </div>
           <button className="primary" type="submit">Speichern</button>

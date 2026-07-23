@@ -15,7 +15,7 @@ Org zuordenbar.** Zwei Sichten — Admin (alle Kunden, Kosten/Preis/Marge) und K
 | Telefonie | xAI Voice + Twilio SIP | **gemessen** (Minuten × Rate) → `usage_events` (`voice_minutes`) |
 | WhatsApp-Nachrichten | Twilio/Meta | **gezählt** aus `messages` × Rate |
 | E-Mail-Versand | Resend | **gezählt** aus `messages` (out) × Rate |
-| Rufnummern | Twilio/xAI Miete | **gezählt** aus aktiven `channels` × Monatsrate |
+| Rufnummern (Mobil/Festnetz) | Twilio/xAI Miete | **gezählt** aus `phone_numbers` (status active) je `number_type` × editierbarer Monatskosten (0023) |
 
 „Gemessen" = die echten Provider-Kosten (Token/Minuten) sind bekannt und gespeichert.
 „Gezählt" = pro-Stück-Preise aus der Preistabelle × gemessene Menge (kein Einzel-Event).
@@ -76,11 +76,18 @@ Jährliche Laufzeit wird in der Monatssicht als ÷12 („anteilig") gezeigt.
   (Listenpreise)** — vor der ersten echten Rechnung gegen die Verträge prüfen.
 - Anthropic/OpenAI-Tokenpreise stehen separat in
   [`packages/ai/src/cost.ts`](../packages/ai/src/cost.ts) (gemessen → `ai_runs`).
-- **Bewusste v1-Nuance:** die Verbrauchs-Kategorie „Rufnummern" (monatliche Miete
+- **Rufnummern (0023):** getrennt nach **Mobil** (`number_type='mobile'`) und
+  **Festnetz** (`local` + `national`). Die monatlichen Einkaufskosten je Typ sind
+  admin-editierbar (Admin → Abrechnung → Globale Einstellungen, in €). Verkaufs-
+  preis je Typ optional über die Preisstaffel (`numbers_mobile` /
+  `numbers_landline`), sonst Empfehlung (Kosten × Ziel-Marge). Gezählt werden
+  provisionierte Nummern aus `phone_numbers` (WhatsApp-Nummern zählen hier nicht
+  mehr mit — separat behandelbar).
+- **Bewusste v1-Nuance:** die Verbrauchs-Kategorien „Rufnummern" (monatliche Miete
   als Durchleitung) und die Paket-Kanal-Fee (z. B. „Telefonie") erscheinen
   getrennt und werden NICHT gebündelt. Das ist ein legitimes Reseller-Modell
   (Kanal-/Anschlussgebühr + Nummern-Durchleitung), kann aber auf Wunsch
-  zusammengelegt werden (Nummern-Zeile unterdrücken, sobald ein Paket aktiv ist).
+  zusammengelegt werden (Nummern-Zeilen unterdrücken, sobald ein Paket aktiv ist).
 
 Verwaltung im UI: **Admin → Preise & Pakete** (Preisstaffeln + Pakete),
 **Admin → Abrechnung** (Übersicht + globale Einstellungen + je Kunde Rechnung &

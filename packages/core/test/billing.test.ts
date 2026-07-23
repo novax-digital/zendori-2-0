@@ -15,12 +15,18 @@ import {
   priceTierPricingSchema,
   recommendedPriceEur,
   recommendedUnitPriceEur,
+  unitCostEur,
   voiceMinutesCostUsd,
   whatsappCostUsd,
   type PricingContext,
 } from '../src/billing.js';
 
-const CTX: PricingContext = { usdToEur: 1, targetMargin: 3 };
+const CTX: PricingContext = {
+  usdToEur: 1,
+  targetMargin: 3,
+  numberCostMobileEur: 4,
+  numberCostLandlineEur: 2,
+};
 
 describe('billing rate card', () => {
   it('computes voice minute cost linearly', () => {
@@ -79,12 +85,20 @@ describe('categoryPriceEur (tier pricing)', () => {
   });
 
   it('markup rule multiplies cost by factor (via usd_to_eur)', () => {
-    expect(categoryPriceEur(0, 4, { mode: 'markup', factor: 2 }, { usdToEur: 1, targetMargin: 3 })).toBe(8);
+    expect(categoryPriceEur(0, 4, { mode: 'markup', factor: 2 }, CTX)).toBe(8);
   });
 
   it('recommendedUnitPriceEur uses the per-unit cost card', () => {
     // voice cost/min × usd_to_eur × margin
     expect(recommendedUnitPriceEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1 * 3, 10);
+  });
+
+  it('number costs come from the editable EUR context, not the USD card', () => {
+    expect(unitCostEur('numbers_mobile', CTX)).toBe(4);
+    expect(unitCostEur('numbers_landline', CTX)).toBe(2);
+    // recommendation = cost × target margin
+    expect(recommendedUnitPriceEur('numbers_mobile', CTX)).toBe(12);
+    expect(recommendedUnitPriceEur('numbers_landline', CTX)).toBe(6);
   });
 });
 

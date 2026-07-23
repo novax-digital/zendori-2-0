@@ -17,7 +17,8 @@ export type BillingCategory =
   | 'voice' // live phone minutes (xAI audio + Twilio SIP)
   | 'whatsapp' // WhatsApp messages (Twilio/Meta)
   | 'email' // outbound e-mail (Resend)
-  | 'numbers'; // monthly phone-number rental
+  | 'numbers_mobile' // monthly rental, mobile numbers
+  | 'numbers_landline'; // monthly rental, landline numbers (local + national)
 
 /** German labels for the customer/admin UI. */
 export const BILLING_CATEGORY_LABELS: Record<BillingCategory, string> = {
@@ -27,7 +28,8 @@ export const BILLING_CATEGORY_LABELS: Record<BillingCategory, string> = {
   voice: 'Telefonie',
   whatsapp: 'WhatsApp-Nachrichten',
   email: 'E-Mail-Versand',
-  numbers: 'Rufnummern',
+  numbers_mobile: 'Rufnummern (Mobil)',
+  numbers_landline: 'Rufnummern (Festnetz)',
 };
 
 /** Unit shown next to the quantity per category. */
@@ -38,7 +40,8 @@ export const BILLING_CATEGORY_UNIT: Record<BillingCategory, string> = {
   voice: 'Minuten',
   whatsapp: 'Nachrichten',
   email: 'E-Mails',
-  numbers: 'Nummern',
+  numbers_mobile: 'Nummern',
+  numbers_landline: 'Nummern',
 };
 
 // --- Infra rate card (USD; assumed list prices — verify per contract) --------
@@ -115,17 +118,26 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 /** Default recommendation / fallback multiplier (cost × usd_to_eur × margin). */
 export const DEFAULT_TARGET_MARGIN = 3.0;
 
+/** Default editable monthly number costs in EUR (billing_settings, 0023). */
+export const DEFAULT_NUMBER_COST_MOBILE_EUR = 3.0;
+export const DEFAULT_NUMBER_COST_LANDLINE_EUR = 1.5;
+
 /** Categories priced by a fixed unit sell price vs. by a markup on our cost. */
-export const UNIT_PRICED_CATEGORIES = ['voice', 'whatsapp', 'email', 'numbers'] as const;
+export const UNIT_PRICED_CATEGORIES = [
+  'voice',
+  'whatsapp',
+  'email',
+  'numbers_mobile',
+  'numbers_landline',
+] as const;
 export const MARKUP_PRICED_CATEGORIES = ['ai', 'embeddings', 'transcription'] as const;
 export type UnitPricedCategory = (typeof UNIT_PRICED_CATEGORIES)[number];
 
-/** Our USD cost per unit for the unit-priced categories — basis for recommendations. */
-export const UNIT_COST_USD: Record<UnitPricedCategory, number> = {
+/** USD cost per unit for the rate-card unit categories (voice/whatsapp/email). */
+const STATIC_UNIT_COST_USD: Record<'voice' | 'whatsapp' | 'email', number> = {
   voice: VOICE_USD_PER_MINUTE,
   whatsapp: WHATSAPP_USD_PER_MESSAGE,
   email: EMAIL_USD_PER_MESSAGE,
-  numbers: NUMBER_USD_PER_MONTH,
 };
 
 // --- tier pricing rules ------------------------------------------------------
@@ -147,7 +159,8 @@ export const priceTierPricingSchema = z
     voice: ruleOptional,
     whatsapp: ruleOptional,
     email: ruleOptional,
-    numbers: ruleOptional,
+    numbers_mobile: ruleOptional,
+    numbers_landline: ruleOptional,
   })
   .partial();
 export type TierPricing = Partial<Record<BillingCategory, CategoryPricingRule>>;
@@ -156,21 +169,33 @@ export interface PricingContext {
   usdToEur: number;
   /** Default/recommendation multiplier for categories without a tier override. */
   targetMargin: number;
+  /** Editable monthly purchase cost per number type (EUR). */
+  numberCostMobileEur: number;
+  numberCostLandlineEur: number;
 }
 
 export const DEFAULT_PRICING_CONTEXT: PricingContext = {
   usdToEur: DEFAULT_USD_TO_EUR,
   targetMargin: DEFAULT_TARGET_MARGIN,
+  numberCostMobileEur: DEFAULT_NUMBER_COST_MOBILE_EUR,
+  numberCostLandlineEur: DEFAULT_NUMBER_COST_LANDLINE_EUR,
 };
+
+/** Our purchase cost per unit in EUR for a unit-priced category. */
+export function unitCostEur(category: UnitPricedCategory, ctx: PricingContext): number {
+  if (category === 'numbers_mobile') return ctx.numberCostMobileEur;
+  if (category === 'numbers_landline') return ctx.numberCostLandlineEur;
+  return STATIC_UNIT_COST_USD[category] * ctx.usdToEur;
+}
 
 /** Recommended customer price (EUR) for an internal USD cost. */
 export function recommendedPriceEur(costUsd: number, ctx: PricingContext): number {
   return round2(Math.max(0, costUsd) * ctx.usdToEur * ctx.targetMargin);
 }
 
-/** Recommended EUR unit price for a unit-priced category. */
+/** Recommended EUR unit price for a unit-priced category (cost × target margin). */
 export function recommendedUnitPriceEur(category: UnitPricedCategory, ctx: PricingContext): number {
-  return round2(UNIT_COST_USD[category] * ctx.usdToEur * ctx.targetMargin);
+  return round2(unitCostEur(category, ctx) * ctx.targetMargin);
 }
 
 /**

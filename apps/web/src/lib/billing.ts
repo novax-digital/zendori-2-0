@@ -2,13 +2,14 @@ import 'server-only';
 import {
   BILLING_CATEGORY_LABELS,
   BILLING_CATEGORY_UNIT,
+  DEFAULT_NUMBER_COST_LANDLINE_EUR,
+  DEFAULT_NUMBER_COST_MOBILE_EUR,
   DEFAULT_TARGET_MARGIN,
   DEFAULT_USD_TO_EUR,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   categoryPriceEur,
   emailCostUsd,
-  numberRentalCostUsd,
   packageChannelsSchema,
   priceTierPricingSchema,
   whatsappCostUsd,
@@ -36,7 +37,8 @@ const CATEGORY_ORDER: BillingCategory[] = [
   'voice',
   'whatsapp',
   'email',
-  'numbers',
+  'numbers_mobile',
+  'numbers_landline',
 ];
 
 // --- usage breakdown ---------------------------------------------------------
@@ -95,7 +97,13 @@ export async function getOrgBilling(
 
   const wa = get('whatsapp_count');
   const em = get('email_count');
-  const num = get('numbers_count');
+  const mob = get('numbers_mobile_count');
+  const land = get('numbers_landline_count');
+  // Number costs are configured in EUR (billing_settings); represent them as a
+  // synthetic costUsd (÷ usd_to_eur) so the shared cost/price math stays uniform.
+  const monthsFraction = periodDays / 30;
+  const numberCostUsd = (count: number, monthlyEur: number): number =>
+    ctx.usdToEur > 0 ? (count * monthlyEur * monthsFraction) / ctx.usdToEur : 0;
   const byCategory: Record<BillingCategory, { quantity: number; costUsd: number }> = {
     ai: get('ai'),
     embeddings: get('embeddings'),
@@ -103,7 +111,14 @@ export async function getOrgBilling(
     voice: get('voice'),
     whatsapp: { quantity: wa.quantity, costUsd: whatsappCostUsd(wa.quantity) },
     email: { quantity: em.quantity, costUsd: emailCostUsd(em.quantity) },
-    numbers: { quantity: num.quantity, costUsd: numberRentalCostUsd(num.quantity, periodDays) },
+    numbers_mobile: {
+      quantity: mob.quantity,
+      costUsd: numberCostUsd(mob.quantity, ctx.numberCostMobileEur),
+    },
+    numbers_landline: {
+      quantity: land.quantity,
+      costUsd: numberCostUsd(land.quantity, ctx.numberCostLandlineEur),
+    },
   };
 
   const lines: BillingLineItem[] = CATEGORY_ORDER.map((category) => {
@@ -161,19 +176,32 @@ export interface BillingCatalog {
   subscriptions: Map<string, SubscriptionRow>;
 }
 
+const FALLBACK_CONTEXT: PricingContext = {
+  usdToEur: DEFAULT_USD_TO_EUR,
+  targetMargin: DEFAULT_TARGET_MARGIN,
+  numberCostMobileEur: DEFAULT_NUMBER_COST_MOBILE_EUR,
+  numberCostLandlineEur: DEFAULT_NUMBER_COST_LANDLINE_EUR,
+};
+
+const posNum = (value: unknown, fallback: number): number => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
 async function loadContext(admin: SupabaseClient): Promise<PricingContext> {
   const { data, error } = await admin
     .from('billing_settings')
-    .select('usd_to_eur, target_margin')
+    .select('usd_to_eur, target_margin, number_cost_mobile_eur, number_cost_landline_eur')
     .is('org_id', null)
     .maybeSingle();
-  if (error || !data) return { usdToEur: DEFAULT_USD_TO_EUR, targetMargin: DEFAULT_TARGET_MARGIN };
-  const row = data as { usd_to_eur: number | string; target_margin: number | string };
+  if (error || !data) return FALLBACK_CONTEXT;
+  const row = data as Record<string, number | string>;
   const usdToEur = Number(row.usd_to_eur);
-  const targetMargin = Number(row.target_margin);
   return {
     usdToEur: Number.isFinite(usdToEur) && usdToEur > 0 ? usdToEur : DEFAULT_USD_TO_EUR,
-    targetMargin: Number.isFinite(targetMargin) && targetMargin >= 0 ? targetMargin : DEFAULT_TARGET_MARGIN,
+    targetMargin: posNum(row.target_margin, DEFAULT_TARGET_MARGIN),
+    numberCostMobileEur: posNum(row.number_cost_mobile_eur, DEFAULT_NUMBER_COST_MOBILE_EUR),
+    numberCostLandlineEur: posNum(row.number_cost_landline_eur, DEFAULT_NUMBER_COST_LANDLINE_EUR),
   };
 }
 
