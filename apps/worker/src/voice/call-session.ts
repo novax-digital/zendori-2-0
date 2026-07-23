@@ -57,10 +57,11 @@ const SETUP_TIMEOUT_MS = 15_000;
 const GREET_FALLBACK_MS = 6_000;
 /**
  * Short breather between the §201 notice and the greeting (owner feedback
- * 2026-07-23: notice and greeting butted up against each other). Applied only
- * on the response.done path — the fallback path has already waited longer.
+ * 2026-07-23: notice and greeting butted up against each other; 1.2s was
+ * still "zu hektisch" → 1.5s). Applied only on the response.done path — the
+ * fallback path has already waited longer.
  */
-const NOTICE_GREETING_PAUSE_MS = 1_200;
+const NOTICE_GREETING_PAUSE_MS = 1_500;
 const DRAIN_FAREWELL_MS = 4_000;
 const DRAIN_MAX_WAIT_MS = 10_000;
 /**
