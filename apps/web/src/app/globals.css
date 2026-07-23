@@ -1357,6 +1357,39 @@ code.invite-link {
   gap: 0.5rem;
 }
 
+/* small inline hint between thread and composer (handoff reason / AI working) */
+.inbox-inline-hint {
+  margin: 0 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+}
+.ai-working-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: ai-working-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ai-working-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .inbox-layout {
   flex: 1;
   min-height: 0;

@@ -9,11 +9,31 @@ import type { KbChunkMatch } from './schemas.js';
 // retrieveKbChunks stays as the legacy vector-only path AND the fallback when
 // the hybrid function is not migrated yet (worker-ahead-of-db skew).
 
-export const MAX_EMBED_QUERY_CHARS = 24_000;
+/**
+ * Embedding-query cap: ~1,000–1,400 German tokens — safely under the 8,191-token
+ * text-embedding-3-small input limit (a 24k slice could exceed it and hard-fail
+ * the pipeline), and one mean-pooled vector over more text barely encodes the
+ * actual question anyway.
+ */
+export const MAX_EMBED_QUERY_CHARS = 4_000;
 /** Keyword leg bound: websearch_to_tsquery over huge bodies is useless anyway. */
 const MAX_KEYWORD_QUERY_CHARS = 1_000;
-/** Per-candidate content cap in the rerank prompt (cost/latency bound). */
-const RERANK_CANDIDATE_CHARS = 700;
+/**
+ * Per-candidate content cap in the rerank prompt — keep ≥ chunking TARGET_CHARS
+ * (500 tokens × 4 chars, see chunking.ts/CHUNKING) so the reranker judges full
+ * chunks, not their first third; a truncated candidate showing no evidence gets
+ * dropped by the "lieber weniger" rule even when the answer sits after the cut.
+ * Cost: ~12k Haiku input tokens per 24-chunk pool.
+ */
+const RERANK_CANDIDATE_CHARS = 2_000;
+/** Rerank query cap: the ask is near the top; quoted tails/forward headers are noise. */
+const RERANK_QUERY_CHARS = 4_000;
+/** Hard-fallback slice when the embedding API rejects the full-length query. */
+const EMBED_FALLBACK_CHARS = 1_000;
+/** Max OR-joined terms handed to the keyword leg. */
+const MAX_KEYWORD_TERMS = 24;
+/** Below this many distinct terms the precise AND semantics stay (chat/voice). */
+const OR_TRANSFORM_MIN_TERMS = 7;
 
 /** Minimal client surface so worker/web service-role clients both fit. */
 type RpcClient = {
@@ -38,6 +58,46 @@ export interface RetrieveResult {
   costUsd: number;
 }
 
+/**
+ * Long prose bodies AND-compile to an unsatisfiable tsquery (websearch_to_tsquery
+ * ANDs every non-stopword term), so the keyword leg — the one leg that reliably
+ * finds product names, article numbers and error codes — returns nothing for
+ * exactly the email/form messages it was built for. OR-join the distinct
+ * significant terms instead; websearch_to_tsquery parses OR natively,
+ * ts_rank_cd orders by matched-term density, and RRF + the Haiku rerank keep the
+ * added recall clean. Short queries (chat, voice) keep the precise AND
+ * semantics. Terms are word-chars/hyphen only, so no websearch operator
+ * injection is possible. Pure; exported for unit tests.
+ */
+export function toKeywordQuery(text: string): string {
+  const sliced = text.slice(0, MAX_KEYWORD_QUERY_CHARS);
+  const terms = [...new Set(sliced.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]+/gu) ?? [])];
+  if (terms.length < OR_TRANSFORM_MIN_TERMS) return sliced;
+  return terms.slice(0, MAX_KEYWORD_TERMS).join(' OR ');
+}
+
+/**
+ * Embed the query with a one-shot short-slice retry: a char cap cannot strictly
+ * bound tokens (pathological unicode runs ~4 tokens/char), and an over-limit
+ * input would otherwise hard-fail the whole retrieve step.
+ */
+async function embedQueryWithFallback(
+  query: string
+): Promise<{ vector: number[]; costUsd: number }> {
+  try {
+    const { vectors, costUsd } = await embed([query.slice(0, MAX_EMBED_QUERY_CHARS)]);
+    const vector = vectors[0];
+    if (!vector) throw new Error('embedding returned no vector for the query');
+    return { vector, costUsd };
+  } catch (err) {
+    if (query.length <= EMBED_FALLBACK_CHARS) throw err;
+    const { vectors, costUsd } = await embed([query.slice(0, EMBED_FALLBACK_CHARS)]);
+    const vector = vectors[0];
+    if (!vector) throw new Error('embedding returned no vector for the query');
+    return { vector, costUsd };
+  }
+}
+
 export async function retrieveKbChunks(
   supabase: RpcClient,
   orgId: string,
@@ -59,9 +119,7 @@ export async function retrieveKbChunks(
     return { matches: [], costUsd: 0 };
   }
 
-  const { vectors, costUsd } = await embed([query.slice(0, MAX_EMBED_QUERY_CHARS)]);
-  const queryVector = vectors[0];
-  if (!queryVector) throw new Error('embedding returned no vector for the query');
+  const { vector: queryVector, costUsd } = await embedQueryWithFallback(query);
 
   // Omit the filter arg when unfiltered: PostgREST resolves RPCs by the exact
   // set of named args, so a 4-key body matches BOTH the pre-0012 function and
@@ -126,6 +184,13 @@ export async function retrieveRelevantChunks(
   query: string,
   options: {
     knowledgeBaseIds?: string[] | null;
+    /**
+     * Text for the keyword (tsquery) leg. Defaults to `query`. Callers that
+     * contextualise `query` with subject/history MUST pass the bare current
+     * message here — the 1,000-char tsquery slice would otherwise be consumed
+     * by the context and drop the actual question from the keyword leg.
+     */
+    keywordQuery?: string;
     /** Chunks handed to the draft prompt. Default 6 (legacy behavior). */
     finalCount?: number;
     /** Stage-1 candidate pool. Default 24. */
@@ -150,14 +215,12 @@ export async function retrieveRelevantChunks(
     return { matches: [], embedCostUsd: 0, searchMode: 'hybrid' };
   }
 
-  const { vectors, costUsd: embedCostUsd } = await embed([query.slice(0, MAX_EMBED_QUERY_CHARS)]);
-  const queryVector = vectors[0];
-  if (!queryVector) throw new Error('embedding returned no vector for the query');
+  const { vector: queryVector, costUsd: embedCostUsd } = await embedQueryWithFallback(query);
 
   // --- stage 1: hybrid pool -------------------------------------------------
   const hybridArgs: Record<string, unknown> = {
     p_org_id: orgId,
-    p_query: query.slice(0, MAX_KEYWORD_QUERY_CHARS),
+    p_query: toKeywordQuery(options.keywordQuery ?? query),
     p_embedding: queryVector,
     p_match_count: poolCount,
   };
@@ -200,7 +263,7 @@ export async function retrieveRelevantChunks(
   try {
     const { result, costUsd } = await rerank({
       companyName: options.companyName ?? 'unser Unternehmen',
-      query: query.slice(0, MAX_EMBED_QUERY_CHARS),
+      query: query.slice(0, RERANK_QUERY_CHARS),
       candidates: pool.map((m) => m.content.slice(0, RERANK_CANDIDATE_CHARS)),
       topK: finalCount,
     });

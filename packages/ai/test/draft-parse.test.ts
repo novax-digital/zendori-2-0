@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDraftResponse } from '../src/anthropic.js';
+import { finalizeDraftResult, parseDraftResponse } from '../src/anthropic.js';
 
 describe('parseDraftResponse', () => {
   it('parses a clean strict-JSON draft', () => {
@@ -57,5 +57,37 @@ describe('parseDraftResponse', () => {
       confidence: 0.3,
       used_source_ids: [],
     });
+  });
+});
+
+describe('finalizeDraftResult', () => {
+  const ok = { reply: 'Gerne, hier die Antwort.', confidence: 0.8, used_source_ids: ['a'] };
+
+  it('passes results through untouched without truncation', () => {
+    expect(finalizeDraftResult(ok, 'end_turn', 'de')).toEqual(ok);
+  });
+
+  it('replaces a truncated raw-JSON fallback with a safe apology at confidence 0', () => {
+    const truncated = {
+      reply: '{"reply": "Sehr geehrte Frau Muster, vielen Dank',
+      confidence: 0.3,
+      used_source_ids: [] as string[],
+    };
+    const result = finalizeDraftResult(truncated, 'max_tokens', 'de');
+    expect(result.confidence).toBe(0);
+    expect(result.used_source_ids).toEqual([]);
+    expect(result.reply).not.toContain('{');
+    expect(result.reply).toContain('Mitarbeiter');
+  });
+
+  it('uses an English fallback for language en', () => {
+    const truncated = { reply: '{"reply": "Dear', confidence: 0.3, used_source_ids: [] as string[] };
+    expect(finalizeDraftResult(truncated, 'max_tokens', 'en').reply).toContain('team');
+  });
+
+  it('clamps confidence to 0.3 when parsed JSON was cut mid-generation', () => {
+    const result = finalizeDraftResult(ok, 'max_tokens', 'de');
+    expect(result.reply).toBe(ok.reply);
+    expect(result.confidence).toBe(0.3);
   });
 });

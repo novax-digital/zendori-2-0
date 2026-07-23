@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
 import AgentGallery, { type AgentTileMeta } from '@/components/AgentGallery';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
+import DismissibleBanners from '@/components/DismissibleBanners';
 import { createAgent, updateAgent, deleteAgent } from './actions';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 
@@ -150,12 +151,20 @@ export default async function AgentsPage({
     }
   }
 
+  // An answering agent (not intake_only) without a single linked KB retrieves
+  // nothing and produces contentless low-confidence answers — flag it (C33).
+  const agentLacksKb = (agent: AgentRow): boolean =>
+    agent.mode !== 'intake_only' &&
+    kbs.length > 0 &&
+    (kbsByAgent.get(agent.id)?.size ?? 0) === 0;
+
   const tiles: AgentTileMeta[] = agents.map((agent) => ({
     id: agent.id,
     name: agent.name,
     modeLabel: `${agent.kind === 'voice' ? 'Voice · ' : ''}${MODE_LABELS[agent.mode]}`,
     isActive: agent.is_active,
     channelCount: channelsByAgent.get(agent.id) ?? 0,
+    kbWarning: agent.is_active && agentLacksKb(agent),
   }));
 
   const channelChecklist = (agent: AgentRow): ReactNode => {
@@ -235,6 +244,12 @@ export default async function AgentsPage({
               Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung
               kennt er keine Inhalte und übergibt inhaltliche Fragen an das Team.
             </p>
+            {agentLacksKb(agent) ? (
+              <p className="notice" style={{ marginBottom: '0.75rem' }}>
+                Dieser Agent ist mit keiner Wissensdatenbank verknüpft — er kann inhaltliche
+                Fragen nicht beantworten. Hake unten mindestens eine Datenbank an.
+              </p>
+            ) : null}
             {kbs.length === 0 ? (
               <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                 Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen →
@@ -323,16 +338,7 @@ export default async function AgentsPage({
         </p>
       </div>
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
+      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
       {!isOwner ? (
         <p className="notice" style={{ marginBottom: '1.5rem' }}>
           Nur Inhaber können Agenten ändern. Die aktuellen Werte werden schreibgeschützt angezeigt.

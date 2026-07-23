@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 
-export type KbTabKey = 'url' | 'file' | 'text';
+export type KbTabKey = 'url' | 'file' | 'text' | 'qa';
 
 function TabIcon({ tab }: { tab: KbTabKey }) {
   const common = {
@@ -32,6 +32,14 @@ function TabIcon({ tab }: { tab: KbTabKey }) {
       return (
         <svg {...common}>
           <path d="M5 5h14M5 10h14M5 15h9M5 20h5" />
+        </svg>
+      );
+    case 'qa':
+      return (
+        <svg {...common}>
+          <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 20l1-4.9a8.4 8.4 0 1 1 17-3.6Z" />
+          <path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.8c0 1.6-2.3 2-2.3 3.2" />
+          <path d="M12 16.4h.01" />
         </svg>
       );
   }

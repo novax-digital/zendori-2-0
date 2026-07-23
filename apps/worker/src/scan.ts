@@ -23,7 +23,10 @@ export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
 const POST_CALL_BATCH = 10;
 const FORM_NOTIFY_BATCH = 20;
 
-const SCAN_INTERVAL_MS = 3_000;
+// 1 s per CLAUDE.md §4 ("pg-boss-Poll im Sekundentakt"). Trade-off: 1 Hz means
+// five lightweight index-backed queries per second against Supabase — negligible
+// load — in exchange for ~1.5 s less average pickup latency on every channel.
+const SCAN_INTERVAL_MS = 1_000;
 const MESSAGE_BATCH = 20;
 const SOURCE_BATCH = 10;
 const HUBSPOT_SYNC_BATCH = 20;

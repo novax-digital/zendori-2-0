@@ -11,6 +11,8 @@ export type AgentTileMeta = {
   modeLabel: string;
   isActive: boolean;
   channelCount: number;
+  /** Active answering agent without a single linked knowledge base (C33). */
+  kbWarning?: boolean;
 };
 
 function AgentIcon() {
@@ -99,6 +101,12 @@ export default function AgentGallery({
               <span className="tile-desc">
                 {agent.modeLabel} ·{' '}
                 {agent.channelCount === 1 ? '1 Kanal' : `${agent.channelCount} Kanäle`}
+                {agent.kbWarning ? (
+                  <span style={{ color: 'var(--warn)', fontWeight: 600 }}>
+                    {' '}
+                    · Keine Wissensdatenbank
+                  </span>
+                ) : null}
               </span>
             </button>
           );

@@ -1,12 +1,16 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import KnowledgeTabs, { type KbTabKey } from '@/components/KnowledgeTabs';
 import KbGallery, { type KbTileMeta } from '@/components/KbGallery';
 import KbFileUpload from '@/components/KbFileUpload';
+import KbIndexingPoller from '@/components/KbIndexingPoller';
 import DangerDeleteKb from '@/components/DangerDeleteKb';
+import DismissibleBanners from '@/components/DismissibleBanners';
 import {
+  addQaCsvSource,
   addTextSource,
   addUrlSource,
   createKnowledgeBase,
@@ -104,6 +108,20 @@ export default async function KnowledgePage({
   const sources = (sourceData ?? []) as unknown as KbSourceRow[];
   const agentLinks = (linkData ?? []) as { knowledge_base_id: string }[];
 
+  // Per-source chunk counts (Textbausteine) — cheap HEAD count queries, run in
+  // parallel. This is the owner-facing proof of WHAT is actually indexed.
+  const chunkCounts = new Map<string, number>();
+  await Promise.all(
+    sources.map(async (source) => {
+      const { count } = await supabase
+        .from('kb_chunks')
+        .select('id', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('source_id', source.id);
+      chunkCounts.set(source.id, count ?? 0);
+    })
+  );
+
   const sourcesByKb = new Map<string, KbSourceRow[]>();
   for (const source of sources) {
     const list = sourcesByKb.get(source.knowledge_base_id) ?? [];
@@ -162,10 +180,37 @@ export default async function KnowledgePage({
       panel: (
         <>
           <p className="help">
-            PDF, DOCX, TXT oder MD, maximal 15 MB pro Datei. Mehrere Dateien auf einmal möglich —
-            der Text wird aus jeder Datei extrahiert und indiziert.
+            PDF, DOCX, TXT, MD oder CSV, maximal 15 MB pro Datei. Mehrere Dateien auf einmal
+            möglich — der Text wird aus jeder Datei extrahiert und indiziert (CSV-Dateien werden
+            als Frage-Antwort-Paare eingelesen, siehe Tab „Q&amp;A (CSV)").
           </p>
           <KbFileUpload org={orgId} knowledgeBaseId={kb.id} />
+        </>
+      ),
+    },
+    {
+      key: 'qa',
+      label: 'Q&A (CSV)',
+      panel: (
+        <>
+          <p className="help">
+            Fragen und Antworten als CSV importieren — zwei Spalten{' '}
+            <strong>Frage;Antwort</strong> (Semikolon oder Komma, optionale Kopfzeile,
+            Anführungszeichen für mehrzeilige Antworten). Jedes Paar wird als eigener
+            Textbaustein indiziert — das ideale Format, damit der Agent Kundenfragen präzise
+            trifft. Export aus Excel: „Speichern unter" → CSV.
+          </p>
+          <form className="stack" action={addQaCsvSource} style={{ maxWidth: '32rem' }}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
+            <div>
+              <label htmlFor={`qa-file-${kb.id}`}>CSV-Datei</label>
+              <input id={`qa-file-${kb.id}`} name="file" type="file" accept=".csv,text/csv" required />
+            </div>
+            <button className="primary" type="submit">
+              Q&amp;A importieren
+            </button>
+          </form>
         </>
       ),
     },
@@ -209,6 +254,7 @@ export default async function KnowledgePage({
   const panels: Record<string, ReactNode> = {};
   for (const kb of kbs) {
     const kbSources = sourcesByKb.get(kb.id) ?? [];
+    const kbHasPending = kbSources.some((s) => s.status === 'pending');
     const agentCount = agentCountByKb.get(kb.id) ?? 0;
     panels[kb.id] = (
       <div key={kb.id}>
@@ -231,6 +277,7 @@ export default async function KnowledgePage({
                   <th>Typ</th>
                   <th>Quelle</th>
                   <th>Status</th>
+                  <th>Textbausteine</th>
                   <th>Zuletzt indiziert</th>
                   <th></th>
                 </tr>
@@ -241,6 +288,15 @@ export default async function KnowledgePage({
                     <td>{typeLabels[source.type]}</td>
                     <td style={{ wordBreak: 'break-all' }}>{sourceLabel(source)}</td>
                     <td>{statusBadge(source.status)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {(chunkCounts.get(source.id) ?? 0) > 0 ? (
+                        <Link href={`/settings/knowledge/source/${source.id}?org=${orgId}`}>
+                          {chunkCounts.get(source.id)} ansehen
+                        </Link>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>—</span>
+                      )}
+                    </td>
                     <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                       {formatRelative(source.last_indexed_at)}
                     </td>
@@ -268,6 +324,12 @@ export default async function KnowledgePage({
               </tbody>
             </table>
           )}
+          {kbHasPending ? (
+            <p className="hint" style={{ marginTop: '0.6rem' }}>
+              Ausstehende Quellen werden im Hintergrund indiziert — diese Ansicht aktualisiert
+              sich automatisch, sobald die Indizierung abgeschlossen ist.
+            </p>
+          ) : null}
         </div>
 
         <KnowledgeTabs tabs={addTabsFor(kb)} />
@@ -334,16 +396,11 @@ export default async function KnowledgePage({
         </p>
       </div>
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
+      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
+
+      {/* auto-refresh while any source is still indexing (kb_sources has no
+          realtime publication — polling is the migration-free mechanism) */}
+      <KbIndexingPoller active={sources.some((s) => s.status === 'pending')} />
 
       <KbGallery tiles={tiles} panels={panels} newPanel={newPanel} />
     </div>

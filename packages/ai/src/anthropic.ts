@@ -86,6 +86,8 @@ export interface ClassifyInput {
   body: string;
   /** Compact prior turns — basis for the is_new_topic measurement signal. */
   history?: DraftHistoryTurn[];
+  /** True when body is a voice-note transcript (recognition errors possible). */
+  isVoiceTranscript?: boolean;
 }
 
 /** Classify an inbound message (language, intent, priority, spam/auto-reply). */
@@ -94,6 +96,13 @@ export async function classify(input: ClassifyInput): Promise<AiCallResult<Class
   const message = await client.messages.parse({
     model: AI_MODELS.classify,
     max_tokens: 1024,
+    // temperature 0 for the deterministic components (classify/extract/rerank):
+    // at the default 1.0 the same borderline message can flip is_spam /
+    // wants_human / kept-chunk sets between runs. Supported on the pinned
+    // models (haiku-4-5 / sonnet-4-6); models after Opus 4.6 reject the param —
+    // drop these lines if AI_MODELS is ever migrated. temp 0 minimises but does
+    // not guarantee bitwise-identical outputs.
+    temperature: 0,
     system: buildClassifyPrompt({
       companyName: input.companyName,
       agentIdentity: input.agentIdentity,
@@ -107,6 +116,7 @@ export async function classify(input: ClassifyInput): Promise<AiCallResult<Class
             channelType: input.channelType,
             subject: input.subject,
             body: input.body,
+            isVoiceTranscript: input.isVoiceTranscript,
           }),
       },
     ],
@@ -133,6 +143,7 @@ export async function extract(input: ExtractInput): Promise<AiCallResult<Extract
   const message = await client.messages.parse({
     model: AI_MODELS.classify,
     max_tokens: 4096,
+    temperature: 0, // deterministic component — see the classify() note
     system: buildExtractPrompt({
       companyName: input.companyName,
       categories: input.categories,
@@ -171,6 +182,8 @@ export interface DraftInput {
    * not as native turns (no role-alternation constraints, injection-framed).
    */
   history?: DraftHistoryTurn[];
+  /** True when body is a voice-note transcript (recognition errors possible). */
+  isVoiceTranscript?: boolean;
 }
 
 /** Produce a RAG answer draft with confidence and used source ids. */
@@ -180,7 +193,11 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
   const historyBlock = renderHistoryBlock(history);
   const message = await client.messages.create({
     model: AI_MODELS.draft,
-    max_tokens: 1500,
+    // 4096 (was 1500): a thorough multi-part German answer inside the JSON
+    // envelope can exceed 1500 output tokens; the truncated JSON then failed
+    // parsing and the RAW text became the reply (see finalizeDraftResult).
+    max_tokens: 4096,
+    temperature: 0.3, // low-jitter drafts; see the classify() temperature note
     system: buildDraftPrompt({
       companyName: input.companyName,
       agentIdentity: input.agentIdentity,
@@ -197,13 +214,45 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
             channelType: input.channelType,
             subject: input.subject,
             body: input.body,
+            isVoiceTranscript: input.isVoiceTranscript,
           }),
       },
     ],
   });
-  const result = parseDraftResponse(extractText(message));
+  const result = finalizeDraftResult(
+    parseDraftResponse(extractText(message)),
+    message.stop_reason,
+    input.language ?? null
+  );
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage) };
+}
+
+/** Short, language-aware fallback consistent with draft-prompt rule 2. */
+function safeFallbackReply(language: string | null): string {
+  return language === 'en'
+    ? 'I cannot answer this reliably right now — a member of our team will take over your request.'
+    : 'Das kann ich gerade nicht sicher beantworten — ein Mitarbeiter aus dem Team übernimmt Ihre Anfrage.';
+}
+
+/**
+ * Guard against max_tokens truncation (pure; exported for unit tests):
+ *  - the model was cut off AND the raw-JSON fallback fired (reply starts with
+ *    '{') → the "draft" is unusable half-JSON; replace it with a safe apology at
+ *    confidence 0 so it can never auto-send (strict < threshold comparison).
+ *  - the JSON parsed but generation was cut off → the reply may end mid-sentence;
+ *    clamp confidence to ≤0.3 so the §6 low-confidence gate catches it.
+ */
+export function finalizeDraftResult(
+  result: DraftResult,
+  stopReason: string | null,
+  language: string | null
+): DraftResult {
+  if (stopReason !== 'max_tokens') return result;
+  if (result.reply.trimStart().startsWith('{')) {
+    return { reply: safeFallbackReply(language), confidence: 0, used_source_ids: [] };
+  }
+  return { ...result, confidence: Math.min(result.confidence, 0.3) };
 }
 
 export interface RerankInput {
@@ -227,6 +276,7 @@ export async function rerank(input: RerankInput): Promise<AiCallResult<RerankRes
   const message = await client.messages.parse({
     model: AI_MODELS.classify,
     max_tokens: 1024,
+    temperature: 0, // deterministic component — see the classify() note
     system: buildRerankPrompt({ companyName: input.companyName, topK: input.topK }),
     messages: [
       {

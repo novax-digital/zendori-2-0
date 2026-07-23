@@ -42,6 +42,11 @@ const SEND_ATTEMPTS = 3;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RETRY_DELAY_START_MS = 15_000;
 const RETRY_DELAY_MAX_MS = 60_000;
+// Hard cap for the typing indicator: the widget cannot know the conversation
+// mode (bot vs. human), so the dots are shown after every successful send and
+// this failsafe guarantees they never get stuck when no reply arrives (e.g.
+// human mode, paused agent, or a dropped broadcast).
+const TYPING_TIMEOUT_MS = 30_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -157,7 +162,30 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
 
   const realtime = new RealtimeConnection(bootData.realtime, handleReply);
 
+  let typingTimer: number | null = null;
+
+  /** Shows the "…" bubble and (re-)arms the failsafe that removes it. */
+  function showTypingIndicator(): void {
+    ui.showTyping();
+    if (typingTimer !== null) window.clearTimeout(typingTimer);
+    typingTimer = window.setTimeout(() => {
+      typingTimer = null;
+      ui.hideTyping();
+    }, TYPING_TIMEOUT_MS);
+  }
+
+  function hideTypingIndicator(): void {
+    if (typingTimer !== null) {
+      window.clearTimeout(typingTimer);
+      typingTimer = null;
+    }
+    ui.hideTyping();
+  }
+
   function handleReply(message: HistoryMessage): void {
+    // any inbound broadcast means the other side responded — even a duplicate
+    // or non-text payload ends the "…" state
+    hideTypingIndicator();
     if (message.content_type !== 'text') return;
     if (renderedIds.has(message.id)) return;
     renderedIds.add(message.id);
@@ -197,6 +225,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
 
   /** Rebuilds the message list from server history, then re-appends unsent local messages. */
   function renderHistory(history: HistoryMessage[]): void {
+    hideTypingIndicator(); // a reload replaces the whole list — drop the stale timer too
     renderedIds.clear();
     ui.resetMessages();
     for (const message of history) {
@@ -291,6 +320,9 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
         if (outcome === 'sent') {
           item.bubble.setState('sent');
           ui.setOffline(false);
+          // the reply pipeline takes several seconds — show "…" until the
+          // broadcast reply arrives (or the failsafe timeout clears it)
+          showTypingIndicator();
           if (!isContactPromptDone(config.token)) ui.showContactPrompt();
         } else {
           item.bubble.setState('failed');

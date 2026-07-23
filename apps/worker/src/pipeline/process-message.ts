@@ -46,7 +46,12 @@ import type {
 } from '@zendori/core';
 import { syncRulesSchema } from '@zendori/core';
 import { getServiceClient } from '../db.js';
-import { decideDraftAction, deliverBotReply, detectHandoff } from './handoff.js';
+import {
+  decideDraftAction,
+  deliverBotReply,
+  detectHandoff,
+  matchesEscalationKeyword,
+} from './handoff.js';
 
 /**
  * Default ticket categories (docs/legacy-analysis.md §2.4). v2 has no per-org
@@ -56,6 +61,17 @@ const DEFAULT_CATEGORIES = ['Frage', 'Störung', 'Reklamation', 'Bestellung', 'S
 
 /** Max characters of a chunk kept as a provenance snippet in ai_drafts.sources. */
 const SNIPPET_MAX_CHARS = 200;
+
+/** Prior turns mixed into the retrieval query (anaphoric follow-up context). */
+const RETRIEVAL_CONTEXT_TURNS = 3;
+const RETRIEVAL_CONTEXT_TURN_CHARS = 300;
+
+/**
+ * Grace window in which an audio message without its attachment row stays
+ * 'pending' (webhook inserts the message before the media store finishes;
+ * worst-case media window ≈ 16s download+upload — 2 min is comfortably above).
+ */
+const TRANSCRIBE_ATTACHMENT_GRACE_MS = 120_000;
 
 // --- loaded row shapes (DB boundary, cast via `as unknown as`) ----------------
 
@@ -101,6 +117,7 @@ interface LoadedMessage {
   external_id: string | null;
   metadata: Record<string, unknown>;
   processing_state: ProcessingState | null;
+  created_at: string;
   conversation: LoadedConversation;
   channel: LoadedChannel;
 }
@@ -141,7 +158,7 @@ export class PipelineError extends Error {
 }
 
 const MESSAGE_SELECT =
-  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, external_id, metadata, processing_state, ' +
+  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, external_id, metadata, processing_state, created_at, ' +
   'conversation:conversations!inner(id, org_id, mode, priority, contact_id, subject), ' +
   'channel:channels!inner(id, type, name, agent_id)';
 
@@ -230,8 +247,22 @@ export async function processMessage(messageId: string): Promise<void> {
       currentStep = 'transcribe';
       const transcribeStart = Date.now();
       const transcript = await transcribeInboundAudio(supabase, message);
-      if (!transcript || transcript.text.length === 0) {
-        // no usable audio/attachment — nothing to process, like spam
+      if (transcript === null) {
+        // No audio attachment row (yet). The WhatsApp webhook inserts the
+        // message BEFORE the media download/upload finishes, so a young message
+        // may simply be racing the media store: leave it 'pending' — the scan
+        // re-enqueues it (cheap; runs before any LLM call). Only a stale
+        // message gets the terminal skip (its media download genuinely failed).
+        const ageMs = Date.now() - Date.parse(message.created_at);
+        if (Number.isFinite(ageMs) && ageMs < TRANSCRIBE_ATTACHMENT_GRACE_MS) return;
+        await supabase
+          .from('messages')
+          .update({ processing_state: 'skipped', metadata: updatedMetadata })
+          .eq('id', message.id);
+        return;
+      }
+      if (transcript.text.length === 0) {
+        // unusable audio — nothing to process, like spam
         await supabase
           .from('messages')
           .update({ processing_state: 'skipped', metadata: updatedMetadata })
@@ -261,28 +292,47 @@ export async function processMessage(messageId: string): Promise<void> {
 
     const cleanBody = deriveCleanBody(channel.type, message);
     const inputSummary = `channel=${channel.type} chars=${cleanBody.length}`;
+    // The transcribe step above replaced audio content with its transcript;
+    // classify/draft are told so recognition errors are read charitably.
+    const isVoiceTranscript = message.content_type === 'audio';
 
-    // Kick retrieval off EARLY, in parallel with classify/extract — it depends
-    // only on the clean body (latency win ~2s). Early-return paths (spam,
-    // intake, no agent) waste one embedding call; the .catch keeps their
-    // floating promise from becoming an unhandled rejection.
+    // Prior turns, loaded ONCE and BEFORE the retrieval kickoff (one cheap
+    // indexed query): they contextualise the retrieval query below, give
+    // classify the is_new_topic signal, and the draft (step 5) reuses the full
+    // window.
+    const history = await loadDraftHistory(supabase, conv.id, message.id);
+
+    // Contextualised retrieval query: subject + last turns + current message
+    // (last, so it dominates the embedding). A bare follow-up ("Und was kostet
+    // das?") embeds to a context-free vector and gives the reranker nothing to
+    // connect — the top "agent didn't understand the request" failure mode.
+    const contextTurns = history
+      .slice(-RETRIEVAL_CONTEXT_TURNS)
+      .map((turn) => turn.content.slice(0, RETRIEVAL_CONTEXT_TURN_CHARS));
+    const retrievalQuery = [conv.subject ?? '', ...contextTurns, cleanBody]
+      .filter((part) => part.trim().length > 0)
+      .join('\n');
+
+    // Kick retrieval off EARLY, in parallel with classify/extract (latency win
+    // ~2s). Early-return paths (spam, intake, no agent) waste one embedding
+    // call; the .catch keeps their floating promise from becoming an unhandled
+    // rejection.
     const retrieveStart = Date.now();
     const retrievalEarly = (async () => {
       const knowledgeBaseIds =
         activeAgent && !forceDraft ? await loadAgentKbIds(supabase, activeAgent.id) : null;
-      return retrieveRelevantChunks(supabase, orgId, cleanBody, {
+      return retrieveRelevantChunks(supabase, orgId, retrievalQuery, {
         knowledgeBaseIds,
         companyName: orgName,
+        // The bare current message: subject/history context must not consume
+        // the keyword leg's 1,000-char tsquery slice (see retrieve.ts).
+        keywordQuery: cleanBody,
       });
     })();
     retrievalEarly.catch(() => undefined);
 
     // --- 1. classify ---------------------------------------------------------
     currentStep = 'classify';
-    // Prior turns, loaded ONCE: a compact slice gives classify the context for
-    // the is_new_topic measurement signal; the draft (step 5) reuses the full
-    // window. One cheap indexed query, replacing the former draft-time load.
-    const history = await loadDraftHistory(supabase, conv.id, message.id);
     const classifyHistory = history
       .slice(-CLASSIFY_HISTORY_TURNS)
       .map((turn) => ({ ...turn, content: turn.content.slice(0, CLASSIFY_HISTORY_TURN_CHARS) }));
@@ -294,6 +344,7 @@ export async function processMessage(messageId: string): Promise<void> {
       subject: conv.subject,
       body: cleanBody,
       history: classifyHistory,
+      isVoiceTranscript,
     });
     const classifyLatency = Date.now() - classifyStart;
     updatedMetadata.classification = classification;
@@ -440,6 +491,41 @@ export async function processMessage(messageId: string): Promise<void> {
       });
     }
 
+    // --- 4b. burst coalescing ------------------------------------------------
+    // Customers split one request across quick messages ("Hallo" / "ich hab ein
+    // Problem" / "mit der Wallbox"); drafting/answering every fragment talks
+    // over them. If a newer pending inbound already exists, let ITS run answer
+    // the whole burst (this fragment is part of its history) — but honor the
+    // per-message §6 overrides first so an escalation keyword / explicit human
+    // wish in this fragment still hands off.
+    if (
+      !forceDraft &&
+      (await hasNewerPendingInbound(supabase, conv.id, message.created_at, message.id))
+    ) {
+      const settings = await loadHandoffSettings(supabase, orgId);
+      const overrideReason: HandoffReason | null = matchesEscalationKeyword(
+        cleanBody,
+        settings.escalationKeywords
+      )
+        ? 'keyword'
+        : classification.wants_human
+          ? 'user_request'
+          : null;
+      if (overrideReason) {
+        await applyHandoff(supabase, {
+          orgId,
+          conv,
+          channel,
+          reason: overrideReason,
+          autoAckTexts: settings.autoAckTexts,
+          businessHours: settings.businessHours,
+        });
+      }
+      await finishMessage(supabase, message.id, updatedMetadata);
+      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+      return;
+    }
+
     // --- 5. draft (Sonnet) ---------------------------------------------------
     currentStep = 'draft';
     // Prior turns (loaded before classify) → the draft continues the dialog
@@ -457,6 +543,7 @@ export async function processMessage(messageId: string): Promise<void> {
       // literal, unhelpful hint "answer in this language: other".
       language: draftLanguage(classification.language),
       sources: matches.map((match) => ({ sourceId: match.source_id, content: match.content })),
+      isVoiceTranscript,
     });
     const draftLatency = Date.now() - draftStart;
     await logAiRun(supabase, {
@@ -527,7 +614,15 @@ export async function processMessage(messageId: string): Promise<void> {
       //     and only send if it is still the same, active, autopilot agent.
       const stillBot = await isStillBotMode(supabase, orgId, conv.id);
       const stillAutopilot = stillBot && (await isStillAutopilotAgent(supabase, channel.id, activeAgent.id));
-      if (!stillBot || !stillAutopilot) {
+      // (c) Burst re-check: a newer customer message may have arrived during
+      //     the multi-second draft — sending now would talk over it. Keep the
+      //     answer as a suggestion; the newer run supersedes it via
+      //     persistDraft's discard-then-insert.
+      const newerArrived =
+        stillBot &&
+        stillAutopilot &&
+        (await hasNewerPendingInbound(supabase, conv.id, message.created_at, message.id));
+      if (!stillBot || !stillAutopilot || newerArrived) {
         await persistDraft(supabase, { ...draftPersist, status: 'pending' });
         await finishMessage(supabase, message.id, updatedMetadata);
         return;
@@ -658,6 +753,34 @@ export async function handlePipelineFailure(messageId: string, err: unknown): Pr
         model: modelForStep(err.step),
         output_summary: 'pipeline_failed',
       });
+      // §6: a terminal bot failure must never be a silent drop — the customer
+      // waits forever and agents see nothing. Route the conversation into the
+      // human queue (arms the pending filter + 0018 SLA reminder). Guarded on
+      // mode='bot' so a force-draft failure on an already-human conversation
+      // does not re-flip status or duplicate events. No auto-ack here: the
+      // outbound send would likely fail during the same outage.
+      const { data: flipped } = await supabase
+        .from('conversations')
+        .update({ mode: 'human', status: 'pending' })
+        .eq('id', err.conversationId)
+        .eq('org_id', err.orgId)
+        .eq('mode', 'bot')
+        .select('id');
+      if ((flipped?.length ?? 0) > 0) {
+        await insertHandoffEvent(supabase, {
+          org_id: err.orgId,
+          conversation_id: err.conversationId,
+          reason: 'manual',
+          outcome: 'pending_human',
+          details: { cause: 'pipeline_failure', step: err.step },
+        });
+      }
+      await supabase.from('notes').insert({
+        org_id: err.orgId,
+        conversation_id: err.conversationId,
+        author_id: null,
+        content: `⚠️ KI-Pipeline fehlgeschlagen (Schritt: ${err.step}) — bitte manuell antworten.`,
+      });
     }
   } catch {
     // Best-effort: never throw from the failure handler.
@@ -679,6 +802,31 @@ async function markDone(supabase: SupabaseClient, messageId: string): Promise<vo
     .update({ processing_state: 'done' })
     .eq('id', messageId);
   if (error) throw error;
+}
+
+/**
+ * True when a newer pending inbound contact message already exists in the
+ * conversation (burst detection). Strict > on created_at: a timestamp tie fails
+ * safe to today's per-message behavior.
+ */
+async function hasNewerPendingInbound(
+  supabase: SupabaseClient,
+  conversationId: string,
+  createdAt: string,
+  messageId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'in')
+    .eq('sender_type', 'contact')
+    .eq('processing_state', 'pending')
+    .neq('id', messageId)
+    .gt('created_at', createdAt)
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 /** True if the conversation is still in bot mode (re-read before an auto-send). */
@@ -949,7 +1097,14 @@ async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): P
  */
 async function insertHandoffEvent(
   supabase: SupabaseClient,
-  row: { org_id: string; conversation_id: string; reason: string; outcome: string }
+  row: {
+    org_id: string;
+    conversation_id: string;
+    reason: string;
+    outcome: string;
+    /** Content-free context (0018), e.g. { cause: 'pipeline_failure', step }. */
+    details?: Record<string, unknown>;
+  }
 ): Promise<{ error: unknown | null }> {
   const { error } = await supabase
     .from('handoff_events')

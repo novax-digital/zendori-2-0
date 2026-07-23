@@ -1,14 +1,18 @@
 // Knowledge-base indexing (CLAUDE.md §11 Phase 4). Turns a kb_source (manual
-// text, uploaded PDF/DOCX/TXT/MD, or a crawled URL / sitemap) into embedded
-// kb_chunks. Text extraction runs first (read-only, may fetch the network);
-// only once chunks are embedded do we replace the source's kb_chunks, so a
-// transient failure leaves the existing index intact. Only metadata is logged.
+// text, uploaded PDF/DOCX/TXT/MD, or a crawled URL / sitemap / sitemap index)
+// into embedded kb_chunks. Extraction yields per-document sections (one per
+// crawled page/file/text); each section is chunked separately and every chunk
+// gets a "Quelle: …" provenance header. Text extraction runs first (read-only,
+// may fetch the network); only once chunks are embedded do we replace the
+// source's kb_chunks, so a transient failure leaves the existing index intact.
+// Only metadata is logged.
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { htmlToText } from '@zendori/channels';
 import { chunkText, embed } from '@zendori/ai';
+import { parseQaCsv } from '@zendori/core';
 import type { KbSourceStatus, KbSourceType, SupabaseClient } from '@zendori/core';
 import { getServiceClient } from '../db.js';
 
@@ -19,10 +23,14 @@ const TEXT_FILENAME = 'text.txt';
 const MAX_TOTAL_CHARS = 500_000;
 /** Per-request fetch timeout for URL crawling. */
 const FETCH_TIMEOUT_MS = 10_000;
-/** Max pages fetched from a sitemap. */
+/** Max pages fetched from a sitemap (global cap, also across a sitemap index). */
 const MAX_SITEMAP_PAGES = 20;
+/** Max child sitemaps followed from a <sitemapindex> (one level, no recursion). */
+const MAX_CHILD_SITEMAPS = 5;
 /** Max redirect hops we follow manually per crawl request (SSRF hardening). */
 const MAX_REDIRECTS = 3;
+/** Cap for extracted document titles used as chunk context headers. */
+const MAX_TITLE_CHARS = 150;
 
 interface LoadedSource {
   id: string;
@@ -30,6 +38,17 @@ interface LoadedSource {
   type: KbSourceType;
   uri: string | null;
   status: KbSourceStatus;
+}
+
+/**
+ * One extracted document (a crawled page, an uploaded file, a manual text).
+ * Sections are chunked independently — no cross-page chunks or overlap — and
+ * title/url become a per-chunk provenance header ("Quelle: …").
+ */
+export interface ExtractedSection {
+  title: string | null;
+  url: string | null;
+  text: string;
 }
 
 /**
@@ -54,14 +73,28 @@ export async function indexSource(sourceId: string): Promise<void> {
   // the 'singleton' queue policy so a redelivery never re-indexes concurrently.
   if (source.status !== 'pending') return;
 
-  // 1. Extract text (read-only; no DB mutation yet).
-  const text = (await extractSourceText(supabase, source)).slice(0, MAX_TOTAL_CHARS);
-  if (text.trim().length === 0) {
+  // 1. Extract per-document sections (read-only; no DB mutation yet). The
+  //    global MAX_TOTAL_CHARS cap is applied as a running budget across
+  //    sections (it used to be a single slice over one concatenated blob).
+  const sections = await extractSourceText(supabase, source);
+  let budget = MAX_TOTAL_CHARS;
+  const capped: ExtractedSection[] = [];
+  for (const section of sections) {
+    if (budget <= 0) break;
+    const text = section.text.slice(0, budget);
+    if (text.trim().length === 0) continue;
+    budget -= text.length;
+    capped.push({ ...section, text });
+  }
+  if (capped.length === 0) {
     throw new Error('no text could be extracted from the source');
   }
 
-  // 2. Chunk + embed.
-  const chunks = chunkText(text);
+  // 2. Chunk each section separately (no cross-page chunks or overlap) with a
+  //    per-chunk provenance header, then embed.
+  const chunks = capped.flatMap((section) =>
+    chunkText(section.text, { contextHeader: sectionHeader(section) })
+  );
   if (chunks.length === 0) {
     throw new Error('chunking produced no chunks');
   }
@@ -107,7 +140,18 @@ export async function markIndexSourceFailed(sourceId: string): Promise<void> {
 
 // --- text extraction ----------------------------------------------------------
 
-async function extractSourceText(supabase: SupabaseClient, source: LoadedSource): Promise<string> {
+/** Provenance header line for every chunk of a section (undefined = no header). */
+function sectionHeader(section: ExtractedSection): string | undefined {
+  if (section.title && section.url) return `Quelle: ${section.title} — ${section.url}`;
+  if (section.title) return `Quelle: ${section.title}`;
+  if (section.url) return `Quelle: ${section.url}`;
+  return undefined;
+}
+
+async function extractSourceText(
+  supabase: SupabaseClient,
+  source: LoadedSource
+): Promise<ExtractedSection[]> {
   switch (source.type) {
     case 'text':
       return loadTextFile(supabase, source.org_id, source.id);
@@ -126,35 +170,108 @@ async function downloadFile(supabase: SupabaseClient, path: string): Promise<{ b
   return { blob: data };
 }
 
+/**
+ * Split a stored manual text ("{title}\n\n{body}", written by addTextSource)
+ * into title + body, so the human-written title reaches EVERY chunk as a
+ * context header instead of only the first. Pure — unit-tested. Falls back to
+ * a title-less section when the format does not match (no blank line, or a
+ * "title" that is multi-line/overlong — a first-line heuristic would be noisy).
+ */
+export function parseManualText(raw: string): ExtractedSection {
+  const normalized = raw.replace(/\r\n?/g, '\n');
+  const separator = normalized.indexOf('\n\n');
+  if (separator > 0) {
+    const title = normalized.slice(0, separator).trim();
+    const body = normalized.slice(separator + 2).trim();
+    if (
+      title.length > 0 &&
+      title.length <= MAX_TITLE_CHARS &&
+      !title.includes('\n') &&
+      body.length > 0
+    ) {
+      return { title, url: null, text: body };
+    }
+  }
+  return { title: null, url: null, text: normalized };
+}
+
 async function loadTextFile(
   supabase: SupabaseClient,
   orgId: string,
   sourceId: string
-): Promise<string> {
+): Promise<ExtractedSection[]> {
   const { blob } = await downloadFile(supabase, `${orgId}/${sourceId}/${TEXT_FILENAME}`);
-  return blob.text();
+  return [parseManualText(await blob.text())];
 }
 
-async function loadFile(supabase: SupabaseClient, source: LoadedSource): Promise<string> {
+/**
+ * Repair PDF line-break hyphenation and soft hyphens so German compound nouns
+ * survive extraction intact (broken tokens neither stem in the german fts leg
+ * nor embed as the real word). Pure — unit-tested.
+ */
+export function dehyphenatePdfText(text: string): string {
+  return (
+    text
+      // Discretionary soft hyphens (U+00AD) are never wanted in plain text.
+      .replace(/­/g, '')
+      // "Liefer-\nzeit" -> "Lieferzeit": lowercase-to-lowercase across a line
+      // break is a typesetter hyphenation inside a word.
+      .replace(/(\p{Ll})-[ \t]*\r?\n[ \t]*(\p{Ll})/gu, '$1$2')
+      // "E-Mail-\nAdresse" -> "E-Mail-Adresse": keep the real hyphen, drop only
+      // the line break (chunking treats \n as a sentence boundary and would
+      // otherwise sever the compound).
+      .replace(/(\p{L})-[ \t]*\r?\n[ \t]*(\p{Lu})/gu, '$1-$2')
+  );
+}
+
+/**
+ * Turn a Q&A CSV into one section PER PAIR: each pair becomes its own chunk
+ * (chunkText never merges sections), which is the ideal retrieval unit — the
+ * question text embeds close to real customer queries and the "Quelle: {title}"
+ * header still names the file. Pure — unit-tested. Zero valid pairs throws so
+ * the source lands on status 'error' instead of silently indexing nothing.
+ */
+export function csvQaSections(filename: string, csv: string): ExtractedSection[] {
+  const { pairs } = parseQaCsv(csv);
+  if (pairs.length === 0) {
+    throw new Error('no question/answer pairs could be parsed from the CSV');
+  }
+  const title = filename.replace(/\.csv$/i, '');
+  return pairs.map((pair) => ({
+    title,
+    url: null,
+    text: `Frage: ${pair.question}\nAntwort: ${pair.answer}`,
+  }));
+}
+
+async function loadFile(
+  supabase: SupabaseClient,
+  source: LoadedSource
+): Promise<ExtractedSection[]> {
   const filename = source.uri;
   if (!filename) throw new Error('file source is missing its filename (uri)');
   const { blob } = await downloadFile(supabase, `${source.org_id}/${source.id}/${filename}`);
   const buffer = Buffer.from(await blob.arrayBuffer());
   const lower = filename.toLowerCase();
 
+  const asSection = (text: string): ExtractedSection[] => [{ title: filename, url: null, text }];
+
   if (lower.endsWith('.pdf')) {
     const parsed = await pdfParse(buffer);
-    return parsed.text;
+    return asSection(dehyphenatePdfText(parsed.text));
   }
   if (lower.endsWith('.docx')) {
     const parsed = await mammoth.extractRawText({ buffer });
-    return parsed.value;
+    return asSection(parsed.value);
+  }
+  if (lower.endsWith('.csv')) {
+    return csvQaSections(filename, buffer.toString('utf8'));
   }
   // txt / md / anything else: treat as UTF-8 text.
-  return buffer.toString('utf8');
+  return asSection(buffer.toString('utf8'));
 }
 
-async function loadUrl(uri: string | null): Promise<string> {
+async function loadUrl(uri: string | null): Promise<ExtractedSection[]> {
   if (!uri) throw new Error('url source is missing its uri');
   const url = parseHttpUrl(uri);
 
@@ -164,14 +281,41 @@ async function loadUrl(uri: string | null): Promise<string> {
   if (isSitemap(first)) {
     return crawlSitemap(first);
   }
+  // A pasted <sitemapindex> URL: follow its child sitemaps (one level) instead
+  // of pushing raw XML through the HTML-to-text path.
+  if (isSitemapIndex(first)) {
+    return crawlSitemapIndex(first);
+  }
+
+  const seed = pageSection(url.toString(), first);
 
   // Root URL: best-effort sitemap discovery at /sitemap.xml.
   if (url.pathname === '/' || url.pathname === '') {
-    const discovered = await tryDiscoverSitemap(url, htmlToText(first));
+    const discovered = await tryDiscoverSitemap(url, seed);
     if (discovered !== null) return discovered;
   }
 
-  return htmlToText(first);
+  return [seed];
+}
+
+/** Build a section for one crawled page from its raw HTML. */
+function pageSection(pageUrl: string, html: string): ExtractedSection {
+  return { title: extractPageTitle(html), url: pageUrl, text: crawledHtmlToText(html) };
+}
+
+/**
+ * Extract a page's <title> from raw HTML (before any tag stripping), decoded
+ * and whitespace-collapsed, capped at MAX_TITLE_CHARS. Pure — unit-tested.
+ */
+export function extractPageTitle(html: string): string | null {
+  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  if (!match) return null;
+  const title = htmlToText(match[1] ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_TITLE_CHARS)
+    .trim();
+  return title.length > 0 ? title : null;
 }
 
 /** Parse + protocol-check a URL (no DNS). Network-facing checks live in safeFetch. */
@@ -188,50 +332,170 @@ function parseHttpUrl(value: string): URL {
   return url;
 }
 
-/**
- * Only a `<urlset>` document is a crawlable sitemap. A `<sitemapindex>` is a
- * list of *other* sitemaps, not pages; treating it as a sitemap would push raw
- * XML through htmlToText (garbage), so it falls back to single-page extraction.
- */
+/** A `<urlset>` document is a crawlable sitemap (a flat list of page URLs). */
 function isSitemap(body: string): boolean {
   return /<urlset[\s>]/i.test(body);
 }
 
-/** Crawl up to MAX_SITEMAP_PAGES <loc> URLs from a sitemap into plain text. */
-async function crawlSitemap(sitemapXml: string, seedText?: string): Promise<string> {
+/**
+ * A `<sitemapindex>` lists *other* sitemaps (WordPress/Yoast, Shopify serve one
+ * at /sitemap.xml). It is followed one level deep via crawlSitemapIndex. Pure —
+ * unit-tested.
+ */
+export function isSitemapIndex(body: string): boolean {
+  return /<sitemapindex[\s>]/i.test(body);
+}
+
+/**
+ * Child sitemap URLs of a `<sitemapindex>`, capped at MAX_CHILD_SITEMAPS.
+ * "page" sitemaps sort before others and "post" sitemaps last, because Yoast's
+ * page-sitemap holds the key pages while post-sitemaps are often blog noise.
+ * Pure — unit-tested.
+ */
+export function extractChildSitemapUrls(indexXml: string): string[] {
+  const priority = (url: string): number => {
+    if (/page/i.test(url)) return 0;
+    if (/post/i.test(url)) return 2;
+    return 1;
+  };
+  return extractSitemapUrls(indexXml)
+    .slice() // stable sort on a copy
+    .sort((a, b) => priority(a) - priority(b))
+    .slice(0, MAX_CHILD_SITEMAPS);
+}
+
+/** Crawl up to MAX_SITEMAP_PAGES <loc> URLs from a <urlset> sitemap. */
+async function crawlSitemap(
+  sitemapXml: string,
+  seed?: ExtractedSection
+): Promise<ExtractedSection[]> {
   const pageUrls = extractSitemapUrls(sitemapXml).slice(0, MAX_SITEMAP_PAGES);
-  const texts: string[] = [];
+  return crawlPages(pageUrls, seed);
+}
+
+/**
+ * Follow a `<sitemapindex>` ONE level deep: fetch its child sitemaps (each hop
+ * re-passes the SSRF-hardened safeFetch), collect their page <loc>s up to the
+ * global MAX_SITEMAP_PAGES cap, then crawl those pages. Nested sitemap indexes
+ * are skipped (no recursion).
+ */
+async function crawlSitemapIndex(
+  indexXml: string,
+  seed?: ExtractedSection
+): Promise<ExtractedSection[]> {
+  const pageUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const childUrl of extractChildSitemapUrls(indexXml)) {
+    if (pageUrls.length >= MAX_SITEMAP_PAGES) break;
+    try {
+      const childXml = await fetchText(childUrl);
+      if (!isSitemap(childXml)) continue; // skips nested indexes and non-sitemaps
+      for (const loc of extractSitemapUrls(childXml)) {
+        if (pageUrls.length >= MAX_SITEMAP_PAGES) break;
+        if (seen.has(loc)) continue;
+        seen.add(loc);
+        pageUrls.push(loc);
+      }
+    } catch {
+      // Skip child sitemaps that fail to fetch.
+    }
+  }
+  return crawlPages(pageUrls, seed);
+}
+
+/** Fetch pages into per-page sections, bounded by the total character budget. */
+async function crawlPages(pageUrls: string[], seed?: ExtractedSection): Promise<ExtractedSection[]> {
+  const sections: ExtractedSection[] = [];
   let total = 0;
-  if (seedText && seedText.trim().length > 0) {
-    texts.push(seedText);
-    total += seedText.length;
+  if (seed && seed.text.trim().length > 0) {
+    sections.push(seed);
+    total += seed.text.length;
   }
   for (const pageUrl of pageUrls) {
     if (total >= MAX_TOTAL_CHARS) break;
     try {
-      const text = htmlToText(await fetchText(pageUrl));
-      if (text.trim().length === 0) continue;
-      texts.push(text);
-      total += text.length;
+      const section = pageSection(pageUrl, await fetchText(pageUrl));
+      if (section.text.trim().length === 0) continue;
+      sections.push(section);
+      total += section.text.length;
     } catch {
       // Skip individual pages that fail to fetch.
     }
   }
-  return texts.join('\n\n');
+  return sections;
 }
 
-async function tryDiscoverSitemap(rootUrl: URL, seedText: string): Promise<string | null> {
+async function tryDiscoverSitemap(
+  rootUrl: URL,
+  seed: ExtractedSection
+): Promise<ExtractedSection[] | null> {
   try {
     const sitemapXml = await fetchText(`${rootUrl.origin}/sitemap.xml`);
-    // Only a <urlset> can be crawled into pages; a <sitemapindex> is skipped.
-    if (!isSitemap(sitemapXml)) {
+    let crawled: ExtractedSection[];
+    if (isSitemap(sitemapXml)) {
+      crawled = await crawlSitemap(sitemapXml, seed);
+    } else if (isSitemapIndex(sitemapXml)) {
+      crawled = await crawlSitemapIndex(sitemapXml, seed);
+    } else {
       return null;
     }
-    const crawled = await crawlSitemap(sitemapXml, seedText);
-    return crawled.trim().length > 0 ? crawled : null;
+    return crawled.length > 0 ? crawled : null;
   } catch {
     return null; // discovery is best-effort
   }
+}
+
+// --- crawl-only HTML cleanup --------------------------------------------------
+
+const ALWAYS_STRIP_RE = /<(nav|aside|form|noscript|svg)\b[\s\S]*?<\/\1\s*>/gi;
+const CHROME_STRIP_RE = /<(header|footer)\b[\s\S]*?<\/\1\s*>/gi;
+// Obvious static cookie-banner containers by id/class. Non-greedy matching on
+// nested tags fails safe: it may leave residual banner text, never real content.
+const COOKIE_BLOCK_RE =
+  /<(div|section)\b[^>]*\b(?:id|class)\s*=\s*(?:"[^"]*cookie[^"]*"|'[^']*cookie[^']*')[^>]*>[\s\S]*?<\/\1\s*>/gi;
+
+/** Inner HTML of the first <main>/<article> up to its LAST close tag, or null. */
+function extractMainContent(html: string): string | null {
+  const open = /<(main|article)\b[^>]*>/i.exec(html);
+  if (!open) return null;
+  const tag = (open[1] ?? '').toLowerCase();
+  const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+  let lastClose: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = closeRe.exec(html)) !== null) {
+    lastClose = match;
+  }
+  if (!lastClose || lastClose.index <= open.index) return null;
+  return html.slice(open.index + open[0].length, lastClose.index);
+}
+
+/**
+ * Crawl-specific boilerplate stripping BEFORE text extraction, so menus,
+ * footer link lists and cookie banners do not repeat into every page's chunks
+ * and pollute embeddings + the german fts keyword leg. Deliberately NOT part
+ * of the shared htmlToText (which the email pipeline uses). If <main>/<article>
+ * is present only its content is kept (without stripping <header> inside it —
+ * article headers usually wrap the real H1); otherwise <header>/<footer> are
+ * stripped as page chrome. Pure — unit-tested.
+ */
+export function stripBoilerplateHtml(html: string): string {
+  const main = extractMainContent(html);
+  let scoped = (main ?? html).replace(ALWAYS_STRIP_RE, ' ');
+  if (main === null) {
+    scoped = scoped.replace(CHROME_STRIP_RE, ' ');
+  }
+  return scoped.replace(COOKIE_BLOCK_RE, ' ');
+}
+
+/**
+ * htmlToText for crawled pages, with boilerplate stripped first. Falls back to
+ * the unstripped conversion when cleaning leaves nothing (e.g. a page whose
+ * whole content sits in an unusual markup), so a single-page URL source can
+ * never regress into "no text could be extracted". Pure — unit-tested.
+ */
+export function crawledHtmlToText(html: string): string {
+  const cleaned = htmlToText(stripBoilerplateHtml(html));
+  return cleaned.trim().length > 0 ? cleaned : htmlToText(html);
 }
 
 /** Extract de-duplicated http(s) <loc> URLs from sitemap XML. Pure — unit-tested. */

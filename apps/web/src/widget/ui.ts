@@ -26,6 +26,9 @@ export interface WidgetUi {
   resetMessages(): void;
   showContactPrompt(): void;
   hideContactPrompt(): void;
+  /** Shows the animated "…" bubble below the newest message (idempotent). */
+  showTyping(): void;
+  hideTyping(): void;
 }
 
 /**
@@ -121,9 +124,35 @@ export function createWidgetUi(
   panel.setAttribute('aria-label', theme.title);
 
   let unreadCount = 0;
+  let typingEl: HTMLDivElement | null = null;
 
   function scrollToBottom(): void {
     messages.scrollTop = messages.scrollHeight;
+  }
+
+  function showTyping(): void {
+    if (!typingEl) {
+      typingEl = document.createElement('div');
+      typingEl.className = 'zw-msg zw-msg-in zw-typing';
+      typingEl.setAttribute('role', 'status');
+      typingEl.setAttribute('aria-label', 'Antwort wird geschrieben');
+      for (let i = 0; i < 3; i += 1) {
+        const dot = document.createElement('span');
+        dot.className = 'zw-typing-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        typingEl.appendChild(dot);
+      }
+    }
+    // (re-)append so the indicator always sits below the newest message
+    messages.appendChild(typingEl);
+    scrollToBottom();
+  }
+
+  function hideTyping(): void {
+    if (typingEl) {
+      typingEl.remove();
+      typingEl = null;
+    }
   }
 
   function renderGreeting(): void {
@@ -234,6 +263,7 @@ export function createWidgetUi(
       banner.hidden = !visible;
     },
     addAgentMessage(content: string, options?: { notify?: boolean }): void {
+      hideTyping(); // the reply replaces the dots
       const el = document.createElement('div');
       el.className = 'zw-msg zw-msg-in';
       el.textContent = content;
@@ -255,6 +285,7 @@ export function createWidgetUi(
       wrap.appendChild(messageEl);
       wrap.appendChild(statusEl);
       messages.appendChild(wrap);
+      if (typingEl) messages.appendChild(typingEl); // keep the dots below the newest message
       scrollToBottom();
       const handle: BubbleHandle = {
         setState(state: BubbleState): void {
@@ -268,6 +299,7 @@ export function createWidgetUi(
       return handle;
     },
     resetMessages(): void {
+      typingEl = null; // element is removed with the rest of the list below
       messages.textContent = '';
       renderGreeting();
     },
@@ -277,5 +309,7 @@ export function createWidgetUi(
     hideContactPrompt(): void {
       contactBlock.hidden = true;
     },
+    showTyping,
+    hideTyping,
   };
 }

@@ -93,6 +93,9 @@ type SuggestedReplyProps = {
   draft: DraftItem;
   /** Agent assigned to this conversation's channel (threshold + name). */
   agent?: AgentInfo | null;
+  /** Resolved handoff reason (mode='human' only) — replaces the old hardcoded
+   *  "von Ihnen übernommen" claim, which was wrong for bot-triggered handoffs. */
+  pausedHint?: string | null;
 };
 
 function ActionButton({ className, children }: { className: string; children: React.ReactNode }) {
@@ -112,6 +115,7 @@ export default function SuggestedReply({
   mode,
   draft,
   agent,
+  pausedHint,
 }: SuggestedReplyProps) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(draft.content);
@@ -132,7 +136,8 @@ export default function SuggestedReply({
     <div style={cardStyle} aria-label="KI-Antwortvorschlag">
       {mode === 'human' ? (
         <div style={pausedHintStyle}>
-          Bot pausiert – von Ihnen übernommen. Dieser Vorschlag bleibt als Entwurf nutzbar.
+          {pausedHint ?? 'Bot pausiert — Konversation liegt beim Team.'} Dieser Vorschlag bleibt
+          als Entwurf nutzbar.
         </div>
       ) : null}
       <div style={headerStyle}>
@@ -196,7 +201,11 @@ export default function SuggestedReply({
           {draft.sources.map((source, index) => (
             <span key={`${source.source_id}-${index}`} style={{ wordBreak: 'break-word' }}>
               {source.uri ? (
-                <span style={{ color: 'var(--text)' }}>{source.uri}</span>
+                // manual entries store the literal marker 'text' as uri — show
+                // the same label the knowledge settings page uses
+                <span style={{ color: 'var(--text)' }}>
+                  {source.uri === 'text' ? 'Manueller Text' : source.uri}
+                </span>
               ) : (
                 <span style={{ color: 'var(--text)' }}>Wissensdatenbank-Eintrag</span>
               )}

@@ -131,7 +131,7 @@ export default function AgentBehaviorFields({
       ) : null}
       {kind === 'text' ? (
         <div>
-          <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1, nur Autopilot)</label>
+          <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1)</label>
           <input
             id={`${idPrefix}-threshold`}
             name="confidenceThreshold"
@@ -143,6 +143,11 @@ export default function AgentBehaviorFields({
             disabled={disabled}
             style={{ maxWidth: '10rem' }}
           />
+          <p className="hint">
+            Unterhalb dieses Werts übergibt der Agent an einen Menschen (sofern „Übergabe an
+            Menschen bei Unsicherheit" aktiv ist) — auch im Modus „Nur Entwürfe". Im Autopilot
+            bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.
+          </p>
         </div>
       ) : null}
     </>

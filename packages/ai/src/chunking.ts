@@ -15,6 +15,17 @@ export interface TextChunk {
   tokenCount: number;
 }
 
+export interface ChunkTextOptions {
+  /**
+   * Optional one-line provenance header (e.g. "Quelle: {title} — {url}")
+   * prepended to EVERY chunk after sizing, so chunk boundaries stay
+   * undistorted. The header becomes part of the chunk content on purpose: it
+   * flows into the embedding, the generated german fts column, and the rerank
+   * window, giving each chunk document context. Token counts include it.
+   */
+  contextHeader?: string;
+}
+
 /** Estimate token count from a character length. */
 function estimateTokens(charCount: number): number {
   return Math.ceil(charCount / CHARS_PER_TOKEN);
@@ -67,9 +78,10 @@ function makeChunk(content: string): TextChunk {
 /**
  * Split `text` into overlapping chunks of ~500 tokens with ~50 tokens of
  * overlap, breaking on paragraph and sentence boundaries where possible.
- * Whitespace-only chunks are dropped.
+ * Whitespace-only chunks are dropped. With `options.contextHeader` set, the
+ * header is prepended to every resulting chunk (after sizing).
  */
-export function chunkText(text: string): TextChunk[] {
+export function chunkText(text: string, options: ChunkTextOptions = {}): TextChunk[] {
   const normalized = text.replace(/\r\n?/g, '\n').trim();
   if (normalized.length === 0) return [];
 
@@ -90,5 +102,10 @@ export function chunkText(text: string): TextChunk[] {
     chunks.push(makeChunk(current));
   }
 
-  return chunks.filter((chunk) => chunk.content.length > 0);
+  const nonEmpty = chunks.filter((chunk) => chunk.content.length > 0);
+  const header = options.contextHeader?.trim();
+  if (!header) return nonEmpty;
+  // Prepend AFTER chunking so the header never distorts chunk boundaries;
+  // makeChunk recomputes the token estimate from the final content.
+  return nonEmpty.map((chunk) => makeChunk(`${header}\n\n${chunk.content}`));
 }

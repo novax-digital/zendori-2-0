@@ -51,4 +51,47 @@ describe('chunkText', () => {
     expect(chunks[0].content).toContain('Erster Absatz.');
     expect(chunks[0].content).toContain('Zweiter Absatz.');
   });
+
+  describe('contextHeader option', () => {
+    const header = 'Quelle: Versandkosten & Lieferzeiten — https://example.com/versand';
+
+    it('prepends the header to every chunk, not just the first', () => {
+      const sentence = 'Die Lieferzeit beträgt in der Regel drei bis fünf Werktage innerhalb DE. ';
+      const chunks = chunkText(sentence.repeat(80), { contextHeader: header });
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const chunk of chunks) {
+        expect(chunk.content.startsWith(`${header}\n\n`)).toBe(true);
+      }
+    });
+
+    it('includes the header in the token estimate', () => {
+      const text = 'Die Wallbox lädt mit elf Kilowatt.';
+      const [chunk] = chunkText(text, { contextHeader: header });
+      const expected = `${header}\n\n${text}`;
+      expect(chunk.content).toBe(expected);
+      expect(chunk.tokenCount).toBe(Math.ceil(expected.length / 4));
+    });
+
+    it('does not distort chunk boundaries (header added after sizing)', () => {
+      const sentence = 'Die Wallbox meldet einen roten Blinkcode und lädt seit gestern nicht. ';
+      const text = sentence.repeat(80);
+      const plain = chunkText(text);
+      const withHeader = chunkText(text, { contextHeader: header });
+      expect(withHeader).toHaveLength(plain.length);
+      withHeader.forEach((chunk, index) => {
+        expect(chunk.content).toBe(`${header}\n\n${plain[index].content}`);
+      });
+    });
+
+    it('treats an empty or whitespace-only header as no header', () => {
+      const text = 'Kurzer Eintrag ohne Kontext.';
+      expect(chunkText(text, { contextHeader: '' })[0].content).toBe(text);
+      expect(chunkText(text, { contextHeader: '   ' })[0].content).toBe(text);
+      expect(chunkText(text, {})[0].content).toBe(text);
+    });
+
+    it('yields no chunks for empty text even with a header', () => {
+      expect(chunkText('   ', { contextHeader: header })).toEqual([]);
+    });
+  });
 });

@@ -181,6 +181,49 @@ export const WIDGET_CSS = `
   max-width: 100%;
 }
 
+.zw-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.zw-typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9ca3af;
+  animation: zw-typing-pulse 1.2s ease-in-out infinite;
+}
+
+.zw-typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.zw-typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes zw-typing-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zw-typing-dot {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .zw-out-wrap {
   align-self: flex-end;
   max-width: 82%;

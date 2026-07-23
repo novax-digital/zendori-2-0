@@ -40,7 +40,7 @@ const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
  * the policy of an existing queue and updateQueue cannot set policy (pg-boss
  * v12), so when an earlier worker version created the queue with a different
  * policy we drop and recreate it. Safe: the scan re-derives all work from the
- * source-of-truth DB state every few seconds, so any dropped queued job is
+ * source-of-truth DB state every second, so any dropped queued job is
  * re-enqueued (there is a single worker process — §2).
  */
 async function ensureQueuePolicy(boss: PgBoss, name: string): Promise<void> {
@@ -73,8 +73,8 @@ async function main(): Promise<void> {
   // --- Phase-4 pipelines -----------------------------------------------------
   // 'stately' policy: at most one job in the created OR active state per
   // singletonKey (the row id). This blocks BOTH a concurrent run and a queued
-  // duplicate, so a scan that re-sends the same message/source every 3s while it
-  // is still pending never fans out into multiple LLM pipeline runs. createQueue
+  // duplicate, so a scan that re-sends the same message/source every second while
+  // it is still pending never fans out into multiple LLM pipeline runs. createQueue
   // does NOT change the policy of an already-existing queue, so updateQueue
   // enforces it on queues created by earlier worker versions. The handlers still
   // re-check row state / claim before external side effects (belt and braces).
@@ -84,7 +84,10 @@ async function main(): Promise<void> {
 
   await boss.work(
     PROCESS_MESSAGE_QUEUE,
-    { includeMetadata: true },
+    // pollingIntervalSeconds 1 (pg-boss default 2, min 0.5): together with the
+    // 1 s scan this caps queueing dead time at ~2 s worst case (~1 s average).
+    // Only this queue is latency-sensitive; the others keep the 2 s default.
+    { includeMetadata: true, pollingIntervalSeconds: 1 },
     async (jobs: JobWithMetadata<{ messageId: string }>[]) => {
       for (const job of jobs) {
         const { messageId } = processMessageJobSchema.parse(job.data);

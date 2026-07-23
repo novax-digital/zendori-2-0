@@ -8,6 +8,30 @@ const senderLabels: Record<SenderType, string> = {
   system: 'System',
 };
 
+/**
+ * Defensive check for metadata.delivery.failed — written by the reply actions
+ * and the worker's deliverBotReply when the outbound send (email/WhatsApp)
+ * failed. metadata is untyped jsonb, so every level is guarded.
+ */
+function isDeliveryFailed(metadata: Record<string, unknown> | null | undefined): boolean {
+  const delivery = metadata?.['delivery'];
+  return (
+    typeof delivery === 'object' &&
+    delivery !== null &&
+    (delivery as { failed?: unknown }).failed === true
+  );
+}
+
+/** Provider error string for the hover tooltip (never message content). */
+function deliveryErrorText(
+  metadata: Record<string, unknown> | null | undefined
+): string | undefined {
+  const delivery = metadata?.['delivery'];
+  if (typeof delivery !== 'object' || delivery === null) return undefined;
+  const error = (delivery as { error?: unknown }).error;
+  return typeof error === 'string' ? error : undefined;
+}
+
 /** Compact, locale-agnostic byte size for attachment labels. */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -105,6 +129,15 @@ export default function ConversationView({ detail }: { detail: ConversationDetai
               ) : null}
               <div className="inbox-msg-meta">
                 {senderLabels[message.sender_type]} · {formatTimestamp(message.created_at)}
+                {message.direction === 'out' && isDeliveryFailed(message.metadata) ? (
+                  <span
+                    style={{ color: 'var(--danger)', fontWeight: 600 }}
+                    title={deliveryErrorText(message.metadata)}
+                  >
+                    {' '}
+                    · Zustellung fehlgeschlagen
+                  </span>
+                ) : null}
               </div>
             </div>
           ))

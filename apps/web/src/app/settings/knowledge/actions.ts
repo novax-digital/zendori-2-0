@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { parseQaCsv } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { publicSupabaseEnv } from '@/lib/env';
@@ -11,7 +12,7 @@ import { publicSupabaseEnv } from '@/lib/env';
 const KB_BUCKET = 'kb-files';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 100_000;
-const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'] as const;
+const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md', 'csv'] as const;
 
 type AllowedExtension = (typeof ALLOWED_EXTENSIONS)[number];
 
@@ -181,6 +182,112 @@ export async function addTextSource(formData: FormData): Promise<void> {
   );
 }
 
+// --- add Q&A CSV source ----------------------------------------------------------
+
+/** Q&A CSVs are tiny; the cap keeps the action body safely under Next's 1 MB limit. */
+const MAX_QA_CSV_BYTES = 800 * 1024;
+
+const addQaCsvSchema = z.object({
+  org: z.uuid(),
+  knowledgeBaseId: z.uuid(),
+});
+
+/**
+ * Imports a Q&A CSV (two columns: Frage;Antwort, optional header) as a file
+ * source. The CSV is parsed HERE for immediate feedback (pair count / format
+ * errors before anything is stored); the worker re-parses it at index time and
+ * turns every pair into its own chunk. Storage/rollback mirrors addTextSource.
+ */
+export async function addQaCsvSource(formData: FormData): Promise<void> {
+  const parsed = addQaCsvSchema.safeParse({
+    org: formData.get('org'),
+    knowledgeBaseId: formData.get('knowledgeBaseId'),
+  });
+  if (!parsed.success) {
+    redirect(knowledgeUrl(textField(formData.get('org')), { error: 'Ungültige Anfrage.' }));
+  }
+  const { org, knowledgeBaseId } = parsed.data;
+
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) {
+    redirect(knowledgeUrl(org, { error: 'Bitte eine CSV-Datei auswählen.' }));
+  }
+  if (file.size > MAX_QA_CSV_BYTES) {
+    redirect(knowledgeUrl(org, { error: 'CSV-Datei zu groß (max. 800 KB).' }));
+  }
+  const filename = sanitizeFilename(file.name);
+  if (fileExtension(filename) !== 'csv') {
+    redirect(knowledgeUrl(org, { error: 'Bitte eine .csv-Datei auswählen.' }));
+  }
+
+  const csvText = await file.text();
+  const { pairs, skipped } = parseQaCsv(csvText);
+  if (pairs.length === 0) {
+    redirect(
+      knowledgeUrl(org, {
+        error:
+          'Keine Frage-Antwort-Paare gefunden. Erwartetes Format: zwei Spalten „Frage;Antwort" (Semikolon oder Komma), optional mit Kopfzeile.',
+      })
+    );
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data: inserted, error } = await supabase
+    .from('kb_sources')
+    .insert({
+      org_id: org,
+      knowledge_base_id: knowledgeBaseId,
+      type: 'file',
+      uri: filename,
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+  if (error || !inserted) {
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+  }
+  const sourceId = (inserted as { id: string }).id;
+
+  const { error: uploadError } = await admin.storage
+    .from(KB_BUCKET)
+    .upload(`${org}/${sourceId}/${filename}`, csvText, {
+      contentType: 'text/csv; charset=utf-8',
+      upsert: true,
+    });
+  if (uploadError) {
+    // roll back the orphaned row so it is not stuck 'pending' with no content
+    await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
+    redirect(knowledgeUrl(org, { error: 'CSV konnte nicht gespeichert werden.' }));
+  }
+
+  // TOCTOU vs deleteKnowledgeBase: if the base (and via cascade this row) was
+  // deleted mid-upload, remove the just-uploaded file instead of orphaning it.
+  const { data: stillThere } = await supabase
+    .from('kb_sources')
+    .select('id')
+    .eq('org_id', org)
+    .eq('id', sourceId)
+    .maybeSingle();
+  if (!stillThere) {
+    await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+  }
+
+  revalidatePath('/settings/knowledge');
+  const skippedSuffix =
+    skipped > 0 ? ` (${skipped} ${skipped === 1 ? 'Zeile' : 'Zeilen'} übersprungen)` : '';
+  redirect(
+    knowledgeUrl(org, {
+      notice: `${pairs.length} Frage-Antwort-Paare erkannt${skippedSuffix} — die Indizierung startet in Kürze.`,
+    })
+  );
+}
+
 // --- add file source -------------------------------------------------------------
 
 // Files go DIRECTLY from the browser to Supabase Storage via signed upload
@@ -237,7 +344,7 @@ export async function prepareKbUploads(
   }
   if (rejected.length > 0) {
     return {
-      error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD bis 15 MB.`,
+      error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD, CSV bis 15 MB.`,
     };
   }
 
