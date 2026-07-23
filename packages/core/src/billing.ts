@@ -112,17 +112,57 @@ export function priceEur(costUsd: number, pricing: BillingPricing = DEFAULT_PRIC
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 // ============================================================================
-// Billing v2 (migration 0022): price tiers, recommendations, packages
+// Billing v2 (migration 0022): price lists (Preislisten) + packages
 // ============================================================================
-
-/** Default recommendation / fallback multiplier (cost × usd_to_eur × margin). */
-export const DEFAULT_TARGET_MARGIN = 3.0;
+//
+// Deliberately simple pricing model (owner decision 2026-07-23): every position
+// on a price list is a FREE per-unit sell price in EUR — no FX editing, no
+// markup factors, no recommendation math. The internal USD→EUR conversion is a
+// fixed constant used only to display our purchase cost in EUR. A position
+// without a sell price is passed through at cost (Selbstkostenpreis) so an
+// unpriced category can never silently undercharge below purchase.
 
 /** Default editable monthly number costs in EUR (billing_settings, 0023). */
 export const DEFAULT_NUMBER_COST_MOBILE_EUR = 3.0;
 export const DEFAULT_NUMBER_COST_LANDLINE_EUR = 1.5;
 
-/** Categories priced by a fixed unit sell price vs. by a markup on our cost. */
+/** Display order of the price-list positions. */
+export const BILLING_CATEGORY_ORDER: BillingCategory[] = [
+  'ai',
+  'embeddings',
+  'transcription',
+  'voice',
+  'whatsapp',
+  'email',
+  'numbers_mobile',
+  'numbers_landline',
+];
+
+/** How each position is billed — shown on the price list. */
+export const BILLING_CATEGORY_BILLING_LABEL: Record<BillingCategory, string> = {
+  ai: 'transaktionell',
+  embeddings: 'transaktionell',
+  transcription: 'transaktionell',
+  voice: 'transaktionell',
+  whatsapp: 'transaktionell',
+  email: 'transaktionell',
+  numbers_mobile: 'monatlich',
+  numbers_landline: 'monatlich',
+};
+
+/** Sell-price unit per position (what the € amount refers to). */
+export const BILLING_CATEGORY_PRICE_UNIT: Record<BillingCategory, string> = {
+  ai: '€/Vorgang',
+  embeddings: '€/Vorgang',
+  transcription: '€/Vorgang',
+  voice: '€/Minute',
+  whatsapp: '€/Nachricht',
+  email: '€/E-Mail',
+  numbers_mobile: '€/Nummer/Monat',
+  numbers_landline: '€/Nummer/Monat',
+};
+
+/** Categories with a fixed per-unit purchase cost (rate card / configured). */
 export const UNIT_PRICED_CATEGORIES = [
   'voice',
   'whatsapp',
@@ -130,7 +170,6 @@ export const UNIT_PRICED_CATEGORIES = [
   'numbers_mobile',
   'numbers_landline',
 ] as const;
-export const MARKUP_PRICED_CATEGORIES = ['ai', 'embeddings', 'transcription'] as const;
 export type UnitPricedCategory = (typeof UNIT_PRICED_CATEGORIES)[number];
 
 /** USD cost per unit for the rate-card unit categories (voice/whatsapp/email). */
@@ -140,17 +179,23 @@ const STATIC_UNIT_COST_USD: Record<'voice' | 'whatsapp' | 'email', number> = {
   email: EMAIL_USD_PER_MESSAGE,
 };
 
-// --- tier pricing rules ------------------------------------------------------
+// --- price-list rules --------------------------------------------------------
 
-/** A per-category override: a fixed EUR unit price, or an explicit markup factor. */
-export const categoryPricingRuleSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('unit'), unitPriceEur: z.number().min(0).max(100_000) }),
-  z.object({ mode: z.literal('markup'), factor: z.number().min(0).max(100_000) }),
-]);
+/**
+ * A position's sell price: a free EUR unit price — the ONLY rule kind. Rows
+ * saved by the short-lived factor-based UI ({mode:'markup'}) are stripped at
+ * parse time (per key, via .catch) so display, billing and saving all agree:
+ * such a position is unpriced ⇒ pass-through at cost. (Verified 2026-07-23:
+ * no markup rows exist in the live DB.)
+ */
+export const categoryPricingRuleSchema = z.object({
+  mode: z.literal('unit'),
+  unitPriceEur: z.number().min(0).max(100_000),
+});
 export type CategoryPricingRule = z.infer<typeof categoryPricingRuleSchema>;
 
-const ruleOptional = categoryPricingRuleSchema.optional();
-/** A tier's per-category overrides. Absent category ⇒ recommendation applies. */
+const ruleOptional = categoryPricingRuleSchema.optional().catch(undefined);
+/** A price list's positions. Absent position ⇒ pass-through at cost. */
 export const priceTierPricingSchema = z
   .object({
     ai: ruleOptional,
@@ -166,9 +211,8 @@ export const priceTierPricingSchema = z
 export type TierPricing = Partial<Record<BillingCategory, CategoryPricingRule>>;
 
 export interface PricingContext {
+  /** Fixed internal conversion for displaying USD purchase costs in EUR. */
   usdToEur: number;
-  /** Default/recommendation multiplier for categories without a tier override. */
-  targetMargin: number;
   /** Editable monthly purchase cost per number type (EUR). */
   numberCostMobileEur: number;
   numberCostLandlineEur: number;
@@ -176,7 +220,6 @@ export interface PricingContext {
 
 export const DEFAULT_PRICING_CONTEXT: PricingContext = {
   usdToEur: DEFAULT_USD_TO_EUR,
-  targetMargin: DEFAULT_TARGET_MARGIN,
   numberCostMobileEur: DEFAULT_NUMBER_COST_MOBILE_EUR,
   numberCostLandlineEur: DEFAULT_NUMBER_COST_LANDLINE_EUR,
 };
@@ -188,22 +231,10 @@ export function unitCostEur(category: UnitPricedCategory, ctx: PricingContext): 
   return STATIC_UNIT_COST_USD[category] * ctx.usdToEur;
 }
 
-/** Recommended customer price (EUR) for an internal USD cost. */
-export function recommendedPriceEur(costUsd: number, ctx: PricingContext): number {
-  return round2(Math.max(0, costUsd) * ctx.usdToEur * ctx.targetMargin);
-}
-
-/** Recommended EUR unit price for a unit-priced category (cost × target margin). */
-export function recommendedUnitPriceEur(category: UnitPricedCategory, ctx: PricingContext): number {
-  return round2(unitCostEur(category, ctx) * ctx.targetMargin);
-}
-
 /**
- * Customer price (EUR) for one billing line. A tier `rule` may override:
- *   unit   → quantity × unitPriceEur (decoupled from our cost)
- *   markup → costUsd × usd_to_eur × factor
- * No rule → the recommendation (costUsd × usd_to_eur × targetMargin), which is
- * identical to quantity × recommended-unit-price for the count categories.
+ * Customer price (EUR) for one billing line.
+ *   unit rule → quantity × unitPriceEur
+ *   no rule   → pass-through at cost (Selbstkostenpreis)
  */
 export function categoryPriceEur(
   quantity: number,
@@ -211,9 +242,8 @@ export function categoryPriceEur(
   rule: CategoryPricingRule | undefined,
   ctx: PricingContext
 ): number {
-  if (rule?.mode === 'unit') return round2(Math.max(0, quantity) * rule.unitPriceEur);
-  if (rule?.mode === 'markup') return round2(Math.max(0, costUsd) * ctx.usdToEur * rule.factor);
-  return recommendedPriceEur(costUsd, ctx);
+  if (rule) return round2(Math.max(0, quantity) * rule.unitPriceEur);
+  return round2(Math.max(0, costUsd) * ctx.usdToEur);
 }
 
 // --- packages ----------------------------------------------------------------

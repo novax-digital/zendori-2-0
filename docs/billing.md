@@ -33,64 +33,61 @@ Org zuordenbar.** Zwei Sichten — Admin (alle Kunden, Kosten/Preis/Marge) und K
   `usage_events` + Message-/Channel-Zählung server-seitig (kein 1000-Zeilen-Limit).
   Execute nur für `service_role`.
 
-## Preisbildung (Billing v2, Migration 0022)
+## Preisbildung (Billing v2, Migration 0022 — vereinfacht 2026-07-23)
 
-Einkaufskosten (unser Einkauf) stehen an EINER Stelle:
-[`packages/core/src/billing.ts`](../packages/core/src/billing.ts). Die
-Verkaufspreise kommen aus **Preisstaffeln** und **Paketen** (in der DB, admin-
-verwaltet).
+Bewusst einfach (Owner-Entscheidung): **freie €-Preise, kein Wechselkurs-Feld,
+kein Aufschlag-Faktor.** Verwaltung auf EINER Seite: **Admin → Preise & Pakete**
+(Einkaufspreise, Preislisten, Pakete). Einkaufskosten (unser Einkauf) stehen in
+[`packages/core/src/billing.ts`](../packages/core/src/billing.ts); die interne
+USD→EUR-Umrechnung ist eine feste Konstante nur für die Einkaufs-Anzeige.
 
-**Empfehlung / Standard:** jede Kategorie ohne eigenen Preis läuft über
-```
-empfohlener Preis (€) = Einkaufskosten (USD) × usd_to_eur × target_margin
-```
-`target_margin` + `usd_to_eur` stehen global in `billing_settings` (Admin →
-Abrechnung → Globale Einstellungen). So läufst du nie unter Einkauf: der Editor
-zeigt Einkauf + Empfehlung, ein Preis unter Einkauf wird rot markiert.
+**Preislisten (`price_tiers`):** benannte Listen (Standard/Partner/…). Jede
+Position = ein **frei eingetragener €-Stückpreis** (`{mode:'unit', unitPriceEur}`)
+— auch die KI-Positionen (€/Vorgang). Daneben stehen Abrechnungsart
+(transaktionell/monatlich) und der **Einkauf** (bei KI-Positionen der Ø aus dem
+echten Verbrauch); ein Preis unter Einkauf wird rot markiert.
 
-**Preisstaffeln (`price_tiers`, Preiskonditionen):** benannte Konditionssätze
-(z. B. Standard/Partner/Enterprise). Pro Kategorie ein **Override**:
-- Zähl-Kategorien (Telefonie/WhatsApp/E-Mail/Nummern): fester €-**Stückpreis**
-  (`{mode:'unit', unitPriceEur}`).
-- Token-Kategorien (KI/Embeddings/Transkription): **Aufschlag-Faktor**
-  (`{mode:'markup', factor}`), weil dort kein sinnvoller Stückpreis existiert.
-- Kategorie ohne Override ⇒ Empfehlung (s. o.).
+**Leeres Feld = Weitergabe zum Selbstkostenpreis** (Einkauf) — eine unbepreiste
+Position kann nie unbemerkt unter Einkauf abrechnen. Einträge der kurzlebigen
+Faktor-UI (`{mode:'markup'}`) werden beim Laden **gestrippt** (= unbepreist) —
+Anzeige, Abrechnung und Speichern sind damit garantiert konsistent (Live-DB
+enthielt am 2026-07-23 keine solchen Einträge).
 
-**Pakete (`packages`):** bündeln Preisstaffel + Setup-Gebühr + Grundgebühr
+**Pakete (`packages`):** bündeln Preisliste + Setup-Gebühr + Grundgebühr
 (monatlich/jährlich) + **je Kanal-Typ** eine Fee und ein Kontingent. Wiederkehrende
 Fee = Grundgebühr + Σ (Kontingent × Kanal-Fee).
 
 **Zuweisung (`org_subscriptions`):** ein Paket pro Kunde (unique `org_id`), mit
-Laufzeit (monatlich/jährlich), optionalem **Preisstaffel-Override** (bessere
-Konditionen) und optionalem Setup-Override. Beim Zuweisen werden die Paket-
-Kontingente in `org_channel_limits` (0017) geschrieben → bestehende Durchsetzung
-gilt unverändert.
+Laufzeit (monatlich/jährlich), optionaler **Preisliste** (bessere Konditionen)
+und optionalem Setup-Override. Beim Zuweisen werden die Paket-Kontingente in
+`org_channel_limits` (0017) geschrieben → bestehende Durchsetzung gilt unverändert.
 
 **Kombinierte Monatsrechnung** (Kunde + Admin): Grundgebühr + Kanal-Fees +
-Verbrauch (mit Staffel-Preisen); Setup einmalig im Startmonat der Subscription.
-Jährliche Laufzeit wird in der Monatssicht als ÷12 („anteilig") gezeigt.
+Verbrauch (mit Preislisten-Preisen); Setup einmalig im Startmonat der
+Subscription. Jährliche Laufzeit wird in der Monatssicht als ÷12 („anteilig")
+gezeigt.
 
-- Alle Zahlen ohne aktive Subscription: reiner Verbrauch zur Empfehlung
-  (target_margin) — abwärtskompatibel zu 0021.
+- Ohne aktive Subscription/Preise: reiner Verbrauch zum Selbstkostenpreis.
 - Die Einkaufsraten in `billing.ts` (`VOICE_USD_PER_MINUTE`, …) sind **Annahmen
   (Listenpreise)** — vor der ersten echten Rechnung gegen die Verträge prüfen.
 - Anthropic/OpenAI-Tokenpreise stehen separat in
   [`packages/ai/src/cost.ts`](../packages/ai/src/cost.ts) (gemessen → `ai_runs`).
 - **Rufnummern (0023):** getrennt nach **Mobil** (`number_type='mobile'`) und
   **Festnetz** (`local` + `national`). Die monatlichen Einkaufskosten je Typ sind
-  admin-editierbar (Admin → Abrechnung → Globale Einstellungen, in €). Verkaufs-
-  preis je Typ optional über die Preisstaffel (`numbers_mobile` /
-  `numbers_landline`), sonst Empfehlung (Kosten × Ziel-Marge). Gezählt werden
-  provisionierte Nummern aus `phone_numbers` (WhatsApp-Nummern zählen hier nicht
-  mehr mit — separat behandelbar).
+  admin-editierbar (Admin → Preise & Pakete → Einkaufspreise, in €); Verkaufspreis
+  je Typ über die Preisliste, sonst Selbstkosten. Gezählt werden provisionierte
+  Nummern aus `phone_numbers` (WhatsApp-Nummern zählen hier nicht mit —
+  separat behandelbar).
 - **Bewusste v1-Nuance:** die Verbrauchs-Kategorien „Rufnummern" (monatliche Miete
   als Durchleitung) und die Paket-Kanal-Fee (z. B. „Telefonie") erscheinen
   getrennt und werden NICHT gebündelt. Das ist ein legitimes Reseller-Modell
   (Kanal-/Anschlussgebühr + Nummern-Durchleitung), kann aber auf Wunsch
   zusammengelegt werden (Nummern-Zeilen unterdrücken, sobald ein Paket aktiv ist).
+- `billing_settings.markup_factor`/`usd_to_eur`/`target_margin` (0021/0022)
+  bleiben als ungenutzte Spalten stehen (kein Cleanup-Zwang).
 
-Verwaltung im UI: **Admin → Preise & Pakete** (Preisstaffeln + Pakete),
-**Admin → Abrechnung** (Übersicht + globale Einstellungen + je Kunde Rechnung &
+Verwaltung im UI: **Admin → Preise & Pakete** (eine Seite: Einkaufspreise,
+Preislisten, Pakete), **Admin → Abrechnung** (Übersicht + je Kunde Rechnung &
 Paket-Zuweisung).
 
 ## Sichtbarkeit / DSGVO

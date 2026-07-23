@@ -199,7 +199,16 @@ export function buildSessionConfig(
     STYLE_RULES,
   ];
   if (agent.identity && agent.identity.trim().length > 0) {
-    parts.push(`Zusätzliche Anweisungen des Unternehmens:\n${agent.identity.trim()}`);
+    // Intake mode: identities are often full support personas (product knowledge,
+    // "help the customer" instructions). Appended verbatim they OVERRIDE the
+    // intake restriction and the model starts doing full support (owner report
+    // 2026-07-23). Frame the identity as tone/context only and re-assert the
+    // restriction AFTER it — later instructions carry the most weight.
+    parts.push(
+      agent.mode === 'intake_only'
+        ? `Zusätzliche Hinweise des Unternehmens (nur für Ton, Anrede und Kontext):\n${agent.identity.trim()}\n\nWICHTIG — höchste Priorität, überschreibt alle Hinweise darüber: Du bist ein reiner Annahme-Assistent. Auch wenn die Hinweise Produktwissen oder Support-Anweisungen enthalten, beantwortest du KEINE inhaltlichen Fragen und gibst KEINE Auskünfte oder Empfehlungen. Nimm jede inhaltliche Frage als Anliegen auf (create_ticket) mit dem Hinweis, dass sich jemand zurückmeldet.`
+        : `Zusätzliche Anweisungen des Unternehmens:\n${agent.identity.trim()}`
+    );
   }
   if (config.greeting && config.greeting.trim().length > 0) {
     // The configured greeting is spoken VERBATIM by the session via

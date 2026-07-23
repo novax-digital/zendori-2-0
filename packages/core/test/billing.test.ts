@@ -13,8 +13,6 @@ import {
   packageYearlyTotalEur,
   priceEur,
   priceTierPricingSchema,
-  recommendedPriceEur,
-  recommendedUnitPriceEur,
   unitCostEur,
   voiceMinutesCostUsd,
   whatsappCostUsd,
@@ -23,7 +21,6 @@ import {
 
 const CTX: PricingContext = {
   usdToEur: 1,
-  targetMargin: 3,
   numberCostMobileEur: 4,
   numberCostLandlineEur: 2,
 };
@@ -73,32 +70,32 @@ describe('priceEur', () => {
   });
 });
 
-describe('categoryPriceEur (tier pricing)', () => {
-  it('no rule → recommendation (cost × usd_to_eur × targetMargin)', () => {
-    // 2 USD cost, ctx {1, 3} → 6 €
-    expect(categoryPriceEur(10, 2, undefined, CTX)).toBe(6);
-    expect(recommendedPriceEur(2, CTX)).toBe(6);
+describe('categoryPriceEur (price-list pricing)', () => {
+  it('no rule → pass-through at cost (Selbstkostenpreis)', () => {
+    // 2 USD cost, fx 1 → 2 € (never a hidden markup, never below cost)
+    expect(categoryPriceEur(10, 2, undefined, CTX)).toBe(2);
   });
 
   it('unit rule ignores cost and multiplies quantity', () => {
     expect(categoryPriceEur(10, 999, { mode: 'unit', unitPriceEur: 0.05 }, CTX)).toBe(0.5);
   });
 
-  it('markup rule multiplies cost by factor (via usd_to_eur)', () => {
-    expect(categoryPriceEur(0, 4, { mode: 'markup', factor: 2 }, CTX)).toBe(8);
+  it('legacy markup entries are stripped at parse time (⇒ pass-through)', () => {
+    // rows from the short-lived factor UI must not survive into pricing
+    const parsed = priceTierPricingSchema.parse({
+      ai: { mode: 'markup', factor: 3 },
+      voice: { mode: 'unit', unitPriceEur: 0.05 },
+    });
+    expect(parsed.ai).toBeUndefined();
+    expect(parsed.voice).toEqual({ mode: 'unit', unitPriceEur: 0.05 });
+    // stripped rule ⇒ same as no rule: pass-through at cost
+    expect(categoryPriceEur(10, 4, parsed.ai, CTX)).toBe(4);
   });
 
-  it('recommendedUnitPriceEur uses the per-unit cost card', () => {
-    // voice cost/min × usd_to_eur × margin
-    expect(recommendedUnitPriceEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1 * 3, 10);
-  });
-
-  it('number costs come from the editable EUR context, not the USD card', () => {
+  it('unit cost card: static categories via fx, numbers from the EUR context', () => {
+    expect(unitCostEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1, 10);
     expect(unitCostEur('numbers_mobile', CTX)).toBe(4);
     expect(unitCostEur('numbers_landline', CTX)).toBe(2);
-    // recommendation = cost × target margin
-    expect(recommendedUnitPriceEur('numbers_mobile', CTX)).toBe(12);
-    expect(recommendedUnitPriceEur('numbers_landline', CTX)).toBe(6);
   });
 });
 
@@ -122,11 +119,17 @@ describe('package fee totals', () => {
 });
 
 describe('pricing/package zod schemas', () => {
-  it('accepts a valid tier pricing map and rejects a bad mode', () => {
+  it('accepts a valid pricing map and strips (not rejects) invalid entries', () => {
     expect(
       priceTierPricingSchema.safeParse({ voice: { mode: 'unit', unitPriceEur: 0.05 } }).success
     ).toBe(true);
-    expect(priceTierPricingSchema.safeParse({ voice: { mode: 'bogus', x: 1 } }).success).toBe(false);
+    // invalid/legacy entries are stripped per key so the rest keeps working
+    const mixed = priceTierPricingSchema.parse({
+      voice: { mode: 'bogus', x: 1 },
+      email: { mode: 'unit', unitPriceEur: 0.01 },
+    });
+    expect(mixed.voice).toBeUndefined();
+    expect(mixed.email).toEqual({ mode: 'unit', unitPriceEur: 0.01 });
   });
 
   it('accepts a valid channels map and rejects a negative fee', () => {

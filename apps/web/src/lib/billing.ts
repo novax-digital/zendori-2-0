@@ -4,7 +4,6 @@ import {
   BILLING_CATEGORY_UNIT,
   DEFAULT_NUMBER_COST_LANDLINE_EUR,
   DEFAULT_NUMBER_COST_MOBILE_EUR,
-  DEFAULT_TARGET_MARGIN,
   DEFAULT_USD_TO_EUR,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
@@ -66,7 +65,8 @@ type RollupRow = { category: string; quantity: number | string; cost_usd: number
 
 /**
  * Aggregate one org's usage for [fromIso, toIso) and price it through `tier`
- * (per-category overrides) with `ctx` (usd_to_eur + target margin fallback).
+ * (free EUR unit price per position; unpriced position ⇒ pass-through at cost,
+ * displayed in EUR via the fixed internal conversion in `ctx`).
  */
 export async function getOrgBilling(
   admin: SupabaseClient,
@@ -178,7 +178,6 @@ export interface BillingCatalog {
 
 const FALLBACK_CONTEXT: PricingContext = {
   usdToEur: DEFAULT_USD_TO_EUR,
-  targetMargin: DEFAULT_TARGET_MARGIN,
   numberCostMobileEur: DEFAULT_NUMBER_COST_MOBILE_EUR,
   numberCostLandlineEur: DEFAULT_NUMBER_COST_LANDLINE_EUR,
 };
@@ -189,17 +188,17 @@ const posNum = (value: unknown, fallback: number): number => {
 };
 
 async function loadContext(admin: SupabaseClient): Promise<PricingContext> {
+  // usd_to_eur is a fixed internal constant now (owner: no FX editing in the
+  // UI); only the number purchase costs are read from billing_settings.
   const { data, error } = await admin
     .from('billing_settings')
-    .select('usd_to_eur, target_margin, number_cost_mobile_eur, number_cost_landline_eur')
+    .select('number_cost_mobile_eur, number_cost_landline_eur')
     .is('org_id', null)
     .maybeSingle();
   if (error || !data) return FALLBACK_CONTEXT;
   const row = data as Record<string, number | string>;
-  const usdToEur = Number(row.usd_to_eur);
   return {
-    usdToEur: Number.isFinite(usdToEur) && usdToEur > 0 ? usdToEur : DEFAULT_USD_TO_EUR,
-    targetMargin: posNum(row.target_margin, DEFAULT_TARGET_MARGIN),
+    usdToEur: DEFAULT_USD_TO_EUR,
     numberCostMobileEur: posNum(row.number_cost_mobile_eur, DEFAULT_NUMBER_COST_MOBILE_EUR),
     numberCostLandlineEur: posNum(row.number_cost_landline_eur, DEFAULT_NUMBER_COST_LANDLINE_EUR),
   };

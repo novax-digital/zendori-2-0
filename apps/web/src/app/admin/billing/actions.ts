@@ -32,50 +32,7 @@ function orgBillingUrl(orgId: string, message?: { error?: string; notice?: strin
   return qs ? `/admin/billing/${orgId}?${qs}` : `/admin/billing/${orgId}`;
 }
 
-// --- global defaults: FX + target margin -------------------------------------
-
-const globalSchema = z.object({
-  targetMargin: z.number().min(0).max(1000),
-  usdToEur: z.number().gt(0).max(100),
-  numberCostMobileEur: z.number().min(0).max(100_000),
-  numberCostLandlineEur: z.number().min(0).max(100_000),
-});
-
-/** Update the global FX, target margin and per-type number costs (seed row). */
-export async function updateGlobalPricing(formData: FormData): Promise<void> {
-  const { userId } = await requirePlatformAdmin();
-
-  const parsed = globalSchema.safeParse({
-    targetMargin: parseDecimal(textField(formData.get('targetMargin'))),
-    usdToEur: parseDecimal(textField(formData.get('usdToEur'))),
-    numberCostMobileEur: parseDecimal(textField(formData.get('numberCostMobileEur')) || '0'),
-    numberCostLandlineEur: parseDecimal(textField(formData.get('numberCostLandlineEur')) || '0'),
-  });
-  if (!parsed.success) {
-    redirect(billingUrl({ error: 'Ziel-Marge (≥ 0), Wechselkurs (> 0) und Nummern-Kosten (≥ 0) müssen gültige Zahlen sein.' }));
-  }
-
-  const admin = createSupabaseAdminClient();
-  if (!admin) redirect(billingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
-
-  const { error } = await admin
-    .from('billing_settings')
-    .update({
-      target_margin: parsed.data.targetMargin,
-      usd_to_eur: parsed.data.usdToEur,
-      number_cost_mobile_eur: parsed.data.numberCostMobileEur,
-      number_cost_landline_eur: parsed.data.numberCostLandlineEur,
-      updated_at: new Date().toISOString(),
-      updated_by: userId,
-    })
-    .is('org_id', null);
-  if (error) redirect(billingUrl({ error: 'Einstellungen konnten nicht gespeichert werden.' }));
-
-  revalidatePath('/admin/billing');
-  redirect(billingUrl({ notice: 'Globale Einstellungen gespeichert.' }));
-}
-
-// --- assign a package/tier to a customer -------------------------------------
+// --- assign a package/price list to a customer -------------------------------
 
 const assignSchema = z.object({
   orgId: z.uuid(),

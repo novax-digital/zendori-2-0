@@ -55,6 +55,12 @@ const SETUP_TIMEOUT_MS = 15_000;
  * (firing mid-notice would drop the greeting — see greetPending).
  */
 const GREET_FALLBACK_MS = 6_000;
+/**
+ * Short breather between the §201 notice and the greeting (owner feedback
+ * 2026-07-23: notice and greeting butted up against each other). Applied only
+ * on the response.done path — the fallback path has already waited longer.
+ */
+const NOTICE_GREETING_PAUSE_MS = 1_200;
 const DRAIN_FAREWELL_MS = 4_000;
 const DRAIN_MAX_WAIT_MS = 10_000;
 /**
@@ -146,6 +152,8 @@ export class CallSession {
    * leaving dead air until the caller speaks.
    */
   private greetPending = false;
+  /** Breather between §201 notice and greeting (NOTICE_GREETING_PAUSE_MS). */
+  private noticePauseTimer: ReturnType<typeof setTimeout> | null = null;
   /** Safety-net timer that fires the deferred greeting if the notice's response.done never arrives. */
   private greetFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   /**
@@ -415,7 +423,7 @@ export class CallSession {
    * instead of leaving it armed — a stuck flag would re-greet mid-call after a
    * rejoin and swallow that turn's tool calls (audit 2026-07-21).
    */
-  private fireDeferredGreeting(): void {
+  private fireDeferredGreeting(pauseMs = 0): void {
     if (!this.greetPending) return;
     this.greetPending = false;
     if (this.greetFallbackTimer) {
@@ -423,6 +431,14 @@ export class CallSession {
       this.greetFallbackTimer = null;
     }
     if (this.state !== 'active') return;
+    if (pauseMs > 0) {
+      // Short breather after the §201 notice (owner feedback 2026-07-23) —
+      // only on the response.done path; the fallback already waited longer.
+      this.noticePauseTimer = setTimeout(() => {
+        if (this.state === 'active') this.sendGreeting();
+      }, pauseMs);
+      return;
+    }
     this.sendGreeting();
   }
 
@@ -448,9 +464,9 @@ export class CallSession {
       this.sawAudioDelta = false;
     }
 
-    // 1a. The §201 notice just finished — now greet, back-to-back, no dead air.
+    // 1a. The §201 notice just finished — greet after a short natural pause.
     if (this.greetPending) {
-      this.fireDeferredGreeting();
+      this.fireDeferredGreeting(NOTICE_GREETING_PAUSE_MS);
       // The notice carries no tool calls — but a rejoin edge can route a REAL
       // turn's response.done here; never swallow its tool calls.
       if (this.pendingToolCalls.length === 0) return;
@@ -872,6 +888,7 @@ export class CallSession {
     if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);
     if (this.setupTimer) clearTimeout(this.setupTimer);
     if (this.greetFallbackTimer) clearTimeout(this.greetFallbackTimer);
+    if (this.noticePauseTimer) clearTimeout(this.noticePauseTimer);
     if (this.responseCreateFallbackTimer) clearTimeout(this.responseCreateFallbackTimer);
     if (this.endCallTimer) clearTimeout(this.endCallTimer);
     if (this.toolFillerTimer) clearTimeout(this.toolFillerTimer);

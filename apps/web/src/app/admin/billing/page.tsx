@@ -1,8 +1,7 @@
 // Platform-admin billing overview: every customer's monthly total (usage +
 // package fees), our cost, and the margin. Cross-org reads go through the service
-// role (requirePlatformAdmin gate). Global FX + target margin are edited here;
-// price tiers/packages live under /admin/pricing, per-customer assignment on the
-// drill-down.
+// role (requirePlatformAdmin gate). Prices/packages live under /admin/pricing,
+// per-customer assignment on the drill-down.
 import Link from 'next/link';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -14,7 +13,6 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
-import { updateGlobalPricing } from './actions';
 
 type OrgRow = { id: string; name: string };
 
@@ -74,9 +72,8 @@ export default async function AdminBillingPage({
         <h1>Abrechnung</h1>
         <p>
           Monatssumme aller Kunden (Verbrauch + Paketgebühren). „Kosten" = unser Einkauf, „Preis" =
-          Kundenbetrag. Preise & Pakete verwaltest du unter{' '}
-          <Link href="/admin/pricing/tiers">Preisstaffeln</Link> und{' '}
-          <Link href="/admin/pricing/packages">Pakete</Link>.
+          Kundenbetrag. Preislisten und Pakete verwaltest du unter{' '}
+          <Link href="/admin/pricing">Preise & Pakete</Link>.
         </p>
       </div>
 
@@ -144,62 +141,6 @@ export default async function AdminBillingPage({
         )}
       </div>
 
-      <div className="panel">
-        <h2>Globale Einstellungen</h2>
-        <p className="help">
-          Ziel-Marge = empfohlener Aufschlag auf den Einkauf; gilt als Standard für jede Kategorie
-          ohne eigenen Preis in der Preisstaffel. Wechselkurs rechnet unsere USD-Einkaufskosten in
-          Euro um. Die Rufnummern-Kosten sind unser monatlicher Einkauf je Nummer (Mobil bzw.
-          Festnetz).
-        </p>
-        <form className="stack" action={updateGlobalPricing} style={{ maxWidth: '22rem' }}>
-          <div>
-            <label htmlFor="targetMargin">Ziel-Marge (Faktor)</label>
-            <input
-              id="targetMargin"
-              name="targetMargin"
-              type="text"
-              inputMode="decimal"
-              required
-              defaultValue={String(catalog.ctx.targetMargin)}
-            />
-          </div>
-          <div>
-            <label htmlFor="usdToEur">Wechselkurs USD → EUR</label>
-            <input
-              id="usdToEur"
-              name="usdToEur"
-              type="text"
-              inputMode="decimal"
-              required
-              defaultValue={String(catalog.ctx.usdToEur)}
-            />
-          </div>
-          <div>
-            <label htmlFor="numberCostMobileEur">Rufnummer Mobil — Kosten/Monat (€)</label>
-            <input
-              id="numberCostMobileEur"
-              name="numberCostMobileEur"
-              type="text"
-              inputMode="decimal"
-              required
-              defaultValue={String(catalog.ctx.numberCostMobileEur)}
-            />
-          </div>
-          <div>
-            <label htmlFor="numberCostLandlineEur">Rufnummer Festnetz — Kosten/Monat (€)</label>
-            <input
-              id="numberCostLandlineEur"
-              name="numberCostLandlineEur"
-              type="text"
-              inputMode="decimal"
-              required
-              defaultValue={String(catalog.ctx.numberCostLandlineEur)}
-            />
-          </div>
-          <button className="primary" type="submit">Speichern</button>
-        </form>
-      </div>
     </div>
   );
 }

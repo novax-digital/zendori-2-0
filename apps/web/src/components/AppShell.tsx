@@ -393,7 +393,7 @@ function Sidebar() {
               <span className="app-nav-label">Abrechnung</span>
             </Link>
             <Link
-              href="/admin/pricing/tiers"
+              href="/admin/pricing"
               className={`app-nav-item${pathname.startsWith('/admin/pricing') ? ' app-nav-item--active' : ''}`}
               title="Preise & Pakete"
               aria-current={pathname.startsWith('/admin/pricing') ? 'page' : undefined}

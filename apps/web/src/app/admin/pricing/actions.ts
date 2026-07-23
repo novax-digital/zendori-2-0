@@ -4,9 +4,8 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import {
-  MARKUP_PRICED_CATEGORIES,
+  BILLING_CATEGORY_ORDER,
   PACKAGE_CHANNEL_KINDS,
-  UNIT_PRICED_CATEGORIES,
   packageChannelsSchema,
   priceTierPricingSchema,
   type CategoryPricingRule,
@@ -23,94 +22,120 @@ function parseDecimal(value: string): number {
   return Number(value.replace(',', '.'));
 }
 
-function tiersUrl(message?: { error?: string; notice?: string }): string {
+function pricingUrl(message?: { error?: string; notice?: string }): string {
   const params = new URLSearchParams();
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   const qs = params.toString();
-  return qs ? `/admin/pricing/tiers?${qs}` : '/admin/pricing/tiers';
+  return qs ? `/admin/pricing?${qs}` : '/admin/pricing';
 }
 
-function packagesUrl(message?: { error?: string; notice?: string }): string {
-  const params = new URLSearchParams();
-  if (message?.error) params.set('error', message.error);
-  if (message?.notice) params.set('notice', message.notice);
-  const qs = params.toString();
-  return qs ? `/admin/pricing/packages?${qs}` : '/admin/pricing/packages';
-}
+// --- purchase costs (numbers) ------------------------------------------------
 
-// --- price tiers -------------------------------------------------------------
+const purchaseSchema = z.object({
+  numberCostMobileEur: z.number().min(0).max(100_000),
+  numberCostLandlineEur: z.number().min(0).max(100_000),
+});
 
-export async function createTier(formData: FormData): Promise<void> {
+/** Save the editable monthly purchase costs per number type (billing_settings). */
+export async function updatePurchaseCosts(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
-  const name = textField(formData.get('name'));
-  if (name.length < 2 || name.length > 80) {
-    redirect(tiersUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+
+  const parsed = purchaseSchema.safeParse({
+    numberCostMobileEur: parseDecimal(textField(formData.get('numberCostMobileEur')) || '0'),
+    numberCostLandlineEur: parseDecimal(textField(formData.get('numberCostLandlineEur')) || '0'),
+  });
+  if (!parsed.success) {
+    redirect(pricingUrl({ error: 'Nummern-Einkaufspreise müssen Zahlen ≥ 0 sein.' }));
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(tiersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
-  const { error } = await admin.from('price_tiers').insert({ name, updated_by: userId });
-  if (error) redirect(tiersUrl({ error: 'Preisstaffel konnte nicht angelegt werden.' }));
+  const { error } = await admin
+    .from('billing_settings')
+    .update({
+      number_cost_mobile_eur: parsed.data.numberCostMobileEur,
+      number_cost_landline_eur: parsed.data.numberCostLandlineEur,
+      updated_at: new Date().toISOString(),
+      updated_by: userId,
+    })
+    .is('org_id', null);
+  if (error) redirect(pricingUrl({ error: 'Einkaufspreise konnten nicht gespeichert werden.' }));
 
-  revalidatePath('/admin/pricing/tiers');
-  redirect(tiersUrl({ notice: `Preisstaffel „${name}" angelegt.` }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: 'Einkaufspreise gespeichert.' }));
 }
 
-const tierIdSchema = z.object({ id: z.uuid() });
+// --- price lists (Preislisten) ----------------------------------------------
 
-/** Save a tier's name and per-category overrides (empty field ⇒ recommendation). */
-export async function updateTier(formData: FormData): Promise<void> {
+export async function createPriceList(formData: FormData): Promise<void> {
+  const { userId } = await requirePlatformAdmin();
+  const name = textField(formData.get('name'));
+  if (name.length < 2 || name.length > 80) {
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+
+  const { error } = await admin.from('price_tiers').insert({ name, updated_by: userId });
+  if (error) redirect(pricingUrl({ error: 'Preisliste konnte nicht angelegt werden.' }));
+
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: `Preisliste „${name}" angelegt.` }));
+}
+
+const idSchema = z.object({ id: z.uuid() });
+
+/** Save a price list: name + one free unit price per position (empty ⇒ Selbstkosten). */
+export async function updatePriceList(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
 
-  const parsed = tierIdSchema.safeParse({ id: textField(formData.get('id')) });
-  if (!parsed.success) redirect(tiersUrl({ error: 'Preisstaffel wurde nicht gefunden.' }));
+  const parsed = idSchema.safeParse({ id: textField(formData.get('id')) });
+  if (!parsed.success) redirect(pricingUrl({ error: 'Preisliste wurde nicht gefunden.' }));
   const { id } = parsed.data;
 
   const name = textField(formData.get('name'));
   if (name.length < 2 || name.length > 80) {
-    redirect(tiersUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
   }
 
   const pricing: Record<string, CategoryPricingRule> = {};
-  for (const category of UNIT_PRICED_CATEGORIES) {
+  for (const category of BILLING_CATEGORY_ORDER) {
     const raw = textField(formData.get(`price_${category}`));
     if (raw === '') continue;
     const value = parseDecimal(raw);
-    if (Number.isFinite(value) && value >= 0) pricing[category] = { mode: 'unit', unitPriceEur: value };
-  }
-  for (const category of MARKUP_PRICED_CATEGORIES) {
-    const raw = textField(formData.get(`markup_${category}`));
-    if (raw === '') continue;
-    const value = parseDecimal(raw);
-    if (Number.isFinite(value) && value >= 0) pricing[category] = { mode: 'markup', factor: value };
+    if (!Number.isFinite(value) || value < 0) {
+      redirect(pricingUrl({ error: 'Preise müssen Zahlen ≥ 0 sein (leer = Selbstkosten).' }));
+    }
+    pricing[category] = { mode: 'unit', unitPriceEur: value };
   }
   const validated = priceTierPricingSchema.safeParse(pricing);
-  if (!validated.success) redirect(tiersUrl({ error: 'Ungültige Preisangaben.' }));
+  if (!validated.success) redirect(pricingUrl({ error: 'Ungültige Preisangaben.' }));
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(tiersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { error } = await admin
     .from('price_tiers')
     .update({ name, pricing: validated.data, updated_at: new Date().toISOString(), updated_by: userId })
     .eq('id', id);
-  if (error) redirect(tiersUrl({ error: 'Preisstaffel konnte nicht gespeichert werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Preisliste konnte nicht gespeichert werden.' }));
 
-  revalidatePath('/admin/pricing/tiers');
-  redirect(tiersUrl({ notice: 'Preisstaffel gespeichert.' }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: 'Preisliste gespeichert.' }));
 }
 
-export async function deleteTier(formData: FormData): Promise<void> {
+export async function deletePriceList(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
 
-  const parsed = tierIdSchema.safeParse({ id: textField(formData.get('id')) });
-  if (!parsed.success) redirect(tiersUrl({ error: 'Preisstaffel wurde nicht gefunden.' }));
+  const parsed = idSchema.safeParse({ id: textField(formData.get('id')) });
+  if (!parsed.success) redirect(pricingUrl({ error: 'Preisliste wurde nicht gefunden.' }));
   const { id } = parsed.data;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(tiersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { data: tier } = await admin
     .from('price_tiers')
@@ -118,14 +143,14 @@ export async function deleteTier(formData: FormData): Promise<void> {
     .eq('id', id)
     .maybeSingle();
   if ((tier as { is_default?: boolean } | null)?.is_default) {
-    redirect(tiersUrl({ error: 'Die Standard-Staffel kann nicht gelöscht werden.' }));
+    redirect(pricingUrl({ error: 'Die Standard-Preisliste kann nicht gelöscht werden.' }));
   }
 
   const { error } = await admin.from('price_tiers').delete().eq('id', id);
-  if (error) redirect(tiersUrl({ error: 'Preisstaffel konnte nicht gelöscht werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Preisliste konnte nicht gelöscht werden.' }));
 
-  revalidatePath('/admin/pricing/tiers');
-  redirect(tiersUrl({ notice: 'Preisstaffel gelöscht.' }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: 'Preisliste gelöscht.' }));
 }
 
 // --- packages ----------------------------------------------------------------
@@ -134,17 +159,17 @@ export async function createPackage(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
   const name = textField(formData.get('name'));
   if (name.length < 2 || name.length > 80) {
-    redirect(packagesUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(packagesUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { error } = await admin.from('packages').insert({ name, updated_by: userId });
-  if (error) redirect(packagesUrl({ error: 'Paket konnte nicht angelegt werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Paket konnte nicht angelegt werden.' }));
 
-  revalidatePath('/admin/pricing/packages');
-  redirect(packagesUrl({ notice: `Paket „${name}" angelegt.` }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: `Paket „${name}" angelegt.` }));
 }
 
 const packageSchema = z.object({
@@ -167,11 +192,11 @@ export async function updatePackage(formData: FormData): Promise<void> {
     baseFeeYearlyEur: parseDecimal(textField(formData.get('baseFeeYearlyEur')) || '0'),
     isActive: textField(formData.get('isActive')) === 'on',
   });
-  if (!parsed.success) redirect(packagesUrl({ error: 'Ungültige Paket-Angaben.' }));
+  if (!parsed.success) redirect(pricingUrl({ error: 'Ungültige Paket-Angaben.' }));
 
   const name = textField(formData.get('name'));
   if (name.length < 2 || name.length > 80) {
-    redirect(packagesUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
   }
 
   const channels: Record<string, PackageChannelTerm> = {};
@@ -187,10 +212,10 @@ export async function updatePackage(formData: FormData): Promise<void> {
     };
   }
   const validatedChannels = packageChannelsSchema.safeParse(channels);
-  if (!validatedChannels.success) redirect(packagesUrl({ error: 'Ungültige Kanal-Angaben.' }));
+  if (!validatedChannels.success) redirect(pricingUrl({ error: 'Ungültige Kanal-Angaben.' }));
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(packagesUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { error } = await admin
     .from('packages')
@@ -206,26 +231,24 @@ export async function updatePackage(formData: FormData): Promise<void> {
       updated_by: userId,
     })
     .eq('id', parsed.data.id);
-  if (error) redirect(packagesUrl({ error: 'Paket konnte nicht gespeichert werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Paket konnte nicht gespeichert werden.' }));
 
-  revalidatePath('/admin/pricing/packages');
-  redirect(packagesUrl({ notice: 'Paket gespeichert.' }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: 'Paket gespeichert.' }));
 }
-
-const packageIdSchema = z.object({ id: z.uuid() });
 
 export async function deletePackage(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
 
-  const parsed = packageIdSchema.safeParse({ id: textField(formData.get('id')) });
-  if (!parsed.success) redirect(packagesUrl({ error: 'Paket wurde nicht gefunden.' }));
+  const parsed = idSchema.safeParse({ id: textField(formData.get('id')) });
+  if (!parsed.success) redirect(pricingUrl({ error: 'Paket wurde nicht gefunden.' }));
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(packagesUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { error } = await admin.from('packages').delete().eq('id', parsed.data.id);
-  if (error) redirect(packagesUrl({ error: 'Paket konnte nicht gelöscht werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Paket konnte nicht gelöscht werden.' }));
 
-  revalidatePath('/admin/pricing/packages');
-  redirect(packagesUrl({ notice: 'Paket gelöscht.' }));
+  revalidatePath('/admin/pricing');
+  redirect(pricingUrl({ notice: 'Paket gelöscht.' }));
 }

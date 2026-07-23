@@ -196,8 +196,8 @@ export default async function AdminOrgBillingPage({
       <div className="panel">
         <h2>Paket zuweisen</h2>
         <p className="help">
-          Weist dem Kunden ein Paket zu (setzt dessen Kanal-Kontingente). Die Preisstaffel bestimmt
-          die Verbrauchspreise; optional eine andere Staffel für bessere Konditionen wählen.
+          Weist dem Kunden ein Paket zu (setzt dessen Kanal-Kontingente). Die Preisliste bestimmt
+          die Verbrauchspreise; optional eine andere Liste für bessere Konditionen wählen.
         </p>
         <form className="stack" action={assignPackage} style={{ maxWidth: '26rem' }}>
           <input type="hidden" name="orgId" value={orgId} />
@@ -211,7 +211,7 @@ export default async function AdminOrgBillingPage({
             </select>
           </div>
           <div>
-            <label htmlFor="priceTierId">Preisstaffel-Override (optional)</label>
+            <label htmlFor="priceTierId">Preisliste (optional, bessere Konditionen)</label>
             <select id="priceTierId" name="priceTierId" defaultValue={sub?.priceTierId ?? ''}>
               <option value="">— aus Paket übernehmen —</option>
               {tiers.map((t) => (
