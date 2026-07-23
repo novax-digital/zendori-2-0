@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import type { VoiceChannelConfig } from '@zendori/channels';
-import { CallSession } from '../src/voice/call-session.js';
+import { CallSession, TICKET_FILLER_TEXTS, TOOL_FILLER_TEXTS } from '../src/voice/call-session.js';
 
 // Drives a real CallSession against an in-process mock xAI WebSocket server:
 // scripted event sequences verify the greeting handshake, the CUMULATIVE
@@ -27,7 +27,9 @@ interface InsertedRow {
 }
 
 /** Chainable thenable fake for the small supabase surface the session uses. */
-function makeFakeSupabase(seed: { maybeSingle?: Record<string, unknown> } = {}) {
+function makeFakeSupabase(
+  seed: { maybeSingle?: Record<string, unknown>; delayMs?: Record<string, number> } = {}
+) {
   const inserts: InsertedRow[] = [];
   const updates: { table: string; patch: Record<string, unknown> }[] = [];
   let insertSeq = 0;
@@ -46,6 +48,12 @@ function makeFakeSupabase(seed: { maybeSingle?: Record<string, unknown> } = {}) 
               : op.kind === 'update'
                 ? { data: [{ id: `${table}-row` }], error: null }
                 : { data: [], error: null };
+          // Optional per-table latency (slow-tool tests: makes a tool batch
+          // genuinely outlast the filler threshold).
+          const delay = seed.delayMs?.[table];
+          if (delay) {
+            return (resolve: (v: unknown) => void) => setTimeout(() => resolve(result), delay);
+          }
           return (resolve: (v: unknown) => void) => resolve(result);
         }
         if (prop === 'maybeSingle' || prop === 'single') {
@@ -151,7 +159,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function startSession(fake: ReturnType<typeof makeFakeSupabase>): CallSession {
+function startSession(
+  fake: ReturnType<typeof makeFakeSupabase>,
+  overrides: { toolFillerDelayMs?: number; greetFallbackMs?: number } = {}
+): CallSession {
   const session = new CallSession({
     supabase: fake.client,
     logger: silentLogger,
@@ -169,6 +180,7 @@ function startSession(fake: ReturnType<typeof makeFakeSupabase>): CallSession {
     wsUrl: `ws://127.0.0.1:${port}`,
     // Tests must not sit through the real playback-drain grace before hangup.
     hangupGraceMs: 30,
+    ...overrides,
   });
   session.start();
   return session;
@@ -335,6 +347,107 @@ describe('CallSession protocol', () => {
     // give any stray extra frame a beat to arrive, then assert exactly one
     await new Promise((r) => setTimeout(r, 100));
     expect(received.filter((e) => e.type === 'response.create').length).toBe(before + 1);
+  });
+
+  // --- latency filler (owner feedback 2026-07-23) ---------------------------------
+
+  const countForceMessages = () =>
+    received.filter(
+      (e) =>
+        e.type === 'conversation.item.create' &&
+        (e as { item?: { type?: string } }).item?.type === 'force_message'
+    );
+
+  it('fast tool (< filler threshold): NO filler force_message is spoken', async () => {
+    const fake = makeFakeSupabase();
+    // Real threshold shrunk so the test can prove the timer was CANCELLED:
+    // waiting past it must still produce no filler.
+    startSession(fake, { toolFillerDelayMs: 100 });
+    await completeHandshake();
+    const baseline = received.filter((e) => e.type === 'response.create').length;
+
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-fast',
+      name: 'create_ticket',
+      arguments: JSON.stringify({ subject: 'Rückruf', description: 'Kunde bittet um Rückruf.' }),
+    });
+    serverSend({ type: 'response.done' });
+
+    // The tool resolves immediately: output + the ONE response.create go out …
+    await waitFor(() =>
+      received.find(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'function_call_output'
+      )
+    );
+    await waitFor(() =>
+      received.filter((e) => e.type === 'response.create').length === baseline + 1
+        ? true
+        : undefined
+    );
+    // … and even well past the threshold no filler appears (timer cancelled).
+    await new Promise((r) => setTimeout(r, 250));
+    expect(countForceMessages()).toHaveLength(0);
+    expect(received.filter((e) => e.type === 'response.create')).toHaveLength(baseline + 1);
+  });
+
+  it('slow tool (> filler threshold): exactly ONE filler and still ONE response.create', async () => {
+    // conversations-table latency makes create_ticket outlast the threshold.
+    const fake = makeFakeSupabase({ delayMs: { conversations: 200 } });
+    startSession(fake, { toolFillerDelayMs: 80, greetFallbackMs: 5_000 });
+    await completeHandshake();
+    const baseline = received.filter((e) => e.type === 'response.create').length;
+
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-slow',
+      name: 'create_ticket',
+      arguments: JSON.stringify({ subject: 'Rückruf', description: 'Kunde bittet um Rückruf.' }),
+    });
+    serverSend({ type: 'response.done' });
+
+    // The filler fires while the tool is still running — before any output.
+    // A ticket-only batch uses the recording wording, never the lookup wording.
+    const filler = await waitFor(() => countForceMessages()[0]);
+    const fillerText =
+      (filler as { item: { content: { text?: string }[] } }).item.content[0]?.text ?? '';
+    expect(TICKET_FILLER_TEXTS.includes(fillerText)).toBe(true);
+    expect(TOOL_FILLER_TEXTS.includes(fillerText)).toBe(false);
+    expect(
+      received.find(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'function_call_output'
+      )
+    ).toBeUndefined();
+
+    // Tool resolves → the function_call_output goes out, but the response.create
+    // is DEFERRED (the filler force_message may still be speaking).
+    await waitFor(() =>
+      received.find(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'function_call_output'
+      )
+    );
+    expect(received.filter((e) => e.type === 'response.create')).toHaveLength(baseline);
+
+    // The filler turn completes → the deferred response.create fires.
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.done' });
+    await waitFor(() =>
+      received.filter((e) => e.type === 'response.create').length === baseline + 1
+        ? true
+        : undefined
+    );
+    // Settle, then assert: exactly ONE filler, exactly ONE response.create.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(countForceMessages()).toHaveLength(1);
+    expect(received.filter((e) => e.type === 'response.create')).toHaveLength(baseline + 1);
   });
 
   it('end_call: acknowledges the tool and calls the REST hangup, then finalizes', async () => {

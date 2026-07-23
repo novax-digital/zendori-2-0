@@ -13,6 +13,11 @@ import {
   type FormNotifyJob,
 } from './pipeline/form-notify.js';
 import { remindOverdueHandoffs } from './pipeline/handoff-sla.js';
+import {
+  LEARN_DISTILL_QUEUE,
+  LEARN_DISTILL_RETRY_LIMIT,
+  type LearnDistillJob,
+} from './pipeline/learn.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -22,6 +27,7 @@ export const INDEX_SOURCE_RETRY_LIMIT = 2;
 export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
 const POST_CALL_BATCH = 10;
 const FORM_NOTIFY_BATCH = 20;
+const LEARN_BATCH = 10;
 
 // 1 s per CLAUDE.md §4 ("pg-boss-Poll im Sekundentakt"). Trade-off: 1 Hz means
 // five lightweight index-backed queries per second against Supabase — negligible
@@ -36,6 +42,16 @@ const HUBSPOT_SYNC_BATCH = 20;
 // conversation always has the newest requested_at, so it sits at the front of the
 // window and is never starved by older, already-synced rows.
 const HUBSPOT_SYNC_CANDIDATES = 100;
+
+/**
+ * Missing-table detection for pre-migration schema skew: raw PG reports 42P01,
+ * but PostgREST answers from its schema cache with PGRST205 — both mean "the
+ * migration is not applied yet" and must keep the scan tick silent (a throw
+ * would also starve everything after the failing enqueue, incl. the SLA sweep).
+ */
+function isMissingTable(error: { code?: string }): boolean {
+  return error.code === '42P01' || error.code === 'PGRST205';
+}
 
 export interface ProcessMessageJob {
   messageId: string;
@@ -64,6 +80,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueueDueHubspotSyncs(boss, supabase);
       await enqueueDuePostCalls(boss, supabase);
       await enqueuePendingFormNotifications(boss, supabase);
+      await enqueueLearningCandidates(boss, supabase);
       // 0018 v1.5: internally rate-limited to one sweep per minute.
       await remindOverdueHandoffs(supabase, logger);
     } catch (err) {
@@ -169,7 +186,7 @@ async function enqueuePendingFormNotifications(
     .limit(FORM_NOTIFY_BATCH);
   if (error) {
     // form_notifications does not exist until migration 0019 is applied — stay silent.
-    if ((error as { code?: string }).code === '42P01') return;
+    if (isMissingTable(error as { code?: string })) return;
     throw error;
   }
 
@@ -177,6 +194,29 @@ async function enqueuePendingFormNotifications(
     await boss.send(FORM_NOTIFY_QUEUE, { notificationId: row.id } satisfies FormNotifyJob, {
       singletonKey: row.id,
       retryLimit: FORM_NOTIFY_RETRY_LIMIT,
+      retryBackoff: true,
+    });
+  }
+}
+
+/** Enqueue learning candidates awaiting distillation (learning loop, 0020). */
+async function enqueueLearningCandidates(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('learned_answers')
+    .select('id')
+    .eq('status', 'candidate')
+    .order('created_at', { ascending: true })
+    .limit(LEARN_BATCH);
+  if (error) {
+    // learned_answers does not exist until migration 0020 is applied — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(LEARN_DISTILL_QUEUE, { learnedAnswerId: row.id } satisfies LearnDistillJob, {
+      singletonKey: row.id,
+      retryLimit: LEARN_DISTILL_RETRY_LIMIT,
       retryBackoff: true,
     });
   }
@@ -193,7 +233,7 @@ async function enqueueDuePostCalls(boss: PgBoss, supabase: SupabaseClient): Prom
     .limit(POST_CALL_BATCH);
   if (error) {
     // voice_calls does not exist until migration 0009 is applied — stay silent.
-    if ((error as { code?: string }).code === '42P01') return;
+    if (isMissingTable(error as { code?: string })) return;
     throw error;
   }
 

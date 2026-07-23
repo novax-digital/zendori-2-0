@@ -70,6 +70,20 @@ export const RerankResultSchema = z.object({
 });
 export type RerankResult = z.infer<typeof RerankResultSchema>;
 
+/**
+ * Distilled learning pair (learning loop): a generalized, PII-free Q&A pair
+ * proposed from a human answer. worth_learning=false marks non-reusable
+ * exchanges (smalltalk, one-off case handling) — question/answer are ignored.
+ */
+export const LearnedPairSchema = z.object({
+  worth_learning: z.boolean(),
+  /** Generalized customer question, German, no PII. Empty when not worth learning. */
+  question: z.string().max(500),
+  /** Generalized answer, German, no PII. Empty when not worth learning. */
+  answer: z.string().max(4000),
+});
+export type LearnedPair = z.infer<typeof LearnedPairSchema>;
+
 /** A knowledge-base chunk returned by the match_kb_chunks RPC. */
 export const KbChunkMatchSchema = z.object({
   id: z.string(),

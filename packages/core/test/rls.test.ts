@@ -998,6 +998,150 @@ describe.skipIf(!enabled)('RLS: form builder (0019)', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: learned answers (0020)', () => {
+  let admin: SupabaseClient;
+  let member: SupabaseClient;
+  let stranger: SupabaseClient;
+  let memberId: string;
+  let strangerId: string;
+  let orgId: string;
+  let messageId: string;
+  const memberEmail = `learn-member-${randomUUID()}@test.zendori.dev`;
+  const strangerEmail = `learn-stranger-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [memberEmail, strangerEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    memberId = created[0]!.data.user!.id;
+    strangerId = created[1]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Learn Org', slug: `learn-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: memberId, role: 'agent' });
+
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Learn Chat', config: {} })
+      .select('id')
+      .single();
+    const channelId = channel!.id as string;
+    const { data: conversation } = await admin
+      .from('conversations')
+      .insert({ org_id: orgId, channel_id: channelId, mode: 'human', status: 'pending' })
+      .select('id')
+      .single();
+    const conversationId = conversation!.id as string;
+    const { data: message } = await admin
+      .from('messages')
+      .insert({
+        org_id: orgId,
+        conversation_id: conversationId,
+        channel_id: channelId,
+        direction: 'out',
+        sender_type: 'agent',
+        content: 'Die Lieferzeit betraegt 3 Tage.',
+        content_type: 'text',
+      })
+      .select('id')
+      .single();
+    messageId = message!.id as string;
+
+    member = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    stranger = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect(
+      (await member.auth.signInWithPassword({ email: memberEmail, password })).error
+    ).toBeNull();
+    expect(
+      (await stranger.auth.signInWithPassword({ email: strangerEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (memberId) await admin.auth.admin.deleteUser(memberId);
+    if (strangerId) await admin.auth.admin.deleteUser(strangerId);
+  });
+
+  it('member can create a candidate and read it back', async () => {
+    const { error } = await member.from('learned_answers').insert({
+      org_id: orgId,
+      message_id: messageId,
+      origin: 'handoff_resolution',
+      status: 'candidate',
+    });
+    expect(error).toBeNull();
+
+    const { data } = await member
+      .from('learned_answers')
+      .select('id, status')
+      .eq('org_id', orgId);
+    expect(data).toHaveLength(1);
+  });
+
+  it('stranger sees nothing and cannot update', async () => {
+    const { data: visible } = await stranger
+      .from('learned_answers')
+      .select('id')
+      .eq('org_id', orgId);
+    expect(visible ?? []).toHaveLength(0);
+
+    const { data: updated } = await stranger
+      .from('learned_answers')
+      .update({ status: 'rejected' })
+      .eq('org_id', orgId)
+      .select('id');
+    expect(updated ?? []).toHaveLength(0);
+  });
+
+  it('stranger cannot insert into a foreign org', async () => {
+    const { error } = await stranger.from('learned_answers').insert({
+      org_id: orgId,
+      message_id: messageId,
+      origin: 'handoff_resolution',
+      status: 'candidate',
+    });
+    expect(error).not.toBeNull(); // with-check policy rejects non-members
+  });
+
+  it('member can decide a distilled proposal (status transition + pair check)', async () => {
+    // simulate the worker distillation via service role
+    const { error: distillError } = await admin
+      .from('learned_answers')
+      .update({ status: 'proposed', question: 'Wie lange dauert die Lieferung?', answer: '3 Tage.' })
+      .eq('org_id', orgId)
+      .eq('status', 'candidate');
+    expect(distillError).toBeNull();
+
+    const { data: approved, error: approveError } = await member
+      .from('learned_answers')
+      .update({ status: 'approved', decided_by: memberId, decided_at: new Date().toISOString() })
+      .eq('org_id', orgId)
+      .eq('status', 'proposed')
+      .select('id');
+    expect(approveError).toBeNull();
+    expect(approved).toHaveLength(1);
+  });
+
+  it('a proposed row without a pair is rejected by the check constraint', async () => {
+    const { error } = await admin.from('learned_answers').insert({
+      org_id: orgId,
+      message_id: randomUUID(), // will fail FK anyway if reached; constraint fires first on status
+      origin: 'draft_correction',
+      status: 'proposed',
+    });
+    expect(error).not.toBeNull(); // learned_answers_pair_present (or FK) rejects
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

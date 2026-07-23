@@ -66,3 +66,4 @@ describe('parseQaCsv', () => {
     expect(parseQaCsv('').pairs).toHaveLength(0);
   });
 });
+

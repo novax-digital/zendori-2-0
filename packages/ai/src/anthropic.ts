@@ -13,6 +13,8 @@ import {
   buildClassifyPrompt,
   buildDraftPrompt,
   buildExtractPrompt,
+  buildLearnPrompt,
+  buildLearnUserMessage,
   buildRerankPrompt,
   buildRerankUserMessage,
   buildUserMessage,
@@ -23,10 +25,12 @@ import {
   ClassificationResultSchema,
   DraftResultSchema,
   ExtractionResultSchema,
+  LearnedPairSchema,
   RerankResultSchema,
   type ClassificationResult,
   type DraftResult,
   type ExtractionResult,
+  type LearnedPair,
   type RerankResult,
 } from './schemas.js';
 
@@ -288,6 +292,45 @@ export async function rerank(input: RerankInput): Promise<AiCallResult<RerankRes
   });
   const result = message.parsed_output;
   if (!result) throw new Error('Das Reranking lieferte kein gültiges Ergebnis.');
+  const usage = toUsage(message.usage);
+  return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
+}
+
+export interface LearnInput {
+  companyName: string;
+  /** The customer's (clean) request text. */
+  customerRequest: string;
+  /** The human agent's answer to distill. */
+  humanAnswer: string;
+}
+
+/** Per-input caps for the distillation call (cost bound; the ask is at the top). */
+const LEARN_INPUT_CHARS = 6_000;
+
+/**
+ * Learning-loop distillation (Haiku): generalize a human answer into a PII-free
+ * Q&A pair for the knowledge base, or decline via worth_learning=false.
+ */
+export async function learn(input: LearnInput): Promise<AiCallResult<LearnedPair>> {
+  const client = getClient();
+  const message = await client.messages.parse({
+    model: AI_MODELS.classify,
+    max_tokens: 2048,
+    temperature: 0, // deterministic component — see the classify() note
+    system: buildLearnPrompt({ companyName: input.companyName }),
+    messages: [
+      {
+        role: 'user',
+        content: buildLearnUserMessage(
+          input.customerRequest.slice(0, LEARN_INPUT_CHARS),
+          input.humanAnswer.slice(0, LEARN_INPUT_CHARS)
+        ),
+      },
+    ],
+    output_config: { format: zodOutputFormat(LearnedPairSchema) },
+  });
+  const result = message.parsed_output;
+  if (!result) throw new Error('Die Wissens-Destillation lieferte kein gültiges Ergebnis.');
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
 }

@@ -108,6 +108,18 @@ export default async function KnowledgePage({
   const sources = (sourceData ?? []) as unknown as KbSourceRow[];
   const agentLinks = (linkData ?? []) as { knowledge_base_id: string }[];
 
+  // Learning loop (0020): open proposal count for the entry banner. Defensive —
+  // before the migration the table is missing and the count stays hidden.
+  let learnedProposedCount = 0;
+  {
+    const { count, error: learnedError } = await supabase
+      .from('learned_answers')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('status', 'proposed');
+    if (!learnedError) learnedProposedCount = count ?? 0;
+  }
+
   // Per-source chunk counts (Textbausteine) — cheap HEAD count queries, run in
   // parallel. This is the owner-facing proof of WHAT is actually indexed.
   const chunkCounts = new Map<string, number>();
@@ -401,6 +413,23 @@ export default async function KnowledgePage({
       {/* auto-refresh while any source is still indexing (kb_sources has no
           realtime publication — polling is the migration-free mechanism) */}
       <KbIndexingPoller active={sources.some((s) => s.status === 'pending')} />
+
+      <div className="panel" style={{ marginBottom: '1.5rem' }}>
+        <h2>Gelernte Antworten</h2>
+        <p className="help">
+          Zendori lernt aus Mitarbeiter-Antworten und Entwurfs-Korrekturen — als anonymisierte
+          Frage-Antwort-Vorschläge, die du vor der Übernahme prüfst.{' '}
+          {learnedProposedCount > 0 ? (
+            <strong>
+              {learnedProposedCount}{' '}
+              {learnedProposedCount === 1 ? 'Vorschlag wartet' : 'Vorschläge warten'} auf Prüfung.
+            </strong>
+          ) : (
+            'Aktuell keine offenen Vorschläge.'
+          )}{' '}
+          <Link href={`/settings/knowledge/learned?org=${orgId}`}>Vorschläge prüfen →</Link>
+        </p>
+      </div>
 
       <KbGallery tiles={tiles} panels={panels} newPanel={newPanel} />
     </div>

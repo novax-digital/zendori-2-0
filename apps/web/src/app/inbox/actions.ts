@@ -119,11 +119,11 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase
     .from('conversations')
-    .select('id, channel_id')
+    .select('id, channel_id, mode')
     .eq('org_id', org)
     .eq('id', conversationId)
     .maybeSingle();
-  const conversation = data as { id: string; channel_id: string } | null;
+  const conversation = data as { id: string; channel_id: string; mode: string } | null;
   if (!conversation) {
     return { error: errorText };
   }
@@ -146,6 +146,18 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
     return { error: errorText };
   }
   const messageId = (insertedRow as { id: string }).id;
+
+  // Learning loop: a free-form human reply while the conversation is in human
+  // mode (i.e. after a handoff) is a learning candidate — the bot could not
+  // answer this one. Best-effort, never blocks the reply.
+  if (conversation.mode === 'human') {
+    await captureLearningCandidate(supabase, {
+      org,
+      conversationId,
+      messageId,
+      origin: 'handoff_resolution',
+    });
+  }
 
   // Email/inbound channels: actually deliver the reply via Resend and record the
   // outcome on the message. Every other channel keeps the Phase-1 persist-only
@@ -713,7 +725,43 @@ export async function ingestTestMessage(formData: FormData): Promise<void> {
 
 // --- AI suggested replies (Phase 4 — drafts, never auto-sent) -----------------
 
-type ReplyOutcome = { ok: true } | { ok: false; error: string };
+type ReplyOutcome = { ok: true; messageId: string } | { ok: false; error: string };
+
+/**
+ * Learning loop (0020): mark a human reply as a learning candidate — a pure
+ * domain-data write (§4: the worker polls and distills; web never enqueues).
+ * Best-effort by design: it must NEVER break sending a reply — the table may
+ * not exist yet (pre-0020 skew) and a duplicate message_id is a harmless
+ * repeat (unique constraint). Content is not duplicated here; the worker reads
+ * it from `messages` via the message_id.
+ */
+async function captureLearningCandidate(
+  supabase: SupabaseClient,
+  args: {
+    org: string;
+    conversationId: string;
+    messageId: string;
+    origin: 'handoff_resolution' | 'draft_correction';
+  }
+): Promise<void> {
+  try {
+    await supabase.from('learned_answers').insert({
+      org_id: args.org,
+      conversation_id: args.conversationId,
+      message_id: args.messageId,
+      origin: args.origin,
+      status: 'candidate',
+    });
+  } catch {
+    // best-effort: learning must never interfere with replying
+  }
+}
+
+/** Whitespace-insensitive comparison: did the agent materially change the draft? */
+function materiallyDifferent(a: string, b: string): boolean {
+  const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
+  return normalize(a) !== normalize(b);
+}
 
 /**
  * Persists an outbound agent message and, for inbound-email channels, delivers
@@ -824,7 +872,7 @@ async function sendAgentReply(
       .eq('id', messageId);
   }
 
-  return { ok: true };
+  return { ok: true, messageId };
 }
 
 // --- Phase 5: handoff (take over / return to bot / request draft) -------------
@@ -1115,8 +1163,8 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
     .eq('id', draftId)
     .eq('conversation_id', conversationId)
     .eq('status', 'pending')
-    .select('id');
-  const claim = (claimed ?? [])[0] as { id: string } | undefined;
+    .select('id, content');
+  const claim = (claimed ?? [])[0] as { id: string; content: string } | undefined;
   if (claimError || !claim) {
     redirect(inboxUrl({ ...base, error: 'Der Vorschlag ist nicht mehr verfügbar.' }));
   }
@@ -1131,6 +1179,17 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
       .eq('id', draftId)
       .eq('status', 'edited');
     redirect(inboxUrl({ ...base, error: sent.error }));
+  }
+
+  // Learning loop: a materially edited draft means the bot's answer was wrong
+  // or incomplete — the human's version is the learning candidate.
+  if (materiallyDifferent(claim.content, content)) {
+    await captureLearningCandidate(supabase, {
+      org,
+      conversationId,
+      messageId: sent.messageId,
+      origin: 'draft_correction',
+    });
   }
 
   revalidatePath('/inbox');

@@ -38,7 +38,12 @@ interface LoadedSource {
   type: KbSourceType;
   uri: string | null;
   status: KbSourceStatus;
+  /** 0020: system source compiled from approved learned_answers rows. */
+  is_learned?: boolean;
 }
+
+/** Newest approved learned pairs compiled into the system source (cost bound). */
+const MAX_LEARNED_PAIRS = 2_000;
 
 /**
  * One extracted document (a crawled page, an uploaded file, a manual text).
@@ -59,11 +64,21 @@ export interface ExtractedSection {
 export async function indexSource(sourceId: string): Promise<void> {
   const supabase = getServiceClient();
 
-  const { data, error } = await supabase
+  // is_learned is 0020: retry without it while the migration is pending (the
+  // same 42703 schema-skew pattern as elsewhere; a learned source cannot exist
+  // pre-0020, so the fallback's implicit false is always correct).
+  let { data, error } = await supabase
     .from('kb_sources')
-    .select('id, org_id, type, uri, status')
+    .select('id, org_id, type, uri, status, is_learned')
     .eq('id', sourceId)
     .maybeSingle();
+  if (error && (error as { code?: string }).code === '42703') {
+    ({ data, error } = await supabase
+      .from('kb_sources')
+      .select('id, org_id, type, uri, status')
+      .eq('id', sourceId)
+      .maybeSingle());
+  }
   if (error) throw error;
   if (!data) return; // source deleted before indexing ran
 
@@ -87,6 +102,23 @@ export async function indexSource(sourceId: string): Promise<void> {
     capped.push({ ...section, text });
   }
   if (capped.length === 0) {
+    if (source.is_learned === true) {
+      // A learned source with zero approved pairs is a VALID empty state (e.g.
+      // all approvals were deleted): store an empty chunk set instead of
+      // erroring — the atomic replace clears stale chunks.
+      const { error: clearError } = await supabase.rpc('replace_kb_chunks', {
+        p_source_id: source.id,
+        p_org_id: source.org_id,
+        p_chunks: [],
+      });
+      if (clearError) throw clearError;
+      const cleared = await supabase
+        .from('kb_sources')
+        .update({ status: 'indexed', last_indexed_at: new Date().toISOString() })
+        .eq('id', source.id);
+      if (cleared.error) throw cleared.error;
+      return;
+    }
     throw new Error('no text could be extracted from the source');
   }
 
@@ -152,6 +184,12 @@ async function extractSourceText(
   supabase: SupabaseClient,
   source: LoadedSource
 ): Promise<ExtractedSection[]> {
+  // Learned system source (0020): compiled directly from the approved
+  // learned_answers rows — no storage file involved, so every re-index reads
+  // the current DB truth (race-free vs concurrent approvals).
+  if (source.is_learned === true) {
+    return loadLearnedSections(supabase, source.org_id);
+  }
   switch (source.type) {
     case 'text':
       return loadTextFile(supabase, source.org_id, source.id);
@@ -162,6 +200,32 @@ async function extractSourceText(
     default:
       throw new Error(`unsupported kb_source type`);
   }
+}
+
+/**
+ * One section per approved learned pair (→ one chunk per pair, like the CSV
+ * import). Newest pairs win when the cap bites — old learnings age out first.
+ */
+async function loadLearnedSections(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ExtractedSection[]> {
+  const { data, error } = await supabase
+    .from('learned_answers')
+    .select('question, answer')
+    .eq('org_id', orgId)
+    .eq('status', 'approved')
+    .order('created_at', { ascending: false })
+    .limit(MAX_LEARNED_PAIRS);
+  if (error) throw error;
+  return ((data ?? []) as { question: string | null; answer: string | null }[])
+    .reverse()
+    .filter((row) => (row.question ?? '').trim().length > 0 && (row.answer ?? '').trim().length > 0)
+    .map((row) => ({
+      title: 'Gelernte Antworten',
+      url: null,
+      text: `Frage: ${(row.question ?? '').trim()}\nAntwort: ${(row.answer ?? '').trim()}`,
+    }));
 }
 
 async function downloadFile(supabase: SupabaseClient, path: string): Promise<{ blob: Blob }> {

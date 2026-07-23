@@ -24,6 +24,12 @@ import {
   processPostCall,
 } from './pipeline/post-call.js';
 import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
+import {
+  LEARN_DISTILL_QUEUE,
+  LEARN_DISTILL_RETRY_LIMIT,
+  distillLearnedAnswer,
+  markLearnDistillFailed,
+} from './pipeline/learn.js';
 
 const logger = createLogger('worker');
 
@@ -34,6 +40,7 @@ const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
 const hubspotSyncJobSchema = z.object({ conversationId: z.uuid() });
 const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
 const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
+const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -197,6 +204,33 @@ async function main(): Promise<void> {
         // processFormNotification handles the terminal attempt itself (state
         // 'failed' + internal note) and only rethrows for retryable attempts.
         await processFormNotification(supabase, logger, parsed, job.retryCount);
+      }
+    }
+  );
+
+  // --- learning-loop distillation (0020) --------------------------------------
+  await ensureQueuePolicy(boss, LEARN_DISTILL_QUEUE);
+  await boss.work(
+    LEARN_DISTILL_QUEUE,
+    { includeMetadata: true },
+    async (jobs: JobWithMetadata<{ learnedAnswerId: string }>[]) => {
+      for (const job of jobs) {
+        const { learnedAnswerId } = learnDistillJobSchema.parse(job.data);
+        try {
+          await distillLearnedAnswer(learnedAnswerId);
+        } catch (err) {
+          const isFinal = job.retryCount >= LEARN_DISTILL_RETRY_LIMIT;
+          logger.error(
+            { err: toErrorInfo(err), learnedAnswerId, retryCount: job.retryCount, final: isFinal },
+            'learn-distill failed'
+          );
+          if (isFinal) {
+            // Mark 'error' so the scan stops re-enqueuing (no paid LLM loop).
+            await markLearnDistillFailed(learnedAnswerId);
+            return;
+          }
+          throw err; // let pg-boss retry
+        }
       }
     }
   );

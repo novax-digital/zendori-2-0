@@ -57,6 +57,33 @@ const SETUP_TIMEOUT_MS = 15_000;
 const GREET_FALLBACK_MS = 6_000;
 const DRAIN_FAREWELL_MS = 4_000;
 const DRAIN_MAX_WAIT_MS = 10_000;
+/**
+ * Latency filler (owner feedback 2026-07-23): the model no longer ritually
+ * announces lookups (session-config.ts) — a FAST tool batch plays out in
+ * natural silence. Only a batch still running after this delay gets exactly
+ * ONE short spoken filler via force_message. Tune HERE if fillers arrive too
+ * early (annoying) or too late (dead air).
+ */
+export const TOOL_FILLER_DELAY_MS = 1_500;
+/**
+ * Rotated per call so a caller never hears the same filler twice in a row.
+ * Spoken verbatim — keep them SHORT; they play while the lookup finishes.
+ */
+export const TOOL_FILLER_TEXTS = [
+  'Einen Moment bitte, ich schaue das gerade nach.',
+  'Ich prüfe das kurz für Sie.',
+  'Das sehe ich gerade für Sie nach.',
+];
+/**
+ * Ticket-only batches (esp. intake_only, where create_ticket IS the flow) must
+ * not claim a "lookup" is happening — the caller expects their Anliegen to be
+ * RECORDED, not researched.
+ */
+export const TICKET_FILLER_TEXTS = [
+  'Einen Moment bitte, ich nehme das gerade für Sie auf.',
+  'Ich notiere das kurz für Sie.',
+  'Ich halte das gerade für Sie fest.',
+];
 
 type SessionState = 'connecting' | 'configuring' | 'active' | 'ending' | 'closed';
 
@@ -93,6 +120,8 @@ export interface CallSessionParams {
   greetFallbackMs?: number;
   /** Test seam: overrides the playback graces (end_call→hangup, hold→REFER). */
   hangupGraceMs?: number;
+  /** Test seam: overrides the latency-filler delay (defaults to TOOL_FILLER_DELAY_MS). */
+  toolFillerDelayMs?: number;
 }
 
 export class CallSession {
@@ -129,6 +158,10 @@ export class CallSession {
   private responseCreateFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   /** Grace timer between end_call and the actual hangup (playback drain). */
   private endCallTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Latency-filler timer for the in-flight tool batch (see onResponseDone). */
+  private toolFillerTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Rotates through TOOL_FILLER_TEXTS within a call (never the same twice in a row). */
+  private fillerIndex = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -440,6 +473,38 @@ export class CallSession {
       let transferCallId: string | null = null;
       let transferEventId: string | null = null;
 
+      // Latency filler (owner feedback 2026-07-23): fast lookups stay silent —
+      // only a batch still running after TOOL_FILLER_DELAY_MS gets ONE short
+      // spoken bridge via force_message. Armed only when EVERY call is
+      // kb_search/create_ticket: handoff_human speaks its own hold text and
+      // end_call must never be talked over. The timer fires OUTSIDE the
+      // serialized event chain, but only performs a socket write (send) — it
+      // never touches chain-owned state, so existing ordering is untouched.
+      const fillerEligible = calls.every(
+        (c) => c.name === 'kb_search' || c.name === 'create_ticket'
+      );
+      // Wording per batch: any lookup present → lookup phrasing; ticket-only →
+      // recording phrasing (shared fillerIndex keeps rotation call-wide).
+      const fillerTexts = calls.some((c) => c.name === 'kb_search')
+        ? TOOL_FILLER_TEXTS
+        : TICKET_FILLER_TEXTS;
+      let fillerSpoken = false;
+      if (fillerEligible) {
+        this.toolFillerTimer = setTimeout(() => {
+          this.toolFillerTimer = null;
+          // Mirror the transfer-path guard: an abnormal close arriving
+          // mid-batch queues BEHIND the blocked response.done handler, so
+          // state alone can lie. A filler "spoken" into a dead socket would
+          // wrongly defer the batch's response.create into a rejoined session
+          // (orphaned forced turn).
+          if (this.state !== 'active' || this.ws?.readyState !== WebSocket.OPEN) return;
+          fillerSpoken = true;
+          const text = fillerTexts[this.fillerIndex % fillerTexts.length]!;
+          this.fillerIndex += 1;
+          this.send(forceMessageEvent(text));
+        }, this.p.toolFillerDelayMs ?? TOOL_FILLER_DELAY_MS);
+      }
+
       const results = await Promise.all(
         calls.map(async (call) => {
           const output = await this.runTool(call.name, call.rawArguments);
@@ -457,6 +522,12 @@ export class CallSession {
           return { callId: call.callId, output };
         })
       );
+
+      // Batch finished — a filler that has not fired yet must never fire.
+      if (this.toolFillerTimer) {
+        clearTimeout(this.toolFillerTimer);
+        this.toolFillerTimer = null;
+      }
 
       if (transferNumber) {
         // Live handoff: hold message, REFER while the session is still alive,
@@ -554,7 +625,20 @@ export class CallSession {
       for (const r of results) {
         if (r.output !== null) this.send(functionCallOutputEvent(r.callId, r.output));
       }
-      this.send(responseCreateEvent());
+      if (fillerSpoken) {
+        // The filler force_message may still be speaking — a response.create
+        // sent now would be dropped (live-verified drop semantics, audit
+        // 2026-07-21). Defer it to the filler turn's response.done exactly like
+        // the greeting and the failed-transfer path; the fallback timer is the
+        // safety net if that response.done never arrives.
+        this.pendingResponseCreate = true;
+        this.responseCreateFallbackTimer = setTimeout(
+          () => this.fireDeferredResponseCreate(),
+          this.p.greetFallbackMs ?? GREET_FALLBACK_MS
+        );
+      } else {
+        this.send(responseCreateEvent());
+      }
     }
   }
 
@@ -790,6 +874,7 @@ export class CallSession {
     if (this.greetFallbackTimer) clearTimeout(this.greetFallbackTimer);
     if (this.responseCreateFallbackTimer) clearTimeout(this.responseCreateFallbackTimer);
     if (this.endCallTimer) clearTimeout(this.endCallTimer);
+    if (this.toolFillerTimer) clearTimeout(this.toolFillerTimer);
 
     // Persist any tail turns: pending user transcripts AND a bot turn that was
     // cut off mid-response (finding: botBuffer lost on early close).
