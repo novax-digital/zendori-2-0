@@ -35,6 +35,7 @@ type IconName =
   | 'clock'
   | 'phone'
   | 'billing'
+  | 'package'
   | 'chevron'
   | 'signout';
 
@@ -144,6 +145,13 @@ function Icon({ name }: { name: IconName }) {
         <svg {...common}>
           <circle cx="12" cy="12" r="9" />
           <path d="M15 9.5a4 4 0 0 0-3-1.5c-2 0-3.5 1.8-3.5 4s1.5 4 3.5 4a4 4 0 0 0 3-1.5M7.5 11.5h5M7.5 13.5h4" />
+        </svg>
+      );
+    case 'package':
+      return (
+        <svg {...common}>
+          <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" />
+          <path d="m3 8 9 5 9-5M12 13v8" />
         </svg>
       );
     case 'chevron':
@@ -383,6 +391,17 @@ function Sidebar() {
                 <Icon name="billing" />
               </span>
               <span className="app-nav-label">Abrechnung</span>
+            </Link>
+            <Link
+              href="/admin/pricing/tiers"
+              className={`app-nav-item${pathname.startsWith('/admin/pricing') ? ' app-nav-item--active' : ''}`}
+              title="Preise & Pakete"
+              aria-current={pathname.startsWith('/admin/pricing') ? 'page' : undefined}
+            >
+              <span className="app-nav-icon">
+                <Icon name="package" />
+              </span>
+              <span className="app-nav-label">Preise & Pakete</span>
             </Link>
           </div>
         ) : null}

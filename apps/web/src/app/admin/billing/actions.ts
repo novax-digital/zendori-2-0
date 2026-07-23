@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import { PACKAGE_CHANNEL_KINDS } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
@@ -31,21 +32,23 @@ function orgBillingUrl(orgId: string, message?: { error?: string; notice?: strin
   return qs ? `/admin/billing/${orgId}?${qs}` : `/admin/billing/${orgId}`;
 }
 
-const pricingSchema = z.object({
-  markupFactor: z.number().min(0).max(1000),
+// --- global defaults: FX + target margin -------------------------------------
+
+const globalSchema = z.object({
+  targetMargin: z.number().min(0).max(1000),
   usdToEur: z.number().gt(0).max(100),
 });
 
-/** Update the global default markup + FX (the seed row with org_id null). */
+/** Update the global FX + target margin (the seed billing_settings row). */
 export async function updateGlobalPricing(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
 
-  const parsed = pricingSchema.safeParse({
-    markupFactor: parseDecimal(textField(formData.get('markupFactor'))),
+  const parsed = globalSchema.safeParse({
+    targetMargin: parseDecimal(textField(formData.get('targetMargin'))),
     usdToEur: parseDecimal(textField(formData.get('usdToEur'))),
   });
   if (!parsed.success) {
-    redirect(billingUrl({ error: 'Aufschlag (≥ 0) und Wechselkurs (> 0) müssen gültige Zahlen sein.' }));
+    redirect(billingUrl({ error: 'Ziel-Marge (≥ 0) und Wechselkurs (> 0) müssen gültige Zahlen sein.' }));
   }
 
   const admin = createSupabaseAdminClient();
@@ -54,7 +57,7 @@ export async function updateGlobalPricing(formData: FormData): Promise<void> {
   const { error } = await admin
     .from('billing_settings')
     .update({
-      markup_factor: parsed.data.markupFactor,
+      target_margin: parsed.data.targetMargin,
       usd_to_eur: parsed.data.usdToEur,
       updated_at: new Date().toISOString(),
       updated_by: userId,
@@ -63,32 +66,40 @@ export async function updateGlobalPricing(formData: FormData): Promise<void> {
   if (error) redirect(billingUrl({ error: 'Einstellungen konnten nicht gespeichert werden.' }));
 
   revalidatePath('/admin/billing');
-  redirect(billingUrl({ notice: 'Globale Preis-Einstellungen gespeichert.' }));
+  redirect(billingUrl({ notice: 'Globale Einstellungen gespeichert.' }));
 }
 
-const orgPricingSchema = pricingSchema.extend({ orgId: z.uuid() });
+// --- assign a package/tier to a customer -------------------------------------
+
+const assignSchema = z.object({
+  orgId: z.uuid(),
+  packageId: z.union([z.uuid(), z.literal('')]),
+  priceTierId: z.union([z.uuid(), z.literal('')]),
+  interval: z.enum(['monthly', 'yearly']),
+  setupFeeEur: z.union([z.number().min(0).max(1_000_000), z.nan()]),
+});
 
 /**
- * Set a per-org markup/FX override (update-or-insert; the partial unique index
- * keeps at most one row per org). Overrides the global default for that org.
+ * Assign (or update) a customer's package, tier override and interval, and push
+ * the package's channel quotas into org_channel_limits (0017) so the existing
+ * enforcement applies. One subscription per org (unique org_id → update-or-insert).
  */
-export async function updateOrgPricing(formData: FormData): Promise<void> {
+export async function assignPackage(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
 
   const orgIdRaw = textField(formData.get('orgId'));
-  const parsed = orgPricingSchema.safeParse({
+  const setupRaw = textField(formData.get('setupFeeEur'));
+  const parsed = assignSchema.safeParse({
     orgId: orgIdRaw,
-    markupFactor: parseDecimal(textField(formData.get('markupFactor'))),
-    usdToEur: parseDecimal(textField(formData.get('usdToEur'))),
+    packageId: textField(formData.get('packageId')),
+    priceTierId: textField(formData.get('priceTierId')),
+    interval: textField(formData.get('interval')),
+    setupFeeEur: setupRaw === '' ? Number.NaN : parseDecimal(setupRaw),
   });
   if (!parsed.success) {
-    redirect(
-      orgBillingUrl(orgIdRaw, {
-        error: 'Aufschlag (≥ 0) und Wechselkurs (> 0) müssen gültige Zahlen sein.',
-      })
-    );
+    redirect(orgBillingUrl(orgIdRaw, { error: 'Ungültige Paket-/Tarif-Angaben.' }));
   }
-  const { orgId, markupFactor, usdToEur } = parsed.data;
+  const { orgId, packageId, priceTierId, interval, setupFeeEur } = parsed.data;
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
@@ -96,39 +107,59 @@ export async function updateOrgPricing(formData: FormData): Promise<void> {
   }
 
   const patch = {
-    markup_factor: markupFactor,
-    usd_to_eur: usdToEur,
+    package_id: packageId === '' ? null : packageId,
+    price_tier_id: priceTierId === '' ? null : priceTierId,
+    billing_interval: interval,
+    setup_fee_eur: Number.isNaN(setupFeeEur) ? null : setupFeeEur,
     updated_at: new Date().toISOString(),
     updated_by: userId,
   };
   const { data: updated, error: updateError } = await admin
-    .from('billing_settings')
+    .from('org_subscriptions')
     .update(patch)
     .eq('org_id', orgId)
     .select('id');
   if (updateError) {
-    redirect(orgBillingUrl(orgId, { error: 'Override konnte nicht gespeichert werden.' }));
+    redirect(orgBillingUrl(orgId, { error: 'Zuweisung konnte nicht gespeichert werden.' }));
   }
   if (!updated || updated.length === 0) {
     const { error: insertError } = await admin
-      .from('billing_settings')
+      .from('org_subscriptions')
       .insert({ org_id: orgId, ...patch });
     if (insertError) {
-      redirect(orgBillingUrl(orgId, { error: 'Override konnte nicht angelegt werden.' }));
+      redirect(orgBillingUrl(orgId, { error: 'Zuweisung konnte nicht angelegt werden.' }));
+    }
+  }
+
+  // Push the package's channel quotas into org_channel_limits (unlimited stays
+  // untouched only where the package has no term for that kind).
+  if (packageId !== '') {
+    const { data: pkgRow } = await admin
+      .from('packages')
+      .select('channels')
+      .eq('id', packageId)
+      .maybeSingle();
+    const channels = (pkgRow as { channels?: Record<string, { quota?: number }> } | null)?.channels ?? {};
+    for (const kind of PACKAGE_CHANNEL_KINDS) {
+      const term = channels[kind];
+      if (!term || typeof term.quota !== 'number') continue;
+      await admin
+        .from('org_channel_limits')
+        .upsert({ org_id: orgId, channel_kind: kind, max_count: term.quota });
     }
   }
 
   revalidatePath(`/admin/billing/${orgId}`);
-  redirect(orgBillingUrl(orgId, { notice: 'Individueller Preis für diesen Kunden gespeichert.' }));
+  redirect(orgBillingUrl(orgId, { notice: 'Paket zugewiesen. Kanal-Kontingente aktualisiert.' }));
 }
 
-const resetSchema = z.object({ orgId: z.uuid() });
+const removeSchema = z.object({ orgId: z.uuid() });
 
-/** Remove a per-org override so the org falls back to the global default. */
-export async function resetOrgPricing(formData: FormData): Promise<void> {
+/** Remove a customer's subscription (quotas in org_channel_limits stay as-is). */
+export async function removeSubscription(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
 
-  const parsed = resetSchema.safeParse({ orgId: textField(formData.get('orgId')) });
+  const parsed = removeSchema.safeParse({ orgId: textField(formData.get('orgId')) });
   if (!parsed.success) redirect(billingUrl({ error: 'Organisation wurde nicht gefunden.' }));
   const { orgId } = parsed.data;
 
@@ -137,9 +168,9 @@ export async function resetOrgPricing(formData: FormData): Promise<void> {
     redirect(orgBillingUrl(orgId, { error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
   }
 
-  const { error } = await admin.from('billing_settings').delete().eq('org_id', orgId);
-  if (error) redirect(orgBillingUrl(orgId, { error: 'Override konnte nicht entfernt werden.' }));
+  const { error } = await admin.from('org_subscriptions').delete().eq('org_id', orgId);
+  if (error) redirect(orgBillingUrl(orgId, { error: 'Zuweisung konnte nicht entfernt werden.' }));
 
   revalidatePath(`/admin/billing/${orgId}`);
-  redirect(orgBillingUrl(orgId, { notice: 'Individueller Preis entfernt — globaler Standard gilt.' }));
+  redirect(orgBillingUrl(orgId, { notice: 'Paket-Zuweisung entfernt.' }));
 }

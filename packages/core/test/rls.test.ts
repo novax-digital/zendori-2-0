@@ -1237,6 +1237,74 @@ describe.skipIf(!enabled)('RLS: billing (0021)', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: pricing & packages (0022)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  const ownerEmail = `pricing-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Pricing Org', slug: `pricing-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('a default price tier is seeded and readable only by the service role', async () => {
+    const { data: adminData } = await admin
+      .from('price_tiers')
+      .select('id, name')
+      .eq('is_default', true);
+    expect((adminData ?? []).length).toBeGreaterThanOrEqual(1);
+
+    const { data: memberData } = await owner.from('price_tiers').select('id');
+    expect(memberData ?? []).toHaveLength(0); // no member policy → nothing visible
+  });
+
+  it('packages and subscriptions are service-role only', async () => {
+    const { data: pkgData } = await owner.from('packages').select('id');
+    expect(pkgData ?? []).toHaveLength(0);
+
+    // service role can create a subscription for the org
+    const { error } = await admin
+      .from('org_subscriptions')
+      .insert({ org_id: orgId, billing_interval: 'monthly' });
+    expect(error).toBeNull();
+
+    // the owner cannot read it
+    const { data: subData } = await owner.from('org_subscriptions').select('id').eq('org_id', orgId);
+    expect(subData ?? []).toHaveLength(0);
+  });
+
+  it('one subscription per org (unique org_id)', async () => {
+    const { error } = await admin
+      .from('org_subscriptions')
+      .insert({ org_id: orgId, billing_interval: 'yearly' });
+    expect(error).not.toBeNull(); // unique(org_id) rejects the second
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

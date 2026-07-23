@@ -5,12 +5,22 @@ import {
   NUMBER_USD_PER_MONTH,
   VOICE_USD_PER_MINUTE,
   WHATSAPP_USD_PER_MESSAGE,
+  categoryPriceEur,
   emailCostUsd,
   numberRentalCostUsd,
+  packageChannelsSchema,
+  packageMonthlyTotalEur,
+  packageYearlyTotalEur,
   priceEur,
+  priceTierPricingSchema,
+  recommendedPriceEur,
+  recommendedUnitPriceEur,
   voiceMinutesCostUsd,
   whatsappCostUsd,
+  type PricingContext,
 } from '../src/billing.js';
+
+const CTX: PricingContext = { usdToEur: 1, targetMargin: 3 };
 
 describe('billing rate card', () => {
   it('computes voice minute cost linearly', () => {
@@ -54,5 +64,63 @@ describe('priceEur', () => {
 
   it('clamps negative cost to zero', () => {
     expect(priceEur(-100, DEFAULT_PRICING)).toBe(0);
+  });
+});
+
+describe('categoryPriceEur (tier pricing)', () => {
+  it('no rule → recommendation (cost × usd_to_eur × targetMargin)', () => {
+    // 2 USD cost, ctx {1, 3} → 6 €
+    expect(categoryPriceEur(10, 2, undefined, CTX)).toBe(6);
+    expect(recommendedPriceEur(2, CTX)).toBe(6);
+  });
+
+  it('unit rule ignores cost and multiplies quantity', () => {
+    expect(categoryPriceEur(10, 999, { mode: 'unit', unitPriceEur: 0.05 }, CTX)).toBe(0.5);
+  });
+
+  it('markup rule multiplies cost by factor (via usd_to_eur)', () => {
+    expect(categoryPriceEur(0, 4, { mode: 'markup', factor: 2 }, { usdToEur: 1, targetMargin: 3 })).toBe(8);
+  });
+
+  it('recommendedUnitPriceEur uses the per-unit cost card', () => {
+    // voice cost/min × usd_to_eur × margin
+    expect(recommendedUnitPriceEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1 * 3, 10);
+  });
+});
+
+describe('package fee totals', () => {
+  it('monthly total = base + Σ quota × per-channel fee', () => {
+    const pkg = {
+      baseFeeMonthlyEur: 49,
+      baseFeeYearlyEur: 490,
+      channels: {
+        whatsapp: { quota: 2, feeMonthlyEur: 20, feeYearlyEur: 200 },
+        voice: { quota: 1, feeMonthlyEur: 30, feeYearlyEur: 300 },
+      },
+    };
+    expect(packageMonthlyTotalEur(pkg)).toBe(49 + 2 * 20 + 1 * 30);
+    expect(packageYearlyTotalEur(pkg)).toBe(490 + 2 * 200 + 1 * 300);
+  });
+
+  it('empty channels → base fee only', () => {
+    expect(packageMonthlyTotalEur({ baseFeeMonthlyEur: 10, baseFeeYearlyEur: 100, channels: {} })).toBe(10);
+  });
+});
+
+describe('pricing/package zod schemas', () => {
+  it('accepts a valid tier pricing map and rejects a bad mode', () => {
+    expect(
+      priceTierPricingSchema.safeParse({ voice: { mode: 'unit', unitPriceEur: 0.05 } }).success
+    ).toBe(true);
+    expect(priceTierPricingSchema.safeParse({ voice: { mode: 'bogus', x: 1 } }).success).toBe(false);
+  });
+
+  it('accepts a valid channels map and rejects a negative fee', () => {
+    expect(
+      packageChannelsSchema.safeParse({ whatsapp: { quota: 2, feeMonthlyEur: 20, feeYearlyEur: 200 } }).success
+    ).toBe(true);
+    expect(
+      packageChannelsSchema.safeParse({ whatsapp: { quota: 2, feeMonthlyEur: -1, feeYearlyEur: 0 } }).success
+    ).toBe(false);
   });
 });

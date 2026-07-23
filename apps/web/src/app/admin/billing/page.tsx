@@ -1,18 +1,18 @@
-// Platform-admin billing overview: every customer's usage cost for a month, with
-// our internal cost, the customer € price, and the resulting margin. Cross-org
-// reads go through the service role (requirePlatformAdmin gate). The global
-// markup + FX defaults are edited here; per-org overrides live on the drill-down.
+// Platform-admin billing overview: every customer's monthly total (usage +
+// package fees), our cost, and the margin. Cross-org reads go through the service
+// role (requirePlatformAdmin gate). Global FX + target margin are edited here;
+// price tiers/packages live under /admin/pricing, per-customer assignment on the
+// drill-down.
 import Link from 'next/link';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
   currentMonth,
   formatEur,
-  getOrgBilling,
-  loadPricing,
+  getOrgInvoice,
+  loadBillingCatalog,
   parseMonthKey,
   recentMonths,
-  type BillingBreakdown,
 } from '@/lib/billing';
 import { updateGlobalPricing } from './actions';
 
@@ -47,25 +47,18 @@ export default async function AdminBillingPage({
     .order('name', { ascending: true });
   const orgs = (orgData ?? []) as OrgRow[];
 
-  const pricing = await loadPricing(admin);
+  const catalog = await loadBillingCatalog(admin);
 
   const rows = await Promise.all(
     orgs.map(async (org) => {
-      const orgPricing = pricing.forOrg(org.id);
-      const breakdown: BillingBreakdown = await getOrgBilling(
-        admin,
-        org.id,
-        period.fromIso,
-        period.toIso,
-        orgPricing
-      );
-      const costEur = Math.round(breakdown.totalCostUsd * orgPricing.usdToEur * 100) / 100;
+      const invoice = await getOrgInvoice(admin, org.id, period, catalog);
+      const costEur = Math.round(invoice.usage.totalCostUsd * catalog.ctx.usdToEur * 100) / 100;
       return {
         org,
-        priceEur: breakdown.totalPriceEur,
+        priceEur: invoice.grandTotalEur,
         costEur,
-        marginEur: Math.round((breakdown.totalPriceEur - costEur) * 100) / 100,
-        hasOverride: orgPricing !== pricing.global,
+        marginEur: Math.round((invoice.grandTotalEur - costEur) * 100) / 100,
+        packageName: invoice.packageName,
       };
     })
   );
@@ -80,9 +73,10 @@ export default async function AdminBillingPage({
       <div className="page-head">
         <h1>Abrechnung</h1>
         <p>
-          Verbrauchskosten aller Kunden pro Monat. „Kosten" ist unser Einkauf (Anthropic, OpenAI,
-          xAI, Twilio, Resend), „Preis" der Kundenbetrag nach Aufschlag. Klicke einen Kunden an für
-          die Aufschlüsselung und einen individuellen Preis.
+          Monatssumme aller Kunden (Verbrauch + Paketgebühren). „Kosten" = unser Einkauf, „Preis" =
+          Kundenbetrag. Preise & Pakete verwaltest du unter{' '}
+          <Link href="/admin/pricing/tiers">Preisstaffeln</Link> und{' '}
+          <Link href="/admin/pricing/packages">Pakete</Link>.
         </p>
       </div>
 
@@ -116,6 +110,7 @@ export default async function AdminBillingPage({
             <thead>
               <tr>
                 <th>Kunde</th>
+                <th>Paket</th>
                 <th style={{ textAlign: 'right' }}>Kosten</th>
                 <th style={{ textAlign: 'right' }}>Preis</th>
                 <th style={{ textAlign: 'right' }}>Marge</th>
@@ -128,10 +123,8 @@ export default async function AdminBillingPage({
                     <Link href={`/admin/billing/${r.org.id}?month=${period.key}`} style={{ fontWeight: 600 }}>
                       {r.org.name}
                     </Link>
-                    {r.hasOverride ? (
-                      <span className="badge" style={{ marginLeft: '0.5rem' }}>eigener Preis</span>
-                    ) : null}
                   </td>
+                  <td style={{ color: 'var(--text-muted)' }}>{r.packageName ?? '—'}</td>
                   <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatEur(r.costEur)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(r.priceEur)}</td>
                   <td style={{ textAlign: 'right' }}>{formatEur(r.marginEur)}</td>
@@ -141,6 +134,7 @@ export default async function AdminBillingPage({
             <tfoot>
               <tr>
                 <th>Summe</th>
+                <th></th>
                 <th style={{ textAlign: 'right' }}>{formatEur(totalCost)}</th>
                 <th style={{ textAlign: 'right' }}>{formatEur(totalPrice)}</th>
                 <th style={{ textAlign: 'right' }}>{formatEur(totalMargin)}</th>
@@ -151,22 +145,22 @@ export default async function AdminBillingPage({
       </div>
 
       <div className="panel">
-        <h2>Globale Preis-Einstellungen</h2>
+        <h2>Globale Einstellungen</h2>
         <p className="help">
-          Standard-Aufschlag und Wechselkurs für alle Kunden ohne individuellen Preis. Kundenpreis =
-          Einkaufskosten (USD) × Wechselkurs × Aufschlag. Aufschlag 1,0 = ohne Marge (zum
-          Selbstkostenpreis).
+          Ziel-Marge = empfohlener Aufschlag auf den Einkauf; gilt als Standard für jede Kategorie
+          ohne eigenen Preis in der Preisstaffel. Wechselkurs rechnet unsere USD-Einkaufskosten in
+          Euro um.
         </p>
         <form className="stack" action={updateGlobalPricing} style={{ maxWidth: '22rem' }}>
           <div>
-            <label htmlFor="markupFactor">Aufschlag (Faktor)</label>
+            <label htmlFor="targetMargin">Ziel-Marge (Faktor)</label>
             <input
-              id="markupFactor"
-              name="markupFactor"
+              id="targetMargin"
+              name="targetMargin"
               type="text"
               inputMode="decimal"
               required
-              defaultValue={String(pricing.global.markupFactor)}
+              defaultValue={String(catalog.ctx.targetMargin)}
             />
           </div>
           <div>
@@ -177,7 +171,7 @@ export default async function AdminBillingPage({
               type="text"
               inputMode="decimal"
               required
-              defaultValue={String(pricing.global.usdToEur)}
+              defaultValue={String(catalog.ctx.usdToEur)}
             />
           </div>
           <button className="primary" type="submit">Speichern</button>

@@ -1,6 +1,6 @@
-// Per-customer billing drill-down (platform admin): category breakdown for a
-// month, the most recent measured transactions (ai_runs + usage_events), and the
-// per-org markup/FX override. Service-role reads behind requirePlatformAdmin.
+// Per-customer billing drill-down (platform admin): the combined invoice (usage
+// priced through the org's tier + package fees + setup), package assignment, and
+// the most recent measured transactions. Service-role reads behind requirePlatformAdmin.
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
@@ -9,12 +9,12 @@ import {
   currentMonth,
   formatEur,
   formatQuantity,
-  getOrgBilling,
-  loadPricing,
+  getOrgInvoice,
+  loadBillingCatalog,
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
-import { resetOrgPricing, updateOrgPricing } from '../actions';
+import { assignPackage, removeSubscription } from '../actions';
 
 const STEP_LABELS: Record<string, string> = {
   classify: 'Klassifikation',
@@ -39,12 +39,7 @@ function formatDateTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleString('de-DE', {
-        day: '2-digit',
-        month: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+    : d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 type TxRow = { when: string; label: string; source: string; costUsd: number };
@@ -82,14 +77,16 @@ export default async function AdminOrgBillingPage({
 
   const months = recentMonths(new Date(), 12);
   const period = parseMonthKey(month, currentMonth(new Date()));
-  const pricing = await loadPricing(admin);
-  const orgPricing = pricing.forOrg(orgId);
-  const hasOverride = orgPricing !== pricing.global;
+  const catalog = await loadBillingCatalog(admin);
+  const invoice = await getOrgInvoice(admin, orgId, period, catalog);
+  const sub = catalog.subscriptions.get(orgId);
+  const tiers = [...catalog.tiers.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const packages = [...catalog.packages.values()]
+    .filter((p) => p.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  const breakdown = await getOrgBilling(admin, orgId, period.fromIso, period.toIso, orgPricing);
-  const costEur = (usd: number) => Math.round(usd * orgPricing.usdToEur * 100) / 100;
+  const costEur = (usd: number) => Math.round(usd * catalog.ctx.usdToEur * 100) / 100;
 
-  // Recent measured transactions (period-scoped): ai_runs + usage_events.
   const [{ data: aiRunsData }, { data: usageData }] = await Promise.all([
     admin
       .from('ai_runs')
@@ -101,7 +98,7 @@ export default async function AdminOrgBillingPage({
       .limit(30),
     admin
       .from('usage_events')
-      .select('category, quantity, unit, cost_usd, occurred_at')
+      .select('category, cost_usd, occurred_at')
       .eq('org_id', orgId)
       .gte('occurred_at', period.fromIso)
       .lt('occurred_at', period.toIso)
@@ -111,23 +108,11 @@ export default async function AdminOrgBillingPage({
 
   const txns: TxRow[] = [
     ...((aiRunsData ?? []) as { step: string; cost_usd: number | null; created_at: string }[]).map(
-      (r) => ({
-        when: r.created_at,
-        label: STEP_LABELS[r.step] ?? r.step,
-        source: 'KI',
-        costUsd: Number(r.cost_usd) || 0,
-      })
+      (r) => ({ when: r.created_at, label: STEP_LABELS[r.step] ?? r.step, source: 'KI', costUsd: Number(r.cost_usd) || 0 })
     ),
-    ...((usageData ?? []) as {
-      category: string;
-      cost_usd: number | null;
-      occurred_at: string;
-    }[]).map((r) => ({
-      when: r.occurred_at,
-      label: USAGE_LABELS[r.category] ?? r.category,
-      source: 'Infrastruktur',
-      costUsd: Number(r.cost_usd) || 0,
-    })),
+    ...((usageData ?? []) as { category: string; cost_usd: number | null; occurred_at: string }[]).map(
+      (r) => ({ when: r.occurred_at, label: USAGE_LABELS[r.category] ?? r.category, source: 'Infrastruktur', costUsd: Number(r.cost_usd) || 0 })
+    ),
   ]
     .sort((a, b) => Date.parse(b.when) - Date.parse(a.when))
     .slice(0, 30);
@@ -150,9 +135,7 @@ export default async function AdminOrgBillingPage({
             <label htmlFor="month">Abrechnungsmonat</label>
             <select id="month" name="month" defaultValue={period.key}>
               {months.map((m) => (
-                <option key={m.key} value={m.key}>
-                  {m.label}
-                </option>
+                <option key={m.key} value={m.key}>{m.label}</option>
               ))}
             </select>
           </div>
@@ -161,7 +144,15 @@ export default async function AdminOrgBillingPage({
       </div>
 
       <div className="panel">
-        <h2>Aufschlüsselung — {period.label}</h2>
+        <h2>Rechnung — {period.label}</h2>
+        {invoice.packageName ? (
+          <p className="help">
+            Paket: <strong>{invoice.packageName}</strong> ·{' '}
+            {invoice.interval === 'yearly' ? 'jährliche' : 'monatliche'} Laufzeit
+          </p>
+        ) : (
+          <p className="help">Kein Paket zugewiesen — nur Verbrauch wird berechnet.</p>
+        )}
         <table>
           <thead>
             <tr>
@@ -172,15 +163,21 @@ export default async function AdminOrgBillingPage({
             </tr>
           </thead>
           <tbody>
-            {breakdown.lines.map((line) => (
+            {invoice.recurring.map((line, i) => (
+              <tr key={`rec-${i}`}>
+                <td>{line.label}</td>
+                <td></td>
+                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>—</td>
+                <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.amountEur)}</td>
+              </tr>
+            ))}
+            {invoice.usage.lines.map((line) => (
               <tr key={line.category}>
                 <td>{line.label}</td>
                 <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
                   {formatQuantity(line.quantity, line.unit)}
                 </td>
-                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                  {formatEur(costEur(line.costUsd))}
-                </td>
+                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatEur(costEur(line.costUsd))}</td>
                 <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.priceEur)}</td>
               </tr>
             ))}
@@ -189,52 +186,65 @@ export default async function AdminOrgBillingPage({
             <tr>
               <th>Summe</th>
               <th></th>
-              <th style={{ textAlign: 'right' }}>{formatEur(costEur(breakdown.totalCostUsd))}</th>
-              <th style={{ textAlign: 'right' }}>{formatEur(breakdown.totalPriceEur)}</th>
+              <th style={{ textAlign: 'right' }}>{formatEur(costEur(invoice.usage.totalCostUsd))}</th>
+              <th style={{ textAlign: 'right' }}>{formatEur(invoice.grandTotalEur)}</th>
             </tr>
           </tfoot>
         </table>
       </div>
 
       <div className="panel">
-        <h2>Individueller Preis</h2>
+        <h2>Paket zuweisen</h2>
         <p className="help">
-          {hasOverride
-            ? 'Dieser Kunde hat einen eigenen Aufschlag/Wechselkurs. „Zurücksetzen" stellt den globalen Standard wieder her.'
-            : 'Dieser Kunde nutzt den globalen Standard. Hier lässt sich ein individueller Aufschlag/Wechselkurs setzen.'}
+          Weist dem Kunden ein Paket zu (setzt dessen Kanal-Kontingente). Die Preisstaffel bestimmt
+          die Verbrauchspreise; optional eine andere Staffel für bessere Konditionen wählen.
         </p>
-        <form className="stack" action={updateOrgPricing} style={{ maxWidth: '22rem' }}>
+        <form className="stack" action={assignPackage} style={{ maxWidth: '26rem' }}>
           <input type="hidden" name="orgId" value={orgId} />
           <div>
-            <label htmlFor="markupFactor">Aufschlag (Faktor)</label>
-            <input
-              id="markupFactor"
-              name="markupFactor"
-              type="text"
-              inputMode="decimal"
-              required
-              defaultValue={String(orgPricing.markupFactor)}
-            />
+            <label htmlFor="packageId">Paket</label>
+            <select id="packageId" name="packageId" defaultValue={sub?.packageId ?? ''}>
+              <option value="">— kein Paket —</option>
+              {packages.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </div>
           <div>
-            <label htmlFor="usdToEur">Wechselkurs USD → EUR</label>
+            <label htmlFor="priceTierId">Preisstaffel-Override (optional)</label>
+            <select id="priceTierId" name="priceTierId" defaultValue={sub?.priceTierId ?? ''}>
+              <option value="">— aus Paket übernehmen —</option>
+              {tiers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="interval">Laufzeit</label>
+            <select id="interval" name="interval" defaultValue={sub?.interval ?? 'monthly'}>
+              <option value="monthly">Monatlich</option>
+              <option value="yearly">Jährlich</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="setupFeeEur">Setup-Gebühr-Override (€, optional)</label>
             <input
-              id="usdToEur"
-              name="usdToEur"
+              id="setupFeeEur"
+              name="setupFeeEur"
               type="text"
               inputMode="decimal"
-              required
-              defaultValue={String(orgPricing.usdToEur)}
+              placeholder="aus Paket"
+              defaultValue={sub?.setupFeeEur != null ? String(sub.setupFeeEur) : ''}
             />
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="primary" type="submit">Speichern</button>
+            <button className="primary" type="submit">Zuweisen / Speichern</button>
           </div>
         </form>
-        {hasOverride ? (
-          <form action={resetOrgPricing} style={{ marginTop: '0.75rem' }}>
+        {sub ? (
+          <form action={removeSubscription} style={{ marginTop: '0.75rem' }}>
             <input type="hidden" name="orgId" value={orgId} />
-            <button className="ghost" type="submit">Auf globalen Standard zurücksetzen</button>
+            <button className="ghost" type="submit">Zuweisung entfernen</button>
           </form>
         ) : null}
       </div>
@@ -269,7 +279,7 @@ export default async function AdminOrgBillingPage({
         )}
         <p className="help" style={{ marginTop: '0.75rem' }}>
           WhatsApp-, E-Mail- und Rufnummern-Kosten werden aus Mengen × Preistabelle berechnet und
-          erscheinen nur in der Aufschlüsselung, nicht als Einzelvorgang.
+          erscheinen nur in der Rechnung, nicht als Einzelvorgang.
         </p>
       </div>
     </div>

@@ -1,17 +1,15 @@
-// Customer billing area (self-service). Shows the org's own consumption per
-// month with the € amount — never our raw USD cost or the markup (those stay in
-// the service-role rollup). Owner-only: billing is money. requireActiveOrg has
-// already verified membership, so the service-role read scoped to that orgId is
-// safe and lets us compute € without exposing usage_events/billing_settings via
-// the anon API.
+// Customer billing area (self-service). Shows the org's own monthly invoice —
+// package fees + consumption — with € amounts only; never our USD cost or the
+// markup. Owner-only. requireActiveOrg verifies membership, so the service-role
+// rollup scoped to that orgId is safe and keeps cost data server-side.
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
   currentMonth,
   formatEur,
   formatQuantity,
-  getOrgBilling,
-  loadPricing,
+  getOrgInvoice,
+  loadBillingCatalog,
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
@@ -53,24 +51,25 @@ export default async function CustomerBillingPage({
 
   const months = recentMonths(new Date(), 12);
   const period = parseMonthKey(month, currentMonth(new Date()));
-  const pricing = await loadPricing(admin);
-  const breakdown = await getOrgBilling(
-    admin,
-    orgId,
-    period.fromIso,
-    period.toIso,
-    pricing.forOrg(orgId)
-  );
+  const catalog = await loadBillingCatalog(admin);
+  const invoice = await getOrgInvoice(admin, orgId, period, catalog);
 
-  const usedLines = breakdown.lines.filter((line) => line.quantity > 0 || line.priceEur > 0);
+  const usedLines = invoice.usage.lines.filter((line) => line.quantity > 0 || line.priceEur > 0);
+  const hasRecurring = invoice.recurring.length > 0;
+  const isEmpty = usedLines.length === 0 && !hasRecurring;
 
   return (
     <div className="shell">
       <div className="page-head">
         <h1>Abrechnung</h1>
         <p>
-          Dein Verbrauch pro Monat — KI-Antworten, Wissensdatenbank, Telefonie, WhatsApp und E-Mail.
-          Die Beträge sind Netto in Euro.
+          Deine Monatsrechnung — Paketgebühren und Verbrauch. Alle Beträge sind Netto in Euro.
+          {invoice.packageName ? (
+            <>
+              {' '}Dein Paket: <strong>{invoice.packageName}</strong>
+              {invoice.interval === 'yearly' ? ' (jährliche Laufzeit)' : ' (monatliche Laufzeit)'}.
+            </>
+          ) : null}
         </p>
       </div>
 
@@ -81,9 +80,7 @@ export default async function CustomerBillingPage({
             <label htmlFor="month">Abrechnungsmonat</label>
             <select id="month" name="month" defaultValue={period.key}>
               {months.map((m) => (
-                <option key={m.key} value={m.key}>
-                  {m.label}
-                </option>
+                <option key={m.key} value={m.key}>{m.label}</option>
               ))}
             </select>
           </div>
@@ -93,9 +90,9 @@ export default async function CustomerBillingPage({
 
       <div className="panel">
         <h2>{period.label}</h2>
-        {usedLines.length === 0 ? (
+        {isEmpty ? (
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            In diesem Monat ist noch kein Verbrauch angefallen.
+            In diesem Monat ist noch nichts angefallen.
           </p>
         ) : (
           <table>
@@ -107,6 +104,13 @@ export default async function CustomerBillingPage({
               </tr>
             </thead>
             <tbody>
+              {invoice.recurring.map((line, i) => (
+                <tr key={`rec-${i}`}>
+                  <td>{line.label}</td>
+                  <td></td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.amountEur)}</td>
+                </tr>
+              ))}
               {usedLines.map((line) => (
                 <tr key={line.category}>
                   <td>{line.label}</td>
@@ -121,7 +125,7 @@ export default async function CustomerBillingPage({
               <tr>
                 <th>Gesamt</th>
                 <th></th>
-                <th style={{ textAlign: 'right' }}>{formatEur(breakdown.totalPriceEur)}</th>
+                <th style={{ textAlign: 'right' }}>{formatEur(invoice.grandTotalEur)}</th>
               </tr>
             </tfoot>
           </table>

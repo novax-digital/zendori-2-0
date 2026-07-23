@@ -33,24 +33,58 @@ Org zuordenbar.** Zwei Sichten — Admin (alle Kunden, Kosten/Preis/Marge) und K
   `usage_events` + Message-/Channel-Zählung server-seitig (kein 1000-Zeilen-Limit).
   Execute nur für `service_role`.
 
-## Preisbildung (v1, „feste Preistabelle")
+## Preisbildung (Billing v2, Migration 0022)
 
-Alle Raten stehen an EINER Stelle: [`packages/core/src/billing.ts`](../packages/core/src/billing.ts).
+Einkaufskosten (unser Einkauf) stehen an EINER Stelle:
+[`packages/core/src/billing.ts`](../packages/core/src/billing.ts). Die
+Verkaufspreise kommen aus **Preisstaffeln** und **Paketen** (in der DB, admin-
+verwaltet).
 
+**Empfehlung / Standard:** jede Kategorie ohne eigenen Preis läuft über
 ```
-Kundenpreis (€) = Einkaufskosten (USD) × usd_to_eur × markup_factor
+empfohlener Preis (€) = Einkaufskosten (USD) × usd_to_eur × target_margin
 ```
+`target_margin` + `usd_to_eur` stehen global in `billing_settings` (Admin →
+Abrechnung → Globale Einstellungen). So läufst du nie unter Einkauf: der Editor
+zeigt Einkauf + Empfehlung, ein Preis unter Einkauf wird rot markiert.
 
-- **Feste Preistabelle:** bekannte Stückpreise × gemessene Menge. Die Werte in
-  `billing.ts` (`VOICE_USD_PER_MINUTE`, `WHATSAPP_USD_PER_MESSAGE`,
-  `EMAIL_USD_PER_MESSAGE`, `NUMBER_USD_PER_MONTH`) sind **Annahmen (Listenpreise)**
-  und müssen vor der ersten echten Rechnung gegen die unterschriebenen Verträge
-  geprüft werden.
+**Preisstaffeln (`price_tiers`, Preiskonditionen):** benannte Konditionssätze
+(z. B. Standard/Partner/Enterprise). Pro Kategorie ein **Override**:
+- Zähl-Kategorien (Telefonie/WhatsApp/E-Mail/Nummern): fester €-**Stückpreis**
+  (`{mode:'unit', unitPriceEur}`).
+- Token-Kategorien (KI/Embeddings/Transkription): **Aufschlag-Faktor**
+  (`{mode:'markup', factor}`), weil dort kein sinnvoller Stückpreis existiert.
+- Kategorie ohne Override ⇒ Empfehlung (s. o.).
+
+**Pakete (`packages`):** bündeln Preisstaffel + Setup-Gebühr + Grundgebühr
+(monatlich/jährlich) + **je Kanal-Typ** eine Fee und ein Kontingent. Wiederkehrende
+Fee = Grundgebühr + Σ (Kontingent × Kanal-Fee).
+
+**Zuweisung (`org_subscriptions`):** ein Paket pro Kunde (unique `org_id`), mit
+Laufzeit (monatlich/jährlich), optionalem **Preisstaffel-Override** (bessere
+Konditionen) und optionalem Setup-Override. Beim Zuweisen werden die Paket-
+Kontingente in `org_channel_limits` (0017) geschrieben → bestehende Durchsetzung
+gilt unverändert.
+
+**Kombinierte Monatsrechnung** (Kunde + Admin): Grundgebühr + Kanal-Fees +
+Verbrauch (mit Staffel-Preisen); Setup einmalig im Startmonat der Subscription.
+Jährliche Laufzeit wird in der Monatssicht als ÷12 („anteilig") gezeigt.
+
+- Alle Zahlen ohne aktive Subscription: reiner Verbrauch zur Empfehlung
+  (target_margin) — abwärtskompatibel zu 0021.
+- Die Einkaufsraten in `billing.ts` (`VOICE_USD_PER_MINUTE`, …) sind **Annahmen
+  (Listenpreise)** — vor der ersten echten Rechnung gegen die Verträge prüfen.
 - Anthropic/OpenAI-Tokenpreise stehen separat in
-  [`packages/ai/src/cost.ts`](../packages/ai/src/cost.ts) (dort gemessen → `ai_runs`).
-- Standard-Aufschlag `markup_factor = 1.0` (= Selbstkostenpreis). Der Admin setzt
-  unter **Zendori → Abrechnung** den echten Aufschlag; pro Kunde optional ein
-  Override auf der Detailseite.
+  [`packages/ai/src/cost.ts`](../packages/ai/src/cost.ts) (gemessen → `ai_runs`).
+- **Bewusste v1-Nuance:** die Verbrauchs-Kategorie „Rufnummern" (monatliche Miete
+  als Durchleitung) und die Paket-Kanal-Fee (z. B. „Telefonie") erscheinen
+  getrennt und werden NICHT gebündelt. Das ist ein legitimes Reseller-Modell
+  (Kanal-/Anschlussgebühr + Nummern-Durchleitung), kann aber auf Wunsch
+  zusammengelegt werden (Nummern-Zeile unterdrücken, sobald ein Paket aktiv ist).
+
+Verwaltung im UI: **Admin → Preise & Pakete** (Preisstaffeln + Pakete),
+**Admin → Abrechnung** (Übersicht + globale Einstellungen + je Kunde Rechnung &
+Paket-Zuweisung).
 
 ## Sichtbarkeit / DSGVO
 
