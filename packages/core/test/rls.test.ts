@@ -1142,6 +1142,101 @@ describe.skipIf(!enabled)('RLS: learned answers (0020)', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: billing (0021)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  const ownerEmail = `billing-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Billing Org', slug: `billing-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('service role can record a usage_event; a member cannot read it', async () => {
+    const { error: insertError } = await admin.from('usage_events').insert({
+      org_id: orgId,
+      category: 'voice_minutes',
+      provider: 'xai',
+      quantity: 2.5,
+      unit: 'minutes',
+      cost_usd: 0.875,
+      dedup_key: `voice:${randomUUID()}`,
+    });
+    expect(insertError).toBeNull();
+
+    // No member/authenticated SELECT policy → the owner sees nothing (cost hidden).
+    const { data } = await owner.from('usage_events').select('id').eq('org_id', orgId);
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it('dedup_key blocks a double-count on retry', async () => {
+    const key = `voice:${randomUUID()}`;
+    const row = {
+      org_id: orgId,
+      category: 'voice_minutes',
+      provider: 'xai',
+      quantity: 1,
+      unit: 'minutes',
+      cost_usd: 0.35,
+      dedup_key: key,
+    };
+    expect((await admin.from('usage_events').insert(row)).error).toBeNull();
+    const { error } = await admin.from('usage_events').insert(row);
+    expect(error).not.toBeNull(); // unique(dedup_key) rejects the retry
+  });
+
+  it('members cannot read billing_settings (markup stays hidden)', async () => {
+    const { data } = await owner.from('billing_settings').select('markup_factor');
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it('members cannot execute billing_org_rollup', async () => {
+    const { error } = await owner.rpc('billing_org_rollup', {
+      p_org_id: orgId,
+      p_from: '2026-01-01T00:00:00Z',
+      p_to: '2026-02-01T00:00:00Z',
+    });
+    expect(error).not.toBeNull(); // execute revoked from authenticated
+  });
+
+  it('service role rollup returns a row per category', async () => {
+    const { data, error } = await admin.rpc('billing_org_rollup', {
+      p_org_id: orgId,
+      p_from: '2000-01-01T00:00:00Z',
+      p_to: '2100-01-01T00:00:00Z',
+    });
+    expect(error).toBeNull();
+    const categories = ((data ?? []) as { category: string }[]).map((r) => r.category);
+    expect(categories).toContain('ai');
+    expect(categories).toContain('voice');
+    expect(categories).toContain('whatsapp_count');
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

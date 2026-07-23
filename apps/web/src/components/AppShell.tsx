@@ -34,6 +34,7 @@ type IconName =
   | 'shield'
   | 'clock'
   | 'phone'
+  | 'billing'
   | 'chevron'
   | 'signout';
 
@@ -138,6 +139,13 @@ function Icon({ name }: { name: IconName }) {
           <path d="M5 4h4l1.5 4.5-2.2 1.6a12.5 12.5 0 0 0 5.6 5.6l1.6-2.2L20 15v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2Z" />
         </svg>
       );
+    case 'billing':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M15 9.5a4 4 0 0 0-3-1.5c-2 0-3.5 1.8-3.5 4s1.5 4 3.5 4a4 4 0 0 0 3-1.5M7.5 11.5h5M7.5 13.5h4" />
+        </svg>
+      );
     case 'chevron':
       return (
         <svg {...common}>
@@ -170,6 +178,7 @@ const NAV: NavSection[] = [
       { href: '/settings/canned-responses', label: 'Textbausteine', icon: 'canned' },
       { href: '/settings/members', label: 'Team', icon: 'team' },
       { href: '/settings/integrations', label: 'Integrationen', icon: 'integrations' },
+      { href: '/settings/billing', label: 'Abrechnung', icon: 'billing' },
     ],
   },
   {
@@ -363,6 +372,17 @@ function Sidebar() {
                 <Icon name="phone" />
               </span>
               <span className="app-nav-label">Nummern</span>
+            </Link>
+            <Link
+              href="/admin/billing"
+              className={`app-nav-item${pathname.startsWith('/admin/billing') ? ' app-nav-item--active' : ''}`}
+              title="Abrechnung"
+              aria-current={pathname.startsWith('/admin/billing') ? 'page' : undefined}
+            >
+              <span className="app-nav-icon">
+                <Icon name="billing" />
+              </span>
+              <span className="app-nav-label">Abrechnung</span>
             </Link>
           </div>
         ) : null}

@@ -1,7 +1,8 @@
 import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
-import { createLogger, loadWorkerEnv } from '@zendori/core';
+import { createLogger, loadWorkerEnv, voiceMinutesCostUsd } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from '../db.js';
+import { recordUsage } from './usage.js';
 import {
   deleteRecording,
   fetchRecordingWav,
@@ -44,6 +45,7 @@ interface VoiceCallRow {
   channel_id: string;
   conversation_id: string;
   status: string;
+  duration_seconds: number | null;
   post_processed_at: string | null;
   /** Webhook/session-written extras: twilio_call_sid, recording_stored_at. */
   metadata: Record<string, unknown> | null;
@@ -186,11 +188,36 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
 
   const { data: callData } = await supabase
     .from('voice_calls')
-    .select('id, org_id, channel_id, conversation_id, status, post_processed_at, metadata')
+    .select(
+      'id, org_id, channel_id, conversation_id, status, duration_seconds, post_processed_at, metadata'
+    )
     .eq('id', voiceCallId)
     .maybeSingle();
   const call = callData as VoiceCallRow | null;
   if (!call || call.post_processed_at !== null) return; // gone or already processed
+
+  // Bill the live voice minutes (0021, xAI audio + Twilio SIP via the rate card).
+  // dedup_key 'voice:<id>' makes this idempotent across AI retries; best-effort
+  // so metering never blocks the transcript pipeline. Runs before the
+  // missed-call early return so connected-but-silent calls are still billed.
+  const minutes = Math.max(0, call.duration_seconds ?? 0) / 60;
+  await recordUsage(
+    supabase,
+    {
+      orgId: call.org_id,
+      channelId: call.channel_id,
+      conversationId: call.conversation_id,
+      category: 'voice_minutes',
+      provider: 'xai',
+      quantity: minutes,
+      unit: 'minutes',
+      costUsd: voiceMinutesCostUsd(minutes),
+      dedupKey: `voice:${call.id}`,
+      sourceRef: call.id,
+      metadata: { duration_seconds: call.duration_seconds ?? 0 },
+    },
+    log
+  );
 
   // Recording transfer runs BEFORE the AI part and is best-effort: it must
   // neither block classification nor be re-run on AI retries (own stamp).

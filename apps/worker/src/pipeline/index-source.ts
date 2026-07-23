@@ -15,6 +15,7 @@ import { chunkText, embed } from '@zendori/ai';
 import { parseQaCsv } from '@zendori/core';
 import type { KbSourceStatus, KbSourceType, SupabaseClient } from '@zendori/core';
 import { getServiceClient } from '../db.js';
+import { recordUsage } from './usage.js';
 
 const KB_BUCKET = 'kb-files';
 /** Filename of a manual-text source inside kb-files (Builder C writes it). */
@@ -130,7 +131,7 @@ export async function indexSource(sourceId: string): Promise<void> {
   if (chunks.length === 0) {
     throw new Error('chunking produced no chunks');
   }
-  const { vectors } = await embed(chunks.map((chunk) => chunk.content));
+  const { vectors, costUsd: embedCostUsd } = await embed(chunks.map((chunk) => chunk.content));
   if (vectors.length !== chunks.length) {
     throw new Error('embedding count does not match chunk count');
   }
@@ -155,6 +156,19 @@ export async function indexSource(sourceId: string): Promise<void> {
     .update({ status: 'indexed', last_indexed_at: new Date().toISOString() })
     .eq('id', source.id);
   if (upd.error) throw upd.error;
+
+  // Bill the index embeddings (0021). No dedup_key: a re-index legitimately
+  // costs again. Best-effort — never fails the (already-completed) indexing.
+  await recordUsage(supabase, {
+    orgId: source.org_id,
+    category: 'index_embeddings',
+    provider: 'openai',
+    quantity: chunks.length,
+    unit: 'chunks',
+    costUsd: embedCostUsd,
+    sourceRef: source.id,
+    metadata: { chunks: chunks.length },
+  });
 }
 
 /**
