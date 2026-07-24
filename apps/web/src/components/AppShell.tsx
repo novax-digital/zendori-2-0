@@ -210,6 +210,7 @@ const NAV: NavSection[] = [
     title: 'Werkzeuge',
     items: [
       { href: '/settings/forms', label: 'Formulare', icon: 'form' },
+      { href: '/tools/md-generator', label: 'MD-Generator', icon: 'book' },
       { href: '/test-channel', label: 'Test-Channel', icon: 'test' },
       { href: '/widget-demo', label: 'Widget-Demo', icon: 'widget' },
     ],
@@ -229,6 +230,7 @@ const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'ad
   '/settings/forms': { area: 'channels', level: 'view' },
   '/settings/members': 'admin',
   '/settings': 'settings-hub',
+  '/tools/md-generator': { area: 'knowledge', level: 'view' },
   '/test-channel': { area: 'inbox', level: 'edit' },
   '/widget-demo': { area: 'inbox', level: 'view' },
 };
