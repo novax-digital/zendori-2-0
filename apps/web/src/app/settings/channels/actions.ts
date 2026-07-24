@@ -18,11 +18,27 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function channelsUrl(org: string, message?: { error?: string; notice?: string }): string {
+function channelsUrl(
+  org: string,
+  message?: { error?: string; notice?: string },
+  returnTo?: string | null
+): string {
   const params = new URLSearchParams({ org });
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
-  return `/settings/channels?${params.toString()}`;
+  // two-level layout (2026-07-24): actions invoked from a channel detail page
+  // return there. Strictly validated same-section path — never an open redirect.
+  const base =
+    returnTo && /^\/settings\/channels\/[0-9a-f-]{36}$/.test(returnTo)
+      ? returnTo
+      : '/settings/channels';
+  return `${base}?${params.toString()}`;
+}
+
+/** Reads the optional detail-page return target from the form. */
+function returnToOf(formData: FormData): string | null {
+  const value = formData.get('returnTo');
+  return typeof value === 'string' ? value : null;
 }
 
 // --- create widget channel -----------------------------------------------------
@@ -95,7 +111,7 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
       channelsUrl(textField(formData.get('org')), {
         error:
           'Bitte Farbe (Hex, z. B. #4f46e5), Titel (max. 60 Zeichen) und Begrüßung (max. 300 Zeichen) angeben.',
-      })
+      }, returnToOf(formData))
     );
   }
   const { org, channelId, color, title, greeting } = parsed.data;
@@ -111,7 +127,7 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
     .maybeSingle();
   const channel = channelRow as { id: string; config: Record<string, unknown> } | null;
   if (!channel || channel.config['widget'] !== true) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   const nextConfig = { ...channel.config, theme: { color, title, greeting } };
@@ -122,11 +138,11 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: 'Theme gespeichert.' }));
+  redirect(channelsUrl(org, { notice: 'Theme gespeichert.' }, returnToOf(formData)));
 }
 
 // --- create e-mail intake address ------------------------------------------------
@@ -231,7 +247,7 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
     redirect(
       channelsUrl(textField(formData.get('org')), {
         error: 'Agent-Zuweisung konnte nicht gespeichert werden.',
-      })
+      }, returnToOf(formData))
     );
   }
   const { org, channelId, agentId } = parsed.data;
@@ -249,7 +265,7 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
     .maybeSingle();
   const memberRole = (memberRow as { role: string } | null)?.role;
   if (memberRole !== 'owner' && memberRole !== 'admin') {
-    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können den Agenten eines Kanals ändern.' }));
+    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können den Agenten eines Kanals ändern.' }, returnToOf(formData)));
   }
 
   const { data, error } = await supabase
@@ -259,7 +275,7 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: 'Agent-Zuweisung konnte nicht gespeichert werden.' }));
+    redirect(channelsUrl(org, { error: 'Agent-Zuweisung konnte nicht gespeichert werden.' }, returnToOf(formData)));
   }
 
   revalidatePath('/settings/channels');
@@ -267,7 +283,7 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
   redirect(
     channelsUrl(org, {
       notice: agentId === '' ? 'Agent entfernt — Kanal läuft ohne KI-Antworten.' : 'Agent zugewiesen.',
-    })
+    }, returnToOf(formData))
   );
 }
 
@@ -298,7 +314,7 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
     splitHours: textField(formData.get('splitHours')),
   });
   if (!parsed.success) {
-    redirect(channelsUrl(textField(formData.get('org')), { error: errorText }));
+    redirect(channelsUrl(textField(formData.get('org')), { error: errorText }, returnToOf(formData)));
   }
   const { org, channelId, splitHours } = parsed.data;
 
@@ -315,7 +331,7 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
     .maybeSingle();
   const memberRole = (memberRow as { role: string } | null)?.role;
   if (memberRole !== 'owner' && memberRole !== 'admin') {
-    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können diese Einstellung ändern.' }));
+    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können diese Einstellung ändern.' }, returnToOf(formData)));
   }
 
   const { data: channelRow } = await supabase
@@ -332,7 +348,7 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
   const isWhatsapp = channel?.type === 'whatsapp';
   const isWidget = channel?.type === 'chat' && channel.config['widget'] === true;
   if (!channel || (!isWhatsapp && !isWidget)) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   const key = isWhatsapp ? 'conversationSplitHours' : 'conversation_split_hours';
@@ -347,7 +363,7 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   revalidatePath('/settings/channels');
@@ -357,7 +373,7 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
         splitHours === null
           ? 'Ticket-Trennung deaktiviert — Nachrichten laufen in der bestehenden Unterhaltung weiter.'
           : 'Ticket-Trennung gespeichert.',
-    })
+    }, returnToOf(formData))
   );
 }
 
@@ -384,7 +400,7 @@ export async function setChannelActive(formData: FormData): Promise<void> {
     redirect(
       channelsUrl(textField(formData.get('org')), {
         error: 'Kanal-Status konnte nicht geändert werden.',
-      })
+      }, returnToOf(formData))
     );
   }
   const { org, channelId, active } = parsed.data;
@@ -398,11 +414,11 @@ export async function setChannelActive(formData: FormData): Promise<void> {
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: 'Kanal-Status konnte nicht geändert werden.' }));
+    redirect(channelsUrl(org, { error: 'Kanal-Status konnte nicht geändert werden.' }, returnToOf(formData)));
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: isActive ? 'Kanal aktiviert.' : 'Kanal deaktiviert.' }));
+  redirect(channelsUrl(org, { notice: isActive ? 'Kanal aktiviert.' : 'Kanal deaktiviert.' }, returnToOf(formData)));
 }
 
 // --- connect a WhatsApp channel (Twilio, Phase 7a) -------------------------------
@@ -539,7 +555,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
       channelsUrl(textField(formData.get('org')), {
         error:
           'Bitte Eingaben prüfen (Transfer-Nummer als +49…, Sprechtempo zwischen 0,7 und 1,5).',
-      })
+      }, returnToOf(formData))
     );
   }
   const {
@@ -572,7 +588,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
   const memberRole = (memberRow as { role: string } | null)?.role;
   if (memberRole !== 'owner' && memberRole !== 'admin') {
     redirect(
-      channelsUrl(org, { error: 'Nur Inhaber und Admins können die Voice-Einstellungen ändern.' })
+      channelsUrl(org, { error: 'Nur Inhaber und Admins können die Voice-Einstellungen ändern.' }, returnToOf(formData))
     );
   }
 
@@ -584,11 +600,11 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     .maybeSingle();
   const channel = channelRow as { id: string; type: string; config: unknown } | null;
   if (!channel || channel.type !== 'voice') {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
   const existing = voiceChannelConfigSchema.safeParse(channel.config);
   if (!existing.success) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   const keytermList = keyterms
@@ -611,7 +627,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
   // keys a newer worker/provisioning version wrote are preserved (zod strips).
   const validation = voiceChannelConfigSchema.safeParse({ ...existing.data, ...overrides });
   if (!validation.success) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
   const nextConfig: Record<string, unknown> = {
     ...(channel.config as Record<string, unknown>),
@@ -631,9 +647,9 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: errorText }));
+    redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: 'Voice-Einstellungen gespeichert.' }));
+  redirect(channelsUrl(org, { notice: 'Voice-Einstellungen gespeichert.' }, returnToOf(formData)));
 }

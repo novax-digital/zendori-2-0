@@ -1,320 +1,32 @@
+// Channels OVERVIEW (two-level layout, owner 2026-07-24): ONE table of all
+// channels — name (links to /settings/channels/[channelId]), type, identifier,
+// agent, status toggle. Creating new channels lives below in the type gallery
+// (tiles open ONLY the create form for that type). All per-channel settings
+// moved to the detail page.
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import type { AgentKind, AgentMode, Channel, ChannelKind } from '@zendori/core';
+import type { Channel, ChannelKind } from '@zendori/core';
+import { canViewArea, isAdminRole } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createTestChannel } from '@/app/inbox/actions';
 import {
   createWidgetChannel,
-  updateWidgetTheme,
-  updateConversationSplit,
   createIntakeAddress,
   createWhatsappTwilioChannel,
-  updateVoiceChannelSettings,
-  setChannelActive,
-  setChannelAgent,
 } from './actions';
 import ChannelGallery, { type TileKey, type TileMeta } from '@/components/ChannelGallery';
-import VoicePicker from '@/components/VoicePicker';
-import GreetingSuggestion from '@/components/GreetingSuggestion';
-import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import NoAccessPanel from '@/components/NoAccessPanel';
 import { appUrl } from '@/lib/env';
 import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
-import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
-import { canViewArea, isAdminRole } from '@zendori/core';
-import NoAccessPanel from '@/components/NoAccessPanel';
-
-type AgentOption = { id: string; name: string; is_active: boolean; kind: AgentKind; mode: AgentMode };
-
-async function listAgentOptions(orgId: string): Promise<AgentOption[]> {
-  const supabase = await createSupabaseServerClient();
-  const { data } = await supabase
-    .from('agents')
-    .select('id, name, is_active, kind, mode')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: true });
-  return (data ?? []) as AgentOption[];
-}
-
-
-type WidgetChannelView = {
-  id: string;
-  name: string;
-  publicToken: string;
-  theme: WidgetTheme;
-  splitHours: number | null;
-  isActive: boolean;
-  agentId: string | null;
-};
-
-/** Extracts the widget config from a channel row; returns null for non-widget channels. */
-function toWidgetChannelView(channel: Channel): WidgetChannelView | null {
-  const config = channel.config as {
-    widget?: unknown;
-    public_token?: unknown;
-    theme?: { color?: unknown; title?: unknown; greeting?: unknown };
-    conversation_split_hours?: unknown;
-  };
-  if (config.widget !== true || typeof config.public_token !== 'string') return null;
-  const theme = config.theme ?? {};
-  return {
-    id: channel.id,
-    name: channel.name,
-    publicToken: config.public_token,
-    theme: {
-      color: typeof theme.color === 'string' ? theme.color : DEFAULT_THEME.color,
-      title: typeof theme.title === 'string' ? theme.title : DEFAULT_THEME.title,
-      greeting: typeof theme.greeting === 'string' ? theme.greeting : DEFAULT_THEME.greeting,
-    },
-    splitHours:
-      typeof config.conversation_split_hours === 'number' ? config.conversation_split_hours : null,
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-type WebformChannelView = {
-  id: string;
-  name: string;
-  isActive: boolean;
-  agentId: string | null;
-};
-
-/** Extracts a form-builder channel (email + config.builderForm); null otherwise. */
-function toWebformChannelView(channel: Channel): WebformChannelView | null {
-  if (channel.type !== 'email') return null;
-  const config = channel.config as { builderForm?: unknown };
-  if (config.builderForm !== true) return null;
-  return {
-    id: channel.id,
-    name: channel.name,
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-type TestChannelView = { id: string; name: string; isActive: boolean; agentId: string | null };
-
-/** Extracts a manual test channel (type=chat, config.test); null otherwise. */
-function toTestChannelView(channel: Channel): TestChannelView | null {
-  if (channel.type !== 'chat') return null;
-  const config = channel.config as { test?: unknown };
-  if (config.test !== true) return null;
-  return {
-    id: channel.id,
-    name: channel.name,
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-type IntakeChannelView = {
-  id: string;
-  name: string;
-  address: string;
-  purpose: 'form' | 'forwarded_email';
-  isActive: boolean;
-  agentId: string | null;
-};
-
-/** Extracts an inbound-email intake channel; returns null for other channels.
- *  Builder-form channels (config.builderForm, Phase 10) have their own tile. */
-function toIntakeChannelView(channel: Channel): IntakeChannelView | null {
-  if (channel.type !== 'email') return null;
-  const config = channel.config as {
-    mode?: unknown;
-    address?: unknown;
-    purpose?: unknown;
-    builderForm?: unknown;
-  };
-  if (config.builderForm === true) return null;
-  if (config.mode !== 'inbound' || typeof config.address !== 'string') return null;
-  return {
-    id: channel.id,
-    name: channel.name,
-    address: config.address,
-    // legacy rows without a purpose are contact-form intakes
-    purpose: config.purpose === 'forwarded_email' ? 'forwarded_email' : 'form',
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-type WhatsappChannelView = {
-  id: string;
-  name: string;
-  sender: string;
-  splitHours: number | null;
-  isActive: boolean;
-  agentId: string | null;
-};
-
-/** Extracts a Twilio WhatsApp channel; returns null for other channels/providers. */
-function toWhatsappChannelView(channel: Channel): WhatsappChannelView | null {
-  if (channel.type !== 'whatsapp') return null;
-  const config = channel.config as {
-    provider?: unknown;
-    sender?: unknown;
-    conversationSplitHours?: unknown;
-  };
-  if (config.provider !== 'twilio' || typeof config.sender !== 'string') return null;
-  return {
-    id: channel.id,
-    name: channel.name,
-    sender: config.sender,
-    splitHours:
-      typeof config.conversationSplitHours === 'number' ? config.conversationSplitHours : null,
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-type VoiceChannelView = {
-  id: string;
-  name: string;
-  phoneNumber: string;
-  greeting: string;
-  greetingInterruptible: boolean;
-  voice: string;
-  languageHint: string;
-  keyterms: string;
-  speechSpeed: number;
-  transferNumber: string;
-  recordingEnabled: boolean;
-  isActive: boolean;
-  agentId: string | null;
-};
-
-/** Extracts a voice channel for the agent-settings card; null for other channels. */
-function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
-  if (channel.type !== 'voice') return null;
-  const config = channel.config as {
-    provider?: unknown;
-    phoneNumber?: unknown;
-    greeting?: unknown;
-    greetingInterruptible?: unknown;
-    voice?: unknown;
-    languageHint?: unknown;
-    keyterms?: unknown;
-    speechSpeed?: unknown;
-    transferNumber?: unknown;
-    recordingEnabled?: unknown;
-  };
-  if (config.provider !== 'xai' || typeof config.phoneNumber !== 'string') return null;
-  return {
-    id: channel.id,
-    name: channel.name,
-    phoneNumber: config.phoneNumber,
-    greeting: typeof config.greeting === 'string' ? config.greeting : '',
-    greetingInterruptible: config.greetingInterruptible === true,
-    voice: typeof config.voice === 'string' ? config.voice : 'eve',
-    languageHint: typeof config.languageHint === 'string' ? config.languageHint : 'de',
-    keyterms: Array.isArray(config.keyterms)
-      ? config.keyterms.filter((k): k is string => typeof k === 'string').join(', ')
-      : '',
-    speechSpeed: typeof config.speechSpeed === 'number' ? config.speechSpeed : 1.0,
-    transferNumber: typeof config.transferNumber === 'string' ? config.transferNumber : '',
-    recordingEnabled: config.recordingEnabled === true,
-    isActive: channel.is_active,
-    agentId: channel.agent_id ?? null,
-  };
-}
-
-/** Conversation languages offered for voice channels (ASR hint + spoken language). */
-const VOICE_LANGUAGES: { code: string; label: string }[] = [
-  { code: 'de', label: 'Deutsch' },
-  { code: 'en', label: 'Englisch' },
-  { code: 'fr', label: 'Französisch' },
-  { code: 'es', label: 'Spanisch' },
-  { code: 'it', label: 'Italienisch' },
-  { code: 'nl', label: 'Niederländisch' },
-  { code: 'pl', label: 'Polnisch' },
-  { code: 'tr', label: 'Türkisch' },
-];
-
-
-
-/** Per-channel Aktiv/Inaktiv toggle — one click flips is_active. */
-function ActiveToggle({
-  orgId,
-  channelId,
-  isActive,
-}: {
-  orgId: string;
-  channelId: string;
-  isActive: boolean;
-}) {
-  return (
-    <form action={setChannelActive}>
-      <input type="hidden" name="org" value={orgId} />
-      <input type="hidden" name="channelId" value={channelId} />
-      <input type="hidden" name="active" value={isActive ? 'false' : 'true'} />
-      <button
-        type="submit"
-        className={`chan-toggle ${isActive ? 'chan-toggle--active' : 'chan-toggle--inactive'}`}
-        title={isActive ? 'Klicken zum Deaktivieren' : 'Klicken zum Aktivieren'}
-      >
-        {isActive ? 'Aktiv' : 'Inaktiv'}
-      </button>
-    </form>
-  );
-}
-
-/**
- * Per-channel agent assignment (0011). Its own <form> — must never be nested
- * inside another form (invalid HTML), so panels render it as a sibling.
- * 0015: only agents of the matching kind are offered — voice channels take
- * voice agents, all other channels take text agents.
- */
-function AgentSelect({
-  orgId,
-  channelId,
-  channelType,
-  agentId,
-  agents,
-  disabled,
-}: {
-  orgId: string;
-  channelId: string;
-  channelType: Channel['type'];
-  agentId: string | null;
-  agents: AgentOption[];
-  /** Non-owners see the assignment read-only (setChannelAgent is owner-gated). */
-  disabled: boolean;
-}) {
-  const requiredKind: AgentKind = channelType === 'voice' ? 'voice' : 'text';
-  const eligible = agents.filter((a) => a.kind === requiredKind);
-  return (
-    <form
-      action={setChannelAgent}
-      style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.5rem' }}
-    >
-      <input type="hidden" name="org" value={orgId} />
-      <input type="hidden" name="channelId" value={channelId} />
-      <select
-        name="agentId"
-        defaultValue={agentId ?? ''}
-        aria-label="Agent"
-        disabled={disabled}
-        style={{ maxWidth: '18rem' }}
-      >
-        <option value="">— kein Agent (keine KI-Antworten) —</option>
-        {eligible.map((agent) => (
-          <option key={agent.id} value={agent.id}>
-            {agent.name}
-            {agent.is_active ? '' : ' (pausiert)'}
-          </option>
-        ))}
-      </select>
-      {disabled ? null : (
-        <button className="ghost" type="submit">
-          Agent zuweisen
-        </button>
-      )}
-    </form>
-  );
-}
+import {
+  ActiveToggle,
+  FLAVOR_LABELS,
+  channelFlavor,
+  channelIdentifier,
+  listAgentOptions,
+} from './shared';
 
 export default async function ChannelsPage({
   searchParams,
@@ -326,24 +38,13 @@ export default async function ChannelsPage({
   if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Kanäle" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const isOwner = isAdminRole(role);
-  const [channels, agentOptions, limits, hoursRow] = await Promise.all([
+
+  const [channels, agentOptions, limits] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),
     loadChannelLimits(orgId),
-    (await createSupabaseServerClient())
-      .from('org_settings')
-      .select('business_hours')
-      .eq('org_id', orgId)
-      .maybeSingle(),
   ]);
-  // 0018: the voice card shows an honest transfer-status line based on hours.
-  let businessHours: BusinessHours | null = null;
-  const rawHours = (hoursRow.data as { business_hours: unknown } | null)?.business_hours;
-  if (rawHours != null) {
-    const parsedHours = businessHoursSchema.safeParse(rawHours);
-    businessHours = parsedHours.success ? parsedHours.data : null;
-  }
-  const hoursConfigured = hasConfiguredHours(businessHours);
+  const agentName = new Map(agentOptions.map((a) => [a.id, a.name]));
 
   // Quotas (0017): no limit row = unlimited. `blocked` gates the create forms;
   // a kind with limit 0 and no existing channels disappears from the gallery.
@@ -363,53 +64,18 @@ export default async function ChannelsPage({
     );
   };
 
-  const widgetChannels = channels
-    .map(toWidgetChannelView)
-    .filter((v): v is WidgetChannelView => v !== null);
-  const testChannels = channels
-    .map(toTestChannelView)
-    .filter((v): v is TestChannelView => v !== null);
-  const intakeChannels = channels
-    .map(toIntakeChannelView)
-    .filter((v): v is IntakeChannelView => v !== null);
-  const formChannels = intakeChannels.filter((c) => c.purpose === 'form');
-  const emailChannels = intakeChannels.filter((c) => c.purpose === 'forwarded_email');
-  const webformChannels = channels
-    .map(toWebformChannelView)
-    .filter((v): v is WebformChannelView => v !== null);
-  // builder-form ids for the "Im Builder bearbeiten" links (42P01 pre-migration → empty)
-  const webformFormIds = new Map<string, string>();
-  if (webformChannels.length > 0) {
-    const supabaseForForms = await createSupabaseServerClient();
-    const { data: formRows } = await supabaseForForms
-      .from('forms')
-      .select('id, channel_id')
-      .eq('org_id', orgId);
-    for (const row of (formRows ?? []) as { id: string; channel_id: string }[]) {
-      webformFormIds.set(row.channel_id, row.id);
-    }
-  }
-  const whatsappChannels = channels
-    .map(toWhatsappChannelView)
-    .filter((v): v is WhatsappChannelView => v !== null);
-  const voiceChannels = channels
-    .map(toVoiceChannelView)
-    .filter((v): v is VoiceChannelView => v !== null);
+  const flavorOf = new Map(channels.map((c: Channel) => [c.id, channelFlavor(c)]));
+  const counts = (flavor: string) =>
+    channels.filter((c: Channel) => flavorOf.get(c.id) === flavor);
 
   // strip a trailing slash so the displayed URL matches what the route reconstructs
   const whatsappTwilioWebhookUrl = `${appUrl().replace(/\/+$/, '')}/api/hooks/whatsapp/twilio`;
-  const embedBase = appUrl();
 
-  const meta = (
-    key: TileKey,
-    name: string,
-    description: string,
-    list: { isActive: boolean }[]
-  ): TileMeta => ({
+  const meta = (key: TileKey, name: string, description: string, list: Channel[]): TileMeta => ({
     key,
     name,
     description,
-    activeCount: list.filter((c) => c.isActive).length,
+    activeCount: list.filter((c) => c.is_active).length,
     totalCount: list.length,
   });
 
@@ -418,252 +84,88 @@ export default async function ChannelsPage({
     key === 'webform' ? 'form' : (key as ChannelKind);
 
   const tiles: TileMeta[] = [
-    meta('webform', 'Web-Formular', 'Mit dem Zendori-Builder erstellte Formulare zum Einbetten.', webformChannels),
-    meta('form', 'Formular-Weiterleitung', 'Kontaktformulare fremder Systeme per E-Mail-Empfänger anbinden.', formChannels),
-    meta('email', 'E-Mail', 'Bestehende Postfächer per Weiterleitung anbinden.', emailChannels),
-    meta('whatsapp', 'WhatsApp', 'WhatsApp-Nummern deines Unternehmens (Twilio).', whatsappChannels),
-    meta('voice', 'Voice', 'Telefon-Anrufe nimmt der KI-Sprachassistent entgegen.', voiceChannels),
-    meta('chat', 'Chat', 'Embeddable Chat-Widget für deine Website.', widgetChannels),
-    meta('test', 'Test', 'Nachrichten manuell einspeisen — zum Ausprobieren.', testChannels),
-    // A kind locked to 0 with nothing provisioned is removed from the gallery
-    // entirely ("ausgebaut") — existing channels keep their tile visible.
+    meta('webform', 'Web-Formular', 'Mit dem Zendori-Builder erstellte Formulare zum Einbetten.', counts('webform')),
+    meta('form', 'Formular-Weiterleitung', 'Kontaktformulare fremder Systeme per E-Mail-Empfänger anbinden.', counts('form')),
+    meta('email', 'E-Mail', 'Bestehende Postfächer per Weiterleitung anbinden.', counts('email')),
+    meta('whatsapp', 'WhatsApp', 'WhatsApp-Nummern deines Unternehmens (Twilio).', counts('whatsapp')),
+    meta('voice', 'Voice', 'Telefon-Anrufe nimmt der KI-Sprachassistent entgegen.', counts('voice')),
+    meta('chat', 'Chat', 'Embeddable Chat-Widget für deine Website.', counts('chat')),
+    meta('test', 'Test', 'Nachrichten manuell einspeisen — zum Ausprobieren.', counts('test')),
   ].filter((tile) => !(quota(quotaKindFor(tile.key)).limit === 0 && tile.totalCount === 0));
 
-  // --- panels ------------------------------------------------------------------
+  // --- create-only panels (per type) -----------------------------------------
 
-  const formPanel: ReactNode = (
+  const createPanel = (
+    title: string,
+    intro: ReactNode,
+    kind: ChannelKind,
+    form: ReactNode
+  ): ReactNode => (
     <div className="panel">
-      <h2>Formular-Weiterleitung</h2>
-      <p className="help">
-        An diese Adressen gesendete E-Mails (als Empfänger oder in CC) landen automatisch in der
-        Inbox. Ideal für Kontaktformulare beliebiger Websites: einfach die Adresse als Empfänger
-        eintragen — kein Code auf der Kundenseite nötig. Der echte Absender wird aus dem
-        Formular-Inhalt extrahiert.
-      </p>
-      {formChannels.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch keine Formular-Adresse angelegt.
-        </p>
+      <h2>{title}</h2>
+      <p className="help">{intro}</p>
+      {quotaNotice(kind)}
+      {quota(kind).blocked ? null : isOwner ? (
+        form
       ) : (
-        <div style={{ marginBottom: '1.5rem' }}>
-          {formChannels.map((intake) => (
-            <div key={intake.id} className="chan-instance">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{intake.name}</div>
-                <code className="invite-link">{intake.address}</code>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={intake.id}
-                  channelType="email"
-                  agentId={intake.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-              </div>
-              <ActiveToggle orgId={orgId} channelId={intake.id} isActive={intake.isActive} />
-            </div>
-          ))}
-        </div>
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+          Nur Inhaber und Admins können Kanäle anlegen.
+        </p>
       )}
-      {quotaNotice('form')}
-      {quota('form').blocked ? null : (
-      <details className="chan-settings">
-        <summary>+ Neue Formular-Adresse anlegen</summary>
+    </div>
+  );
+
+  const panels: Partial<Record<TileKey, ReactNode>> = {
+    form: createPanel(
+      'Formular-Weiterleitung anlegen',
+      'An diese Adresse gesendete E-Mails (als Empfänger oder in CC) landen automatisch in der Inbox. Ideal für Kontaktformulare beliebiger Websites — kein Code auf der Kundenseite nötig. Der echte Absender wird aus dem Formular-Inhalt extrahiert.',
+      'form',
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="form" />
         <div>
           <label htmlFor="form-name">Name</label>
-          <input
-            id="form-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            maxLength={120}
-            placeholder="z. B. Kontaktformular strong-energy.eu"
-          />
+          <input id="form-name" name="name" type="text" required minLength={2} maxLength={120} placeholder="z. B. Kontaktformular strong-energy.eu" />
         </div>
         <div>
           <label htmlFor="form-slug">Kürzel (für die Adresse)</label>
           <input id="form-slug" name="slugPart" type="text" required maxLength={40} placeholder="z. B. kf" />
         </div>
-        <button className="primary" type="submit">
-          Formular-Adresse anlegen
-        </button>
+        <button className="primary" type="submit">Formular-Adresse anlegen</button>
       </form>
-      </details>
-      )}
-    </div>
-  );
-
-  const emailPanel: ReactNode = (
-    <div className="panel">
-      <h2>E-Mail-Weiterleitung</h2>
-      <p className="help">
-        Binde ein bestehendes Postfach an, indem du dort eine Weiterleitung auf die generierte
-        Adresse einrichtest. Weitergeleitete Mails landen in der Inbox; der echte Absender wird aus
-        dem Weiterleitungs-Header übernommen. Eigene Adresse je Postfach = eigener Kanal.
-      </p>
-      {emailChannels.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch keine E-Mail-Adresse angelegt.
-        </p>
-      ) : (
-        <div style={{ marginBottom: '1.5rem' }}>
-          {emailChannels.map((intake) => (
-            <div key={intake.id} className="chan-instance">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{intake.name}</div>
-                <code className="invite-link">{intake.address}</code>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={intake.id}
-                  channelType="email"
-                  agentId={intake.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-              </div>
-              <ActiveToggle orgId={orgId} channelId={intake.id} isActive={intake.isActive} />
-            </div>
-          ))}
-        </div>
-      )}
-      {quotaNotice('email')}
-      {quota('email').blocked ? null : (
-      <details className="chan-settings">
-        <summary>+ Neue E-Mail-Adresse anlegen</summary>
+    ),
+    email: createPanel(
+      'E-Mail-Weiterleitung anlegen',
+      'Binde ein bestehendes Postfach an, indem du dort eine Weiterleitung auf die generierte Adresse einrichtest. Weitergeleitete Mails landen in der Inbox; der echte Absender wird aus dem Weiterleitungs-Header übernommen. Eigene Adresse je Postfach = eigener Kanal.',
+      'email',
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="forwarded_email" />
         <div>
           <label htmlFor="email-name">Name</label>
-          <input
-            id="email-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            maxLength={120}
-            placeholder="z. B. Support-Postfach strong-energy.eu"
-          />
+          <input id="email-name" name="name" type="text" required minLength={2} maxLength={120} placeholder="z. B. Support-Postfach strong-energy.eu" />
         </div>
         <div>
           <label htmlFor="email-slug">Kürzel (für die Adresse)</label>
           <input id="email-slug" name="slugPart" type="text" required maxLength={40} placeholder="z. B. support" />
         </div>
-        <button className="primary" type="submit">
-          E-Mail-Adresse anlegen
-        </button>
+        <button className="primary" type="submit">E-Mail-Adresse anlegen</button>
       </form>
-      </details>
-      )}
-    </div>
-  );
-
-  // Ticket separation ("Neue Unterhaltung nach Inaktivität") — owner-only,
-  // shared by the WhatsApp and widget cards. '' = never split.
-  const SPLIT_PRESETS = [24, 72, 168];
-  const conversationSplitForm = (channelId: string, current: number | null): ReactNode => (
-    <form action={updateConversationSplit} style={{ marginTop: '0.5rem' }}>
-      <input type="hidden" name="org" value={orgId} />
-      <input type="hidden" name="channelId" value={channelId} />
-      <label
-        htmlFor={`split-${channelId}`}
-        className="field-label"
-        style={{ marginBottom: 0 }}
-      >
-        Neue Unterhaltung nach Inaktivität
-      </label>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.3rem' }}>
-        <select
-          id={`split-${channelId}`}
-          name="splitHours"
-          defaultValue={current === null ? '' : String(current)}
-          disabled={!isOwner}
-          style={{ maxWidth: '18rem' }}
-        >
-          <option value="">Aus — nie trennen</option>
-          <option value="24">Nach 24 Stunden</option>
-          <option value="72">Nach 3 Tagen</option>
-          <option value="168">Nach 7 Tagen</option>
-          {current !== null && !SPLIT_PRESETS.includes(current) ? (
-            <option value={String(current)}>Nach {current} Stunden</option>
-          ) : null}
-        </select>
-        <button className="ghost" type="submit" disabled={!isOwner}>
-          Speichern
-        </button>
-      </div>
-      <p className="hint">
-        Schreibt der Kontakt nach dieser Zeit erneut, beginnt ein neues Ticket. Unterhaltungen,
-        die gerade auf euch warten, werden nie getrennt.
-      </p>
-    </form>
-  );
-
-  const whatsappPanel: ReactNode = (
-    <div className="panel">
-      <h2>WhatsApp (Twilio)</h2>
-      <p className="help">
+    ),
+    whatsapp: createPanel(
+      'WhatsApp-Nummer verbinden (Twilio)',
+      <>
         Eine Twilio-WhatsApp-Nummer je Kunde. Nachrichten an diese Nummer landen in der Inbox,
-        Antworten gehen über Twilio zurück. Nach dem Anlegen die unten angezeigte Webhook-URL im
-        Twilio-Console bei der Nummer (oder Messaging Service) unter „A message comes in" (Methode
-        POST) eintragen.
-      </p>
-      {whatsappChannels.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch keine WhatsApp-Nummer verbunden.
-        </p>
-      ) : (
-        <div style={{ marginBottom: '1.5rem' }}>
-          {whatsappChannels.map((wa) => (
-            <div key={wa.id} className="chan-instance">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{wa.name}</div>
-                <code className="invite-link">{wa.sender}</code>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={wa.id}
-                  channelType="whatsapp"
-                  agentId={wa.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-              </div>
-              <ActiveToggle orgId={orgId} channelId={wa.id} isActive={wa.isActive} />
-            </div>
-          ))}
-          {whatsappChannels.map((wa) => (
-            <details key={`settings-${wa.id}`} className="chan-settings">
-              <summary>Einstellungen ({wa.name}): Ticket-Trennung</summary>
-              {conversationSplitForm(wa.id, wa.splitHours)}
-            </details>
-          ))}
-        </div>
-      )}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <span className="field-label">Webhook-URL (in Twilio eintragen)</span>
+        Antworten gehen über Twilio zurück. Nach dem Anlegen diese Webhook-URL in der
+        Twilio-Console bei der Nummer unter „A message comes in" (POST) eintragen:{' '}
         <code className="invite-link">{whatsappTwilioWebhookUrl}</code>
-      </div>
-      {quotaNotice('whatsapp')}
-      {quota('whatsapp').blocked ? null : (
-      <details className="chan-settings">
-        <summary>+ Neue WhatsApp-Nummer verbinden</summary>
+      </>,
+      'whatsapp',
       <form className="stack" action={createWhatsappTwilioChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
           <label htmlFor="wa-name">Name</label>
-          <input
-            id="wa-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            maxLength={120}
-            placeholder="z. B. WhatsApp Support strong-energy.eu"
-          />
+          <input id="wa-name" name="name" type="text" required minLength={2} maxLength={120} placeholder="z. B. WhatsApp Support strong-energy.eu" />
         </div>
         <div>
           <label htmlFor="wa-sender">Absendernummer (+E164)</label>
@@ -675,460 +177,71 @@ export default async function ChannelsPage({
         </div>
         <div>
           <label htmlFor="wa-auth-token">Twilio Auth Token</label>
-          <input
-            id="wa-auth-token"
-            name="authToken"
-            type="password"
-            required
-            autoComplete="off"
-            placeholder="wird verschlüsselt gespeichert"
-          />
+          <input id="wa-auth-token" name="authToken" type="password" required autoComplete="off" placeholder="wird verschlüsselt gespeichert" />
         </div>
         <div>
           <label htmlFor="wa-messaging-service">Messaging Service SID (optional)</label>
-          <input
-            id="wa-messaging-service"
-            name="messagingServiceSid"
-            type="text"
-            placeholder="MG… (optional)"
-          />
+          <input id="wa-messaging-service" name="messagingServiceSid" type="text" placeholder="MG… (optional)" />
         </div>
-        <button className="primary" type="submit">
-          WhatsApp-Nummer verbinden
-        </button>
+        <button className="primary" type="submit">WhatsApp-Nummer verbinden</button>
       </form>
-      </details>
-      )}
-    </div>
-  );
-
-  const voicePanel: ReactNode = (
-    <div className="panel">
-      <h2>Telefon (Voice-Agent)</h2>
-      <p className="help">
-        Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Gespräche erscheinen als
-        Konversationen in der Inbox. Die Nummer beantragst du unter{' '}
-        <Link href={`/settings/phone-numbers?org=${orgId}`}>Einstellungen → Telefonnummern</Link>;
-        hier konfigurierst du Stimme, Sprache und Begrüßung — Verhalten und Identität kommen vom
-        zugewiesenen Voice-Agenten.
-      </p>
-      {voiceChannels.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch kein Voice-Kanal eingerichtet. Beantrage unter{' '}
-          <Link href={`/settings/phone-numbers?org=${orgId}`}>Telefonnummern</Link> eine Nummer —
-          nach der Einrichtung erscheint hier die Konfiguration.
+    ),
+    voice: (
+      <div className="panel">
+        <h2>Telefon (Voice-Agent)</h2>
+        <p className="help">
+          Anrufe auf der Voice-Nummer nimmt der KI-Sprachassistent entgegen. Die Nummer beantragst
+          du unter{' '}
+          <Link href={`/settings/phone-numbers?org=${orgId}`}>Einstellungen → Telefonnummern</Link>{' '}
+          — nach der Einrichtung erscheint der Kanal oben in der Übersicht; Stimme, Sprache und
+          Begrüßung stellst du dann auf seiner Kanal-Seite ein.
         </p>
-      ) : (
-        voiceChannels.map((vc) => {
-          const assignedAgent = agentOptions.find((a) => a.id === vc.agentId) ?? null;
-          const greetingAgentMode: 'answer' | 'intake' | null = assignedAgent
-            ? assignedAgent.mode === 'autopilot'
-              ? 'answer'
-              : 'intake'
-            : null;
-          return (
-          <div key={vc.id} style={{ marginBottom: '2rem' }}>
-            {/* header outside the settings form: ActiveToggle/AgentSelect are
-                their own forms and must never nest inside another form */}
-            <div
-              className="chan-instance chan-instance--header"
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{vc.name}</div>
-                <code className="invite-link">{vc.phoneNumber}</code>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={vc.id}
-                  channelType="voice"
-                  agentId={vc.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-                <p className="hint">
-                  Verhalten und Identität steuert der zugewiesene Voice-Agent (Reine Annahme oder
-                  Autopilot). Ohne Agent nimmt der Assistent Anrufe im sicheren Annahme-Modus
-                  entgegen.
-                </p>
-                {/* 0018: honest transfer status at a glance */}
-                <p className="hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                  <span className={vc.transferNumber ? 'badge badge--success' : 'badge badge--warn'}>
-                    {vc.transferNumber ? 'Live-Weiterleitung aktiv' : 'Nur Rückruf-Ticket'}
-                  </span>
-                  <span>
-                    {vc.transferNumber
-                      ? hoursConfigured
-                        ? `An ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
-                        : `An ${vc.transferNumber}, jederzeit — keine Geschäftszeiten gepflegt.`
-                      : 'Ohne Transfer-Nummer werden Übergaben als Rückruf-Ticket aufgenommen.'}
-                  </span>
-                </p>
-              </div>
-              <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />
-            </div>
-            <details className="chan-settings">
-              <summary>Einstellungen: Begrüßung, Stimme, Sprache, Aufzeichnung</summary>
-            <form
-              className="stack"
-              action={updateVoiceChannelSettings}
-              style={{ maxWidth: '30rem', marginTop: '0.75rem' }}
-            >
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={vc.id} />
-            {/* the action is owner-gated — read-only for members instead of a
-                data-losing rejection on submit */}
-            <fieldset disabled={!isOwner} style={{ border: 'none', padding: 0, margin: 0, display: 'contents' }}>
-            <div>
-              <label htmlFor={`voice-greeting-${vc.id}`}>Begrüßung (Welcome Message)</label>
-              <input
-                id={`voice-greeting-${vc.id}`}
-                name="greeting"
-                type="text"
-                maxLength={500}
-                defaultValue={vc.greeting}
-                placeholder="Leer = der Agent begrüßt frei"
-              />
-              <GreetingSuggestion
-                inputId={`voice-greeting-${vc.id}`}
-                companyName={orgName}
-                agentMode={greetingAgentMode}
-              />
-              <label
-                htmlFor={`voice-greeting-int-${vc.id}`}
-                className="check-row"
-                style={{ marginTop: '0.5rem' }}
-              >
-                <input
-                  id={`voice-greeting-int-${vc.id}`}
-                  name="greetingInterruptible"
-                  type="checkbox"
-                  defaultChecked={vc.greetingInterruptible}
-                />
-                Anrufer darf die Begrüßung unterbrechen
-              </label>
-              <p className="hint">
-                Standard: aus — die Begrüßung wird immer vollständig gesprochen, auch wenn der
-                Anrufer hineinredet.
-              </p>
-            </div>
-            <div>
-              <label htmlFor={`voice-voice-${vc.id}`}>Stimme</label>
-              <VoicePicker id={`voice-voice-${vc.id}`} name="voice" defaultVoice={vc.voice} />
-            </div>
-            <div>
-              <label htmlFor={`voice-language-${vc.id}`}>Sprache des Voice-Agents</label>
-              <select
-                id={`voice-language-${vc.id}`}
-                name="languageHint"
-                defaultValue={vc.languageHint}
-              >
-                {VOICE_LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
-              <p className="hint">
-                Gesprächs- und Erkennungssprache. Spricht der Anrufer eine andere Sprache, wechselt
-                der Assistent automatisch.
-              </p>
-            </div>
-            <div>
-              <label htmlFor={`voice-keyterms-${vc.id}`}>
-                Fachbegriffe (kommagetrennt, verbessern die Erkennung)
-              </label>
-              <input
-                id={`voice-keyterms-${vc.id}`}
-                name="keyterms"
-                type="text"
-                maxLength={4000}
-                defaultValue={vc.keyterms}
-                placeholder="z. B. Produktnamen, Markennamen"
-              />
-            </div>
-            <div>
-              <label htmlFor={`voice-speed-${vc.id}`}>Sprechtempo (0,7–1,5)</label>
-              <input
-                id={`voice-speed-${vc.id}`}
-                name="speechSpeed"
-                type="number"
-                step="0.05"
-                min="0.7"
-                max="1.5"
-                defaultValue={vc.speechSpeed}
-              />
-            </div>
-            <div>
-              <label htmlFor={`voice-transfer-${vc.id}`}>
-                Transfer-Nummer (optional, für Live-Weiterleitung an einen Menschen)
-              </label>
-              <input
-                id={`voice-transfer-${vc.id}`}
-                name="transferNumber"
-                type="text"
-                defaultValue={vc.transferNumber}
-                placeholder="+49301234567 (leer = Rückruf-Ticket)"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor={`voice-recording-${vc.id}`}
-                className="check-row"
-              >
-                <input
-                  id={`voice-recording-${vc.id}`}
-                  name="recordingEnabled"
-                  type="checkbox"
-                  defaultChecked={vc.recordingEnabled}
-                />
-                Anrufe aufzeichnen
-              </label>
-              <p className="hint">
-                Der Assistent spricht zu Gesprächsbeginn einen Aufzeichnungshinweis (gesetzlich
-                erforderlich, § 201 StGB). Die Aufnahme erscheint nach dem Anruf als Anhang in der
-                Konversation und wird in der EU gespeichert.
-              </p>
-            </div>
-            {isOwner ? (
-              <button className="primary" type="submit">
-                Voice-Einstellungen speichern
-              </button>
-            ) : (
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Nur Inhaber können die Voice-Einstellungen ändern.
-              </p>
-            )}
-            </fieldset>
-            </form>
-            </details>
-          </div>
-          );
-        })
-      )}
-    </div>
-  );
-
-  const chatPanel: ReactNode = (
-    <div className="panel">
-      <h2>Chat-Widget</h2>
-      <p className="help">
+      </div>
+    ),
+    chat: createPanel(
+      'Chat-Widget anlegen',
+      <>
         Das Chat-Widget wird mit einem einzigen Script-Tag in beliebige Websites eingebunden.
         Nachrichten aus dem Widget erscheinen als Konversationen in der Inbox. Ausprobieren:{' '}
         <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo</Link>.
-      </p>
-
-      {widgetChannels.map((widget) => (
-        <div key={widget.id} style={{ marginBottom: '2rem' }}>
-          <div
-            className="chan-instance chan-instance--header"
-          >
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div className="chan-instance-name">{widget.name}</div>
-              <AgentSelect
-                orgId={orgId}
-                channelId={widget.id}
-                channelType="chat"
-                agentId={widget.agentId}
-                agents={agentOptions}
-                disabled={!isOwner}
-              />
-            </div>
-            <ActiveToggle orgId={orgId} channelId={widget.id} isActive={widget.isActive} />
-          </div>
-          <details className="chan-settings">
-            <summary>Einstellungen: Design, Begrüßung, Ticket-Trennung & Embed-Code</summary>
-          {conversationSplitForm(widget.id, widget.splitHours)}
-          <form className="stack" action={updateWidgetTheme} style={{ maxWidth: '26rem', marginTop: '0.75rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={widget.id} />
-            <div>
-              <label htmlFor={`widget-color-${widget.id}`}>Farbe</label>
-              <input
-                id={`widget-color-${widget.id}`}
-                name="color"
-                type="color"
-                defaultValue={widget.theme.color}
-              />
-            </div>
-            <div>
-              <label htmlFor={`widget-title-${widget.id}`}>Titel</label>
-              <input
-                id={`widget-title-${widget.id}`}
-                name="title"
-                type="text"
-                required
-                minLength={1}
-                maxLength={60}
-                defaultValue={widget.theme.title}
-              />
-            </div>
-            <div>
-              <label htmlFor={`widget-greeting-${widget.id}`}>Begrüßung</label>
-              <textarea
-                id={`widget-greeting-${widget.id}`}
-                name="greeting"
-                rows={3}
-                required
-                maxLength={300}
-                defaultValue={widget.theme.greeting}
-               
-              />
-            </div>
-            <button className="primary" type="submit">
-              Theme speichern
-            </button>
-          </form>
-          <div style={{ marginTop: '1.25rem' }}>
-            <span className="field-label">Embed-Code</span>
-            <code className="invite-link">
-              {`<script src="${embedBase}/widget.js" data-zendori-token="${widget.publicToken}" async></script>`}
-            </code>
-            <p className="hint">
-              Diesen Code auf der Website vor dem schließenden &lt;/body&gt;-Tag einfügen. Der Token
-              ist öffentlich — er identifiziert nur den Kanal und enthält keine Geheimnisse.
-            </p>
-          </div>
-          </details>
-        </div>
-      ))}
-
-      {quotaNotice('chat')}
-      {quota('chat').blocked ? null : (
-      <details className="chan-settings">
-        <summary>+ Neuen Widget-Channel anlegen</summary>
+      </>,
+      'chat',
       <form className="stack" action={createWidgetChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
           <label htmlFor="widget-name">Name</label>
-          <input
-            id="widget-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            maxLength={80}
-            placeholder="z. B. Website-Chat zendori.de"
-          />
+          <input id="widget-name" name="name" type="text" required minLength={2} maxLength={80} placeholder="z. B. Website-Chat zendori.de" />
         </div>
-        <button className="primary" type="submit">
-          Widget-Channel anlegen
-        </button>
+        <button className="primary" type="submit">Widget-Channel anlegen</button>
       </form>
-      </details>
-      )}
-    </div>
-  );
-
-  const testPanel: ReactNode = (
-    <div className="panel">
-      <h2>Test-Channel</h2>
-      <p className="help">
+    ),
+    test: createPanel(
+      'Test-Channel anlegen',
+      <>
         Ein Test-Channel dient zum manuellen Einspeisen von Nachrichten über den{' '}
         <Link href={`/test-channel?org=${orgId}`}>Test-Channel</Link>. Praktisch, um Inbox, KI und
         Zuweisung ohne echten Kanal auszuprobieren.
-      </p>
-      {testChannels.length > 0 ? (
-        <div style={{ marginBottom: '1.5rem' }}>
-          {testChannels.map((tc) => (
-            <div key={tc.id} className="chan-instance">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{tc.name}</div>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={tc.id}
-                  channelType="chat"
-                  agentId={tc.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-              </div>
-              <ActiveToggle orgId={orgId} channelId={tc.id} isActive={tc.isActive} />
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {quotaNotice('test')}
-      {quota('test').blocked ? null : (
-      <details className="chan-settings">
-        <summary>+ Neuen Test-Channel anlegen</summary>
+      </>,
+      'test',
       <form className="stack" action={createTestChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
           <label htmlFor="test-name">Name</label>
-          <input
-            id="test-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            placeholder="z. B. Test-Kanal Support"
-          />
+          <input id="test-name" name="name" type="text" required minLength={2} placeholder="z. B. Test-Kanal Support" />
         </div>
-        <button className="primary" type="submit">
-          Test-Channel anlegen
-        </button>
+        <button className="primary" type="submit">Test-Channel anlegen</button>
       </form>
-      </details>
-      )}
-    </div>
-  );
-
-  const webformPanel: ReactNode = (
-    <div className="panel">
-      <h2>Web-Formulare</h2>
-      <p className="help">
-        Mit dem Formular-Builder erstellte Formulare. Felder, Design und Embed-Code verwaltest du
-        unter <Link href={`/settings/forms?org=${orgId}`}>Formulare</Link> — hier weist du den
-        Agenten zu und schaltest den Kanal aktiv/inaktiv.
-      </p>
-      {webformChannels.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch kein Web-Formular angelegt —{' '}
-          <Link href={`/settings/forms?org=${orgId}`}>jetzt im Builder erstellen</Link>.
+    ),
+    webform: (
+      <div className="panel">
+        <h2>Web-Formulare</h2>
+        <p className="help">
+          Mit dem Zendori-Builder gestaltete Formulare (eigenes Design, Einbetten per Script oder
+          gehostete Seite). Anlegen und bearbeiten unter{' '}
+          <Link href={`/settings/forms?org=${orgId}`}>Formulare</Link>.
         </p>
-      ) : (
-        <div style={{ marginBottom: '1.5rem' }}>
-          {webformChannels.map((wf) => (
-            <div key={wf.id} className="chan-instance">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="chan-instance-name">{wf.name}</div>
-                <AgentSelect
-                  orgId={orgId}
-                  channelId={wf.id}
-                  channelType="email"
-                  agentId={wf.agentId}
-                  agents={agentOptions}
-                  disabled={!isOwner}
-                />
-                {webformFormIds.has(wf.id) ? (
-                  <p style={{ margin: '0.4rem 0 0', fontSize: '0.85rem' }}>
-                    <Link href={`/settings/forms/${webformFormIds.get(wf.id)}?org=${orgId}`}>
-                      Im Formular-Builder bearbeiten →
-                    </Link>
-                  </p>
-                ) : null}
-              </div>
-              <ActiveToggle orgId={orgId} channelId={wf.id} isActive={wf.isActive} />
-            </div>
-          ))}
-        </div>
-      )}
-      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-        ⚠️ Hinweis: Formulare sind öffentlich erreichbar und die E-Mail-Adresse der Einsendung ist
-        frei wählbar. JEDE automatische Antwort — Autopilot ebenso wie automatische
-        Empfangsbestätigungen (Auto-Ack) — geht an genau diese Adresse. Für öffentliche Formulare
-        empfehlen wir den Agent-Modus „Nur Entwürfe" und zurückhaltende Auto-Ack-Texte.
-      </p>
-    </div>
-  );
-
-  const panels: Record<TileKey, ReactNode> = {
-    form: formPanel,
-    webform: webformPanel,
-    email: emailPanel,
-    whatsapp: whatsappPanel,
-    voice: voicePanel,
-    chat: chatPanel,
-    test: testPanel,
+      </div>
+    ),
   };
 
   return (
@@ -1136,23 +249,68 @@ export default async function ChannelsPage({
       <div className="page-head">
         <h1>Kanäle</h1>
         <p>
-          Alle Kanäle von {orgName} auf einen Blick. Wähle einen Kanal, um ihn einzurichten und zu
-          aktivieren.
+          Alle Kanäle von {orgName} in einer Übersicht. Klicke einen Kanal an, um seine
+          Einstellungen zu bearbeiten — neue Kanäle legst du unten nach Typ an.
         </p>
       </div>
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
+      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
 
-      <ChannelGallery tiles={tiles} panels={panels} />
+      <div className="panel">
+        <h2>Übersicht</h2>
+        {channels.length === 0 ? (
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Noch keine Kanäle vorhanden — lege unten den ersten an.
+          </p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Kanal</th>
+                <th>Typ</th>
+                <th>Adresse / Nummer</th>
+                <th>Agent</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {channels.map((channel: Channel) => (
+                <tr key={channel.id}>
+                  <td>
+                    <Link
+                      href={`/settings/channels/${channel.id}?org=${orgId}`}
+                      style={{ fontWeight: 600 }}
+                    >
+                      {channel.name}
+                    </Link>
+                  </td>
+                  <td style={{ color: 'var(--text-muted)' }}>
+                    {FLAVOR_LABELS[flavorOf.get(channel.id) ?? 'test']}
+                  </td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem', wordBreak: 'break-all' }}>
+                    {channelIdentifier(channel)}
+                  </td>
+                  <td style={{ fontSize: '0.85rem' }}>
+                    {channel.agent_id ? (
+                      (agentName.get(channel.agent_id) ?? '—')
+                    ) : (
+                      <span className="badge badge--warn" title="Ohne Agent keine KI-Antworten">
+                        kein Agent
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <ActiveToggle orgId={orgId} channelId={channel.id} isActive={channel.is_active} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <h2 style={{ margin: '1.5rem 0 0.75rem' }}>Neuen Kanal anlegen</h2>
+      <ChannelGallery tiles={tiles} panels={panels as Record<TileKey, ReactNode>} />
     </div>
   );
 }
