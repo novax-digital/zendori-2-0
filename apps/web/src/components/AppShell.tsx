@@ -48,6 +48,7 @@ type IconName =
   | 'phone'
   | 'billing'
   | 'package'
+  | 'settings'
   | 'chevron'
   | 'signout';
 
@@ -166,6 +167,13 @@ function Icon({ name }: { name: IconName }) {
           <path d="m3 8 9 5 9-5M12 13v8" />
         </svg>
       );
+    case 'settings':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 3v2.4M12 18.6V21M21 12h-2.4M5.4 12H3M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7M18.4 18.4l-1.7-1.7M7.3 7.3 5.6 5.6" />
+        </svg>
+      );
     case 'chevron':
       return (
         <svg {...common}>
@@ -184,21 +192,19 @@ function Icon({ name }: { name: IconName }) {
 type NavItem = { href: string; label: string; icon: IconName };
 type NavSection = { title?: string; items: NavItem[] };
 
+// Nav restructure (owner 2026-07-24): the main areas are top-level; ONE
+// "Einstellungen" entry leads to the tabbed hub (Organisation, Telefonnummern,
+// Übergabe & Zeiten, Textbausteine, Integrationen, Abrechnung — SettingsTabs).
 const NAV: NavSection[] = [
   { items: [{ href: '/inbox', label: 'Inbox', icon: 'inbox' }] },
   {
-    title: 'Einstellungen',
     items: [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
       { href: '/settings/forms', label: 'Formulare', icon: 'form' },
-      { href: '/settings/phone-numbers', label: 'Telefonnummern', icon: 'phone' },
-      { href: '/settings/ai', label: 'Übergabe & Zeiten', icon: 'clock' },
-      { href: '/settings/canned-responses', label: 'Textbausteine', icon: 'canned' },
       { href: '/settings/members', label: 'Team', icon: 'team' },
-      { href: '/settings/integrations', label: 'Integrationen', icon: 'integrations' },
-      { href: '/settings/billing', label: 'Abrechnung', icon: 'billing' },
+      { href: '/settings', label: 'Einstellungen', icon: 'settings' },
     ],
   },
   {
@@ -215,27 +221,39 @@ const NAV: NavSection[] = [
  * only; undefined = always visible. Pages enforce authoritatively — this only
  * hides what the member cannot use anyway.
  */
-const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'admin'> = {
+const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'admin' | 'settings-hub'> = {
   '/inbox': { area: 'inbox', level: 'view' },
   '/settings/agents': { area: 'agents', level: 'view' },
   '/settings/knowledge': { area: 'knowledge', level: 'view' },
   '/settings/channels': { area: 'channels', level: 'view' },
   '/settings/forms': { area: 'channels', level: 'view' },
-  '/settings/phone-numbers': { area: 'channels', level: 'view' },
-  '/settings/ai': { area: 'handoff', level: 'view' },
-  '/settings/canned-responses': { area: 'canned', level: 'view' },
   '/settings/members': 'admin',
-  '/settings/integrations': 'admin',
-  '/settings/billing': { area: 'billing', level: 'view' },
+  '/settings': 'settings-hub',
   '/test-channel': { area: 'inbox', level: 'edit' },
   '/widget-demo': { area: 'inbox', level: 'view' },
 };
+
+/** Tab routes of the Einstellungen hub — drive the hub's active state + visibility. */
+const SETTINGS_TAB_ROUTES = [
+  '/settings/organization',
+  '/settings/phone-numbers',
+  '/settings/ai',
+  '/settings/canned-responses',
+  '/settings/integrations',
+  '/settings/billing',
+];
 
 function navItemVisible(access: MemberAccess | null, href: string): boolean {
   if (!access) return true; // loading / pre-0024: show everything (pages guard)
   const need = NAV_ACCESS[href];
   if (!need) return true;
   if (need === 'admin') return access.role === 'owner' || access.role === 'admin';
+  if (need === 'settings-hub') {
+    if (access.role === 'owner' || access.role === 'admin') return true;
+    return (['channels', 'handoff', 'canned', 'billing'] as AreaKey[]).some((area) =>
+      canViewArea(access, area)
+    );
+  }
   return need.level === 'edit' ? canEditArea(access, need.area) : canViewArea(access, need.area);
 }
 
@@ -389,8 +407,13 @@ function Sidebar() {
     });
 
   const withOrg = (href: string) => (org ? `${href}?org=${org}` : href);
-  const isActive = (href: string) =>
-    href === '/inbox' ? pathname === '/inbox' : pathname.startsWith(href);
+  const isActive = (href: string) => {
+    if (href === '/inbox') return pathname === '/inbox';
+    if (href === '/settings') {
+      return pathname === '/settings' || SETTINGS_TAB_ROUTES.some((r) => pathname.startsWith(r));
+    }
+    return pathname.startsWith(href);
+  };
 
   return (
     <aside className={`app-sidebar${collapsed ? ' app-sidebar--collapsed' : ''}`}>

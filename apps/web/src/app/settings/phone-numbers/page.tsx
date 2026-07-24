@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requestPhoneNumber, withdrawPhoneNumberRequest } from './actions';
 import { canViewArea, isAdminRole } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import SettingsTabs from '@/components/SettingsTabs';
 
 // Telefonnummern (0016): the org's number inventory + self-service requests.
 // Numbers are provisioned by the operator (Twilio purchase under the Novax
@@ -78,6 +79,8 @@ export default async function PhoneNumbersPage({
           einfach deine bestehende Nummer dorthin um oder nutzt die neue Nummer direkt.
         </p>
       </div>
+
+      <SettingsTabs active="phone-numbers" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

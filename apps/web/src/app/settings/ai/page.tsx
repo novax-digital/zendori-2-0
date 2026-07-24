@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { saveAiSettings } from './actions';
 import { canViewArea, isAdminRole } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import SettingsTabs from '@/components/SettingsTabs';
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 type Weekday = (typeof WEEKDAYS)[number];
@@ -77,6 +78,8 @@ export default async function AiSettingsPage({
           <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
         </p>
       </div>
+
+      <SettingsTabs active="ai" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

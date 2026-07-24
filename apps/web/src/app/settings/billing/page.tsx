@@ -14,6 +14,7 @@ import {
   recentMonths,
 } from '@/lib/billing';
 import { canViewArea } from '@zendori/core';
+import SettingsTabs from '@/components/SettingsTabs';
 
 export default async function CustomerBillingPage({
   searchParams,
@@ -29,6 +30,8 @@ export default async function CustomerBillingPage({
         <div className="page-head">
           <h1>Abrechnung</h1>
         </div>
+
+        <SettingsTabs active="billing" access={access} orgId={orgId} />
         <div className="panel">
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
             Die Abrechnung ist nur für Inhaber der Organisation sichtbar.

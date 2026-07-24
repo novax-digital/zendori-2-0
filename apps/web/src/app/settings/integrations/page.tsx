@@ -13,6 +13,7 @@ import IntegrationGallery, {
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
 import { isAdminRole } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import SettingsTabs from '@/components/SettingsTabs';
 
 // listTicketPipelines returns network data → parsed defensively (labels tolerate
 // absence so a client-shape drift never crashes the settings page).
@@ -81,7 +82,7 @@ export default async function IntegrationsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs, role } = await requireActiveOrg(org);
+  const { orgId, orgs, role, access } = await requireActiveOrg(org);
   if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
 
@@ -314,6 +315,8 @@ export default async function IntegrationsPage({
           einzurichten.
         </p>
       </div>
+
+      <SettingsTabs active="integrations" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

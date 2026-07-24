@@ -3,6 +3,7 @@ import { listCannedResponses } from '@/lib/inbox/queries';
 import { deleteCannedResponse, saveCannedResponse } from '@/app/inbox/actions';
 import { canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import SettingsTabs from '@/components/SettingsTabs';
 
 
 export default async function CannedResponsesPage({
@@ -25,6 +26,8 @@ export default async function CannedResponsesPage({
           Auswahl.
         </p>
       </div>
+
+      <SettingsTabs active="canned-responses" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>
