@@ -17,6 +17,18 @@ function agentsUrl(org: string, message?: { error?: string; notice?: string }): 
   return `/settings/agents?${params.toString()}`;
 }
 
+/** Detail page of one agent (two-level layout, owner 2026-07-24). */
+function agentDetailUrl(
+  org: string,
+  agentId: string,
+  message?: { error?: string; notice?: string }
+): string {
+  const params = new URLSearchParams({ org });
+  if (message?.error) params.set('error', message.error);
+  if (message?.notice) params.set('notice', message.notice);
+  return `/settings/agents/${agentId}?${params.toString()}`;
+}
+
 /**
  * Owner gate: agent identity/mode steer the bot and channel assignment changes
  * live behavior — owner-only (RLS enforces this for the agents table itself,
@@ -131,14 +143,16 @@ export async function createAgent(formData: FormData): Promise<void> {
     // The agent exists but has no knowledge — say so instead of faking success
     // (per []-semantics it would silently answer nothing).
     redirect(
-      agentsUrl(org, {
-        error: `Agent „${name}" angelegt, aber Wissensdatenbanken konnten nicht verknüpft werden — bitte im Agenten manuell anhaken.`,
+      agentDetailUrl(org, (created as { id: string }).id, {
+        error: `Agent „${name}" angelegt, aber Wissensdatenbanken konnten nicht verknüpft werden — bitte im Tab „Wissen" manuell anhaken.`,
       })
     );
   }
 
   revalidatePath('/settings/agents');
-  redirect(agentsUrl(org, { notice: `Agent „${name}" angelegt.` }));
+  redirect(
+    agentDetailUrl(org, (created as { id: string }).id, { notice: `Agent „${name}" angelegt.` })
+  );
 }
 
 // --- update (fields + channel assignments) --------------------------------------
@@ -170,7 +184,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
   const kind = ((kindRow as { kind?: AgentKind } | null)?.kind ?? 'text') as AgentKind;
   if (!modeAllowedForKind(kind, mode)) {
     redirect(
-      agentsUrl(org, { error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".' })
+      agentDetailUrl(org, agentId, { error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".' })
     );
   }
 
@@ -189,7 +203,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     .eq('id', agentId)
     .select('id');
   if (updateError || !updated || updated.length === 0) {
-    redirect(agentsUrl(org, { error: 'Agent konnte nicht gespeichert werden.' }));
+    redirect(agentDetailUrl(org, agentId, { error: 'Agent konnte nicht gespeichert werden.' }));
   }
 
   // Channel assignments: checked channels point to this agent. Detaching is
@@ -205,7 +219,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     .select('id, agent_id, type')
     .eq('org_id', org);
   if (channelLoadError) {
-    redirect(agentsUrl(org, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
+    redirect(agentDetailUrl(org, agentId, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
   }
   const channels = (channelData ?? []) as { id: string; agent_id: string | null; type: string }[];
   // Kind gate (0015): a stale checklist may post channels the agent cannot
@@ -230,7 +244,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
         toAssign.map((c) => c.id)
       );
     if (error) {
-      redirect(agentsUrl(org, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
+      redirect(agentDetailUrl(org, agentId, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
     }
   }
   if (toDetach.length > 0) {
@@ -243,7 +257,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
         toDetach.map((c) => c.id)
       );
     if (error) {
-      redirect(agentsUrl(org, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
+      redirect(agentDetailUrl(org, agentId, { error: 'Kanal-Zuweisung konnte nicht gespeichert werden.' }));
     }
   }
 
@@ -257,7 +271,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     .eq('org_id', org)
     .eq('agent_id', agentId);
   if (linkLoadError) {
-    redirect(agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' }));
+    redirect(agentDetailUrl(org, agentId, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' }));
   }
   const linked = new Set(
     ((linkData ?? []) as { knowledge_base_id: string }[]).map((r) => r.knowledge_base_id)
@@ -276,7 +290,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     );
     if (error) {
       redirect(
-        agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
+        agentDetailUrl(org, agentId, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
       );
     }
   }
@@ -289,15 +303,16 @@ export async function updateAgent(formData: FormData): Promise<void> {
       .in('knowledge_base_id', kbsToUnlink);
     if (error) {
       redirect(
-        agentsUrl(org, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
+        agentDetailUrl(org, agentId, { error: 'Wissensdatenbank-Verknüpfung konnte nicht gespeichert werden.' })
       );
     }
   }
 
   revalidatePath('/settings/agents');
+  revalidatePath(`/settings/agents/${agentId}`);
   revalidatePath('/settings/channels');
   revalidatePath('/settings/knowledge');
-  redirect(agentsUrl(org, { notice: 'Agent gespeichert.' }));
+  redirect(agentDetailUrl(org, agentId, { notice: 'Agent gespeichert.' }));
 }
 
 // --- delete ------------------------------------------------------------------
