@@ -467,6 +467,8 @@ export default async function ChannelsPage({
       )}
       {quotaNotice('form')}
       {quota('form').blocked ? null : (
+      <details className="chan-settings">
+        <summary>+ Neue Formular-Adresse anlegen</summary>
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="form" />
@@ -490,6 +492,7 @@ export default async function ChannelsPage({
           Formular-Adresse anlegen
         </button>
       </form>
+      </details>
       )}
     </div>
   );
@@ -529,6 +532,8 @@ export default async function ChannelsPage({
       )}
       {quotaNotice('email')}
       {quota('email').blocked ? null : (
+      <details className="chan-settings">
+        <summary>+ Neue E-Mail-Adresse anlegen</summary>
       <form className="stack" action={createIntakeAddress} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="purpose" value="forwarded_email" />
@@ -552,6 +557,7 @@ export default async function ChannelsPage({
           E-Mail-Adresse anlegen
         </button>
       </form>
+      </details>
       )}
     </div>
   );
@@ -625,10 +631,15 @@ export default async function ChannelsPage({
                   agents={agentOptions}
                   disabled={!isOwner}
                 />
-                {conversationSplitForm(wa.id, wa.splitHours)}
               </div>
               <ActiveToggle orgId={orgId} channelId={wa.id} isActive={wa.isActive} />
             </div>
+          ))}
+          {whatsappChannels.map((wa) => (
+            <details key={`settings-${wa.id}`} className="chan-settings">
+              <summary>Einstellungen ({wa.name}): Ticket-Trennung</summary>
+              {conversationSplitForm(wa.id, wa.splitHours)}
+            </details>
           ))}
         </div>
       )}
@@ -638,6 +649,8 @@ export default async function ChannelsPage({
       </div>
       {quotaNotice('whatsapp')}
       {quota('whatsapp').blocked ? null : (
+      <details className="chan-settings">
+        <summary>+ Neue WhatsApp-Nummer verbinden</summary>
       <form className="stack" action={createWhatsappTwilioChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -684,6 +697,7 @@ export default async function ChannelsPage({
           WhatsApp-Nummer verbinden
         </button>
       </form>
+      </details>
       )}
     </div>
   );
@@ -751,10 +765,12 @@ export default async function ChannelsPage({
               </div>
               <ActiveToggle orgId={orgId} channelId={vc.id} isActive={vc.isActive} />
             </div>
+            <details className="chan-settings">
+              <summary>Einstellungen: Begrüßung, Stimme, Sprache, Aufzeichnung</summary>
             <form
               className="stack"
               action={updateVoiceChannelSettings}
-              style={{ maxWidth: '30rem' }}
+              style={{ maxWidth: '30rem', marginTop: '0.75rem' }}
             >
             <input type="hidden" name="org" value={orgId} />
             <input type="hidden" name="channelId" value={vc.id} />
@@ -883,6 +899,7 @@ export default async function ChannelsPage({
             )}
             </fieldset>
             </form>
+            </details>
           </div>
           );
         })
@@ -914,11 +931,13 @@ export default async function ChannelsPage({
                 agents={agentOptions}
                 disabled={!isOwner}
               />
-              {conversationSplitForm(widget.id, widget.splitHours)}
             </div>
             <ActiveToggle orgId={orgId} channelId={widget.id} isActive={widget.isActive} />
           </div>
-          <form className="stack" action={updateWidgetTheme} style={{ maxWidth: '26rem' }}>
+          <details className="chan-settings">
+            <summary>Einstellungen: Design, Begrüßung, Ticket-Trennung & Embed-Code</summary>
+          {conversationSplitForm(widget.id, widget.splitHours)}
+          <form className="stack" action={updateWidgetTheme} style={{ maxWidth: '26rem', marginTop: '0.75rem' }}>
             <input type="hidden" name="org" value={orgId} />
             <input type="hidden" name="channelId" value={widget.id} />
             <div>
@@ -968,11 +987,14 @@ export default async function ChannelsPage({
               ist öffentlich — er identifiziert nur den Kanal und enthält keine Geheimnisse.
             </p>
           </div>
+          </details>
         </div>
       ))}
 
       {quotaNotice('chat')}
       {quota('chat').blocked ? null : (
+      <details className="chan-settings">
+        <summary>+ Neuen Widget-Channel anlegen</summary>
       <form className="stack" action={createWidgetChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -991,6 +1013,7 @@ export default async function ChannelsPage({
           Widget-Channel anlegen
         </button>
       </form>
+      </details>
       )}
     </div>
   );
@@ -1025,6 +1048,8 @@ export default async function ChannelsPage({
       ) : null}
       {quotaNotice('test')}
       {quota('test').blocked ? null : (
+      <details className="chan-settings">
+        <summary>+ Neuen Test-Channel anlegen</summary>
       <form className="stack" action={createTestChannel} style={{ maxWidth: '26rem' }}>
         <input type="hidden" name="org" value={orgId} />
         <div>
@@ -1042,6 +1067,7 @@ export default async function ChannelsPage({
           Test-Channel anlegen
         </button>
       </form>
+      </details>
       )}
     </div>
   );
