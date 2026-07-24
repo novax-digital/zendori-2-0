@@ -20,6 +20,7 @@ import {
 } from './actions';
 import { canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 
 type KbRow = {
   id: string;
@@ -329,9 +330,9 @@ export default async function KnowledgePage({
                       <form action={deleteSource} style={{ display: 'inline-block' }}>
                         <input type="hidden" name="org" value={orgId} />
                         <input type="hidden" name="id" value={source.id} />
-                        <button className="ghost" type="submit">
-                          Löschen
-                        </button>
+                        {/* two-step confirm (owner 2026-07-24): deletion removes the
+                            chunks immediately from every agent's retrieval */}
+                        <ConfirmDeleteButton label="Löschen" confirmLabel="Wirklich löschen" />
                       </form>
                     </td>
                   </tr>

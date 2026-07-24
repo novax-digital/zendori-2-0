@@ -8,6 +8,7 @@ import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import { createAgent, updateAgent, deleteAgent } from './actions';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
+import EditTabs from '@/components/EditTabs';
 import { canViewArea, isAdminRole } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
 
@@ -222,63 +223,118 @@ export default async function AgentsPage({
 
   const panels: Record<string, ReactNode> = {};
   for (const agent of agents) {
+    // Tabbed editor (owner feedback 2026-07-24: the stacked panel was too long).
+    // All tab contents stay mounted inside the ONE update form (EditTabs hides
+    // them visually) so every field submits regardless of the active tab.
+    const identityTab: ReactNode = (
+      <div className="stack">
+        <div>
+          <label htmlFor={`agent-${agent.id}-name`}>Name</label>
+          <input
+            id={`agent-${agent.id}-name`}
+            name="name"
+            type="text"
+            required
+            minLength={2}
+            maxLength={80}
+            defaultValue={agent.name}
+            disabled={disabled}
+          />
+        </div>
+        <div>
+          <label htmlFor={`agent-${agent.id}-identity`}>Identität (System-Prompt)</label>
+          <textarea
+            id={`agent-${agent.id}-identity`}
+            name="identity"
+            rows={10}
+            maxLength={8000}
+            defaultValue={agent.identity ?? ''}
+            disabled={disabled}
+            placeholder={
+              'Wer ist dieser Agent, wie spricht er, was darf er (nicht)?\nz. B. „Du bist Lisa, die freundliche Support-Assistentin von Strong Energy. Du duzt Kunden, hältst dich kurz und verweist bei Vertragsfragen immer an das Team."'
+            }
+          />
+          <p className="hint">Fließt in jede Antwort dieses Agenten ein — Rolle, Tonfall, Regeln.</p>
+        </div>
+      </div>
+    );
+    const behaviorTab: ReactNode = (
+      <div className="stack">
+        <AgentBehaviorFields
+          idPrefix={`agent-${agent.id}`}
+          kindFixed={agent.kind}
+          defaultMode={agent.mode}
+          defaultThreshold={agent.confidence_threshold}
+          defaultHandoffEnabled={agent.handoff_enabled}
+          disabled={disabled}
+        />
+        <label className="check-row">
+          <input
+            type="checkbox"
+            name="isActive"
+            defaultChecked={agent.is_active}
+            disabled={disabled}
+          />
+          Agent aktiv (pausiert = verhält sich wie „kein Agent")
+        </label>
+      </div>
+    );
+    const knowledgeTab: ReactNode = (
+      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+        <p className="help" style={{ marginBottom: '0.75rem' }}>
+          Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung kennt
+          er keine Inhalte und übergibt inhaltliche Fragen an das Team.
+        </p>
+        {agentLacksKb(agent) ? (
+          <p className="notice" style={{ marginBottom: '0.75rem' }}>
+            Dieser Agent ist mit keiner Wissensdatenbank verknüpft — er kann inhaltliche Fragen
+            nicht beantworten. Hake unten mindestens eine Datenbank an.
+          </p>
+        ) : null}
+        {kbs.length === 0 ? (
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen → Wissensdatenbank.
+          </p>
+        ) : (
+          kbs.map((kb) => {
+            const isLinked = kbsByAgent.get(agent.id)?.has(kb.id) ?? false;
+            return (
+              <label key={kb.id} className="check-row">
+                {isLinked ? <input type="hidden" name="renderedLinkedKbs" value={kb.id} /> : null}
+                <input
+                  type="checkbox"
+                  name="kbs"
+                  value={kb.id}
+                  defaultChecked={isLinked}
+                  disabled={disabled}
+                />
+                {kb.name}
+              </label>
+            );
+          })
+        )}
+      </fieldset>
+    );
+
     panels[agent.id] = (
       <div className="panel" key={agent.id}>
         <h2>{agent.name}</h2>
-        <form className="stack" action={updateAgent} style={{ maxWidth: '34rem' }}>
+        <form className="stack" action={updateAgent} style={{ maxWidth: '40rem' }}>
           <input type="hidden" name="org" value={orgId} />
           <input type="hidden" name="agentId" value={agent.id} />
-          <AgentFields idPrefix={`agent-${agent.id}`} agent={agent} disabled={disabled} />
-          <label className="check-row">
-            <input
-              type="checkbox"
-              name="isActive"
-              defaultChecked={agent.is_active}
-              disabled={disabled}
-            />
-            Agent aktiv (pausiert = verhält sich wie „kein Agent")
-          </label>
-          {channelChecklist(agent)}
-          <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-            <legend style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Wissensdatenbanken
-            </legend>
-            <p className="help" style={{ marginBottom: '0.75rem' }}>
-              Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung
-              kennt er keine Inhalte und übergibt inhaltliche Fragen an das Team.
-            </p>
-            {agentLacksKb(agent) ? (
-              <p className="notice" style={{ marginBottom: '0.75rem' }}>
-                Dieser Agent ist mit keiner Wissensdatenbank verknüpft — er kann inhaltliche
-                Fragen nicht beantworten. Hake unten mindestens eine Datenbank an.
-              </p>
-            ) : null}
-            {kbs.length === 0 ? (
-              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen →
-                Wissensdatenbank.
-              </p>
-            ) : (
-              kbs.map((kb) => {
-                const isLinked = kbsByAgent.get(agent.id)?.has(kb.id) ?? false;
-                return (
-                  <label key={kb.id} className="check-row">
-                    {isLinked ? (
-                      <input type="hidden" name="renderedLinkedKbs" value={kb.id} />
-                    ) : null}
-                    <input
-                      type="checkbox"
-                      name="kbs"
-                      value={kb.id}
-                      defaultChecked={isLinked}
-                      disabled={disabled}
-                    />
-                    {kb.name}
-                  </label>
-                );
-              })
-            )}
-          </fieldset>
+          <EditTabs
+            sections={[
+              { key: 'identity', label: 'Identität', content: identityTab },
+              { key: 'behavior', label: 'Verhalten', content: behaviorTab },
+              { key: 'channels', label: 'Kanäle', content: channelChecklist(agent) },
+              {
+                key: 'knowledge',
+                label: 'Wissen',
+                warn: agentLacksKb(agent),
+                content: knowledgeTab,
+              },
+            ]}
+          />
           {isOwner ? (
             <button className="primary" type="submit">
               Agent speichern
