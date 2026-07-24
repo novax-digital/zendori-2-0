@@ -653,3 +653,77 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
   revalidatePath('/settings/channels');
   redirect(channelsUrl(org, { notice: 'Voice-Einstellungen gespeichert.' }, returnToOf(formData)));
 }
+
+// --- delete a channel (owner 2026-07-24) -------------------------------------------
+
+const deleteChannelSchema = z.object({ org: z.uuid(), channelId: z.uuid() });
+
+/**
+ * Deletes a channel — CASCADES all of its conversations/messages (FK design).
+ * Owner/admin only (app-level gate like every channel mutation; the DB guard
+ * additionally protects form-builder channels). Builder-form channels are
+ * deleted in the form builder instead (name-confirmation flow there).
+ */
+export async function deleteChannel(formData: FormData): Promise<void> {
+  const parsed = deleteChannelSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+  });
+  if (!parsed.success) {
+    redirect(channelsUrl(textField(formData.get('org')), { error: 'Kanal wurde nicht gefunden.' }));
+  }
+  const { org, channelId } = parsed.data;
+  const detailReturn = `/settings/channels/${channelId}`;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  const { data: memberRow } = await supabase
+    .from('org_members')
+    .select('role')
+    .eq('org_id', org)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  const memberRole = (memberRow as { role: string } | null)?.role;
+  if (memberRole !== 'owner' && memberRole !== 'admin') {
+    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können Kanäle löschen.' }, detailReturn));
+  }
+
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('name, config')
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .maybeSingle();
+  if (!channelRow) redirect(channelsUrl(org, { error: 'Kanal wurde nicht gefunden.' }));
+  const config = (channelRow as { config?: Record<string, unknown> }).config ?? {};
+  if (config.builderForm === true) {
+    redirect(
+      channelsUrl(
+        org,
+        { error: 'Web-Formulare löschst du im Formular-Builder (Einstellungen → Formulare).' },
+        detailReturn
+      )
+    );
+  }
+
+  const { data: deleted, error } = await supabase
+    .from('channels')
+    .delete()
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !deleted || deleted.length === 0) {
+    redirect(channelsUrl(org, { error: 'Kanal konnte nicht gelöscht werden.' }, detailReturn));
+  }
+
+  revalidatePath('/settings/channels');
+  redirect(
+    channelsUrl(org, {
+      notice: `Kanal „${(channelRow as { name: string }).name}" samt Konversationen gelöscht.`,
+    })
+  );
+}
+

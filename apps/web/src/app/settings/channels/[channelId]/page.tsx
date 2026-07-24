@@ -15,10 +15,12 @@ import NoAccessPanel from '@/components/NoAccessPanel';
 import VoicePicker from '@/components/VoicePicker';
 import GreetingSuggestion from '@/components/GreetingSuggestion';
 import {
+  deleteChannel,
   updateConversationSplit,
   updateVoiceChannelSettings,
   updateWidgetTheme,
 } from '../actions';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import {
   ActiveToggle,
   AgentSelect,
@@ -59,6 +61,12 @@ export default async function ChannelDetailPage({
   if (!channelData) notFound();
   const channel = channelData as unknown as Channel;
   const flavor = channelFlavor(channel);
+
+  const { count: conversationCount } = await supabase
+    .from('conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', orgId)
+    .eq('channel_id', channelId);
 
   let businessHours: BusinessHours | null = null;
   const rawHours = (hoursRow.data as { business_hours: unknown } | null)?.business_hours;
@@ -425,6 +433,33 @@ export default async function ChannelDetailPage({
       </div>
 
       {sections}
+
+      {isOwner && flavor !== 'webform' ? (
+        <div className="panel">
+          <h2>Kanal löschen</h2>
+          <p className="help">
+            Löscht den Kanal <strong>unwiderruflich</strong> — inklusive{' '}
+            {conversationCount === 1
+              ? 'der 1 zugehörigen Konversation'
+              : `aller ${conversationCount ?? 0} zugehörigen Konversationen`}{' '}
+            samt Nachrichten und Notizen.
+          </p>
+          <form action={deleteChannel}>
+            <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="channelId" value={channel.id} />
+            <ConfirmDeleteButton label="Kanal löschen" confirmLabel="Endgültig löschen" />
+          </form>
+        </div>
+      ) : null}
+      {isOwner && flavor === 'webform' ? (
+        <div className="panel">
+          <h2>Kanal löschen</h2>
+          <p className="help">
+            Web-Formulare löschst du im Formular-Builder (mit Namens-Bestätigung) — dort wird das
+            Formular samt Kanal entfernt.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
