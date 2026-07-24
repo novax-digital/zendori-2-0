@@ -32,12 +32,12 @@ export default async function OrganizationSettingsPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="organization" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Einstellungen</h1>
         <p>Organisation, Erreichbarkeit und Abrechnung deiner Zendori-Instanz.</p>
       </div>
-
-      <SettingsTabs active="organization" access={access} orgId={orgId} />
 
       <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
 

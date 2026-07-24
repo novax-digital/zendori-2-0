@@ -308,6 +308,8 @@ export default async function IntegrationsPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="integrations" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Integrationen</h1>
         <p>
@@ -315,8 +317,6 @@ export default async function IntegrationsPage({
           einzurichten.
         </p>
       </div>
-
-      <SettingsTabs active="integrations" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

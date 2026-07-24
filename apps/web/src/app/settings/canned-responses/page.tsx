@@ -5,7 +5,6 @@ import { canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import SettingsTabs from '@/components/SettingsTabs';
 
-
 export default async function CannedResponsesPage({
   searchParams,
 }: {
@@ -19,6 +18,8 @@ export default async function CannedResponsesPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="canned-responses" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Textbausteine</h1>
         <p>
@@ -26,8 +27,6 @@ export default async function CannedResponsesPage({
           Auswahl.
         </p>
       </div>
-
-      <SettingsTabs active="canned-responses" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

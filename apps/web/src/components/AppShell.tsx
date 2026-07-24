@@ -202,7 +202,6 @@ const NAV: NavSection[] = [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
-      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
       { href: '/settings/members', label: 'Team', icon: 'team' },
       { href: '/settings', label: 'Einstellungen', icon: 'settings' },
     ],
@@ -210,6 +209,7 @@ const NAV: NavSection[] = [
   {
     title: 'Werkzeuge',
     items: [
+      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
       { href: '/test-channel', label: 'Test-Channel', icon: 'test' },
       { href: '/widget-demo', label: 'Widget-Demo', icon: 'widget' },
     ],

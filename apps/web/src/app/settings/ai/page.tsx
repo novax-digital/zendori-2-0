@@ -69,6 +69,8 @@ export default async function AiSettingsPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="ai" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Übergabe &amp; Zeiten</h1>
         <p>
@@ -78,8 +80,6 @@ export default async function AiSettingsPage({
           <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
         </p>
       </div>
-
-      <SettingsTabs active="ai" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

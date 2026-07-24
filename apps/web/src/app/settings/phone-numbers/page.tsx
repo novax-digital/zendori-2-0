@@ -43,7 +43,6 @@ const statusClass: Record<PhoneNumberStatus, string> = {
   released: 'badge--danger',
 };
 
-
 export default async function PhoneNumbersPage({
   searchParams,
 }: {
@@ -71,6 +70,8 @@ export default async function PhoneNumbersPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="phone-numbers" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Telefonnummern</h1>
         <p>
@@ -79,8 +80,6 @@ export default async function PhoneNumbersPage({
           einfach deine bestehende Nummer dorthin um oder nutzt die neue Nummer direkt.
         </p>
       </div>
-
-      <SettingsTabs active="phone-numbers" access={access} orgId={orgId} />
 
       {error ? (
         <p className="error" style={{ marginBottom: '1.5rem' }}>

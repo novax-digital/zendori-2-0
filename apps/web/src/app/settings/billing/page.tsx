@@ -31,7 +31,6 @@ export default async function CustomerBillingPage({
           <h1>Abrechnung</h1>
         </div>
 
-        <SettingsTabs active="billing" access={access} orgId={orgId} />
         <div className="panel">
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
             Die Abrechnung ist nur für Inhaber der Organisation sichtbar.
@@ -64,6 +63,8 @@ export default async function CustomerBillingPage({
 
   return (
     <div className="shell">
+      <SettingsTabs active="billing" access={access} orgId={orgId} />
+
       <div className="page-head">
         <h1>Abrechnung</h1>
         <p>
