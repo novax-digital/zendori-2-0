@@ -123,8 +123,9 @@ export async function createCustomer(formData: FormData): Promise<void> {
     } else {
       await sendAddedToTeamMail({ to: email, orgName });
     }
-  } catch {
-    mailNote = ' Die Einladungs-E-Mail konnte nicht gesendet werden — bitte erneut senden.';
+  } catch (err) {
+    const reason = (err instanceof Error ? err.message : 'Unbekannter Fehler').slice(0, 140);
+    mailNote = ` ACHTUNG: Einladungs-E-Mail schlug fehl (${reason}).`;
   }
 
   revalidatePath('/admin/users');
@@ -201,8 +202,9 @@ export async function addMember(formData: FormData): Promise<void> {
     } else {
       await sendAddedToTeamMail({ to: email, orgName });
     }
-  } catch {
-    mailNote = ' Die Einladungs-E-Mail konnte nicht gesendet werden — bitte über Einstellungen → Team erneut senden.';
+  } catch (err) {
+    const reason = (err instanceof Error ? err.message : 'Unbekannter Fehler').slice(0, 140);
+    mailNote = ` ACHTUNG: Einladungs-E-Mail schlug fehl (${reason}) — nach Behebung über Einstellungen → Team erneut senden.`;
   }
 
   revalidatePath(`/admin/users/${orgId}`);

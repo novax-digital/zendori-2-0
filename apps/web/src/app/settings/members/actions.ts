@@ -142,7 +142,11 @@ export async function inviteMember(formData: FormData): Promise<void> {
     redirect(membersUrl(orgId, { error: 'Mitglied konnte nicht angelegt werden.' }));
   }
 
-  // Mail is best-effort: the membership stands, "Einladung erneut senden" retries.
+  // Mail is best-effort: the membership stands, "Einladung erneut senden"
+  // retries. The failure REASON is surfaced (red banner) — env problems
+  // (RESEND_FROM/APP_URL missing in Vercel) were invisible behind a vague
+  // notice (owner report 2026-07-24). Reasons are config/API messages, never
+  // mail content (§7).
   try {
     if (created) {
       const link = await buildPasswordSetupLink(admin, email);
@@ -150,11 +154,11 @@ export async function inviteMember(formData: FormData): Promise<void> {
     } else {
       await sendAddedToTeamMail({ to: email, orgName });
     }
-  } catch {
+  } catch (err) {
+    const reason = (err instanceof Error ? err.message : 'Unbekannter Fehler').slice(0, 140);
     redirect(
       membersUrl(orgId, {
-        notice:
-          'Mitglied angelegt, aber die E-Mail konnte nicht gesendet werden — bitte „Einladung erneut senden" nutzen.',
+        error: `Mitglied angelegt, aber die E-Mail schlug fehl: ${reason} — nach Behebung „Einladung erneut senden" nutzen.`,
       })
     );
   }
@@ -296,8 +300,9 @@ export async function resendInvite(formData: FormData): Promise<void> {
   try {
     const link = await buildPasswordSetupLink(admin, email);
     await sendInviteMail({ to: email, orgName, link });
-  } catch {
-    redirect(membersUrl(orgId, { error: 'E-Mail konnte nicht gesendet werden.' }));
+  } catch (err) {
+    const reason = (err instanceof Error ? err.message : 'Unbekannter Fehler').slice(0, 140);
+    redirect(membersUrl(orgId, { error: `E-Mail schlug fehl: ${reason}` }));
   }
 
   redirect(membersUrl(orgId, { notice: `Einladung erneut an ${email} gesendet.` }));
