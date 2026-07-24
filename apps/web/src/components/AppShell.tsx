@@ -6,6 +6,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { signOut } from '@/app/actions';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import ThemeToggle from './ThemeToggle';
+// Client-safe subpath: the @zendori/core barrel pulls node:crypto (webhooks)
+// and cannot be bundled for the browser.
 import {
   EMPTY_PERMISSIONS,
   LEGACY_AGENT_PERMISSIONS,
@@ -15,7 +17,7 @@ import {
   type AreaKey,
   type MemberAccess,
   type OrgRole,
-} from '@zendori/core';
+} from '@zendori/core/permissions';
 
 // Routes that render without the app chrome (auth + embeddable/demo surfaces).
 const BARE_PREFIXES = [

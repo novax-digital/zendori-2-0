@@ -6,12 +6,14 @@
 // rendered into hidden/named inputs; the server action validates everything
 // again (roles, levels, channel ownership).
 import { useMemo, useState } from 'react';
+// Client-safe subpath: the @zendori/core barrel pulls node:crypto (webhooks)
+// and cannot be bundled for the browser.
 import {
   AREA_DEFS,
   type AreaKey,
   type AreaLevel,
   type MemberPermissions,
-} from '@zendori/core';
+} from '@zendori/core/permissions';
 
 export interface TeamChannelOption {
   id: string;
