@@ -1,6 +1,7 @@
 import 'server-only';
 import { sendEmail } from '@zendori/channels';
 import type { SupabaseClient } from '@zendori/core';
+import { escapeHtml, renderZendoriEmail } from './mail-templates';
 
 // Team invitation plumbing (0024, App-Control pattern): the account is created
 // WITHOUT a password (email pre-confirmed), and the invite e-mail carries a
@@ -65,40 +66,35 @@ function systemFrom(): string {
   return from;
 }
 
-const esc = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function appUrl(): string {
+  return (process.env.APP_URL ?? 'https://app.zendori.ai').replace(/\/+$/, '');
+}
 
-/** Invite mail for a NEW account: greeting + password-setup button. */
+/** Invite mail for a NEW account: branded card + password-setup CTA. */
 export async function sendInviteMail(params: {
   to: string;
   orgName: string;
   link: string;
 }): Promise<void> {
-  const subject = `Einladung: Ihr Zugang zu ${params.orgName} bei Zendori`;
-  const text = [
-    `Hallo,`,
-    ``,
-    `Sie wurden zum Team von ${params.orgName} bei Zendori eingeladen.`,
-    `Legen Sie über diesen Link Ihr Passwort fest, um loszulegen:`,
-    ``,
-    params.link,
-    ``,
-    `Der Link ist zeitlich begrenzt gültig. Falls er abgelaufen ist, kann Ihr Team eine neue Einladung senden.`,
-  ].join('\n');
-  const html = `
-<div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
-  <h2 style="margin:0 0 12px">Willkommen bei Zendori</h2>
-  <p>Sie wurden zum Team von <strong>${esc(params.orgName)}</strong> eingeladen.</p>
-  <p>Legen Sie Ihr Passwort fest, um loszulegen:</p>
-  <p style="margin:24px 0">
-    <a href="${esc(params.link)}"
-       style="background:#0bb8ba;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:9999px;font-weight:600">
-      Passwort festlegen
-    </a>
-  </p>
-  <p style="color:#64748b;font-size:13px">Der Link ist zeitlich begrenzt gültig. Falls er abgelaufen ist, kann Ihr Team eine neue Einladung senden.</p>
-</div>`;
-  await sendEmail({ from: systemFrom(), to: params.to, subject, text, html });
+  const orgName = escapeHtml(params.orgName);
+  const { html, text } = renderZendoriEmail({
+    preheader: `Ihr Zugang zum Team von ${params.orgName} — Passwort festlegen und loslegen.`,
+    paragraphs: [
+      `Sie wurden zum Team von <strong>${orgName}</strong> bei Zendori eingeladen — der Plattform für Kundenservice über alle Kanäle.`,
+      `Legen Sie jetzt Ihr persönliches Passwort fest, um loszulegen:`,
+    ],
+    cta: { label: 'Passwort festlegen', url: params.link },
+    finePrint:
+      'Der Link ist zeitlich begrenzt gültig. Falls er abgelaufen ist, kann Ihr Team jederzeit eine neue Einladung senden.',
+    appUrl: appUrl(),
+  });
+  await sendEmail({
+    from: systemFrom(),
+    to: params.to,
+    subject: `Einladung: Ihr Zugang zu ${params.orgName} bei Zendori`,
+    text,
+    html,
+  });
 }
 
 /** Mail for an EXISTING account that was added to another org's team. */
@@ -106,23 +102,21 @@ export async function sendAddedToTeamMail(params: {
   to: string;
   orgName: string;
 }): Promise<void> {
-  const appUrl = (process.env.APP_URL ?? '').replace(/\/+$/, '');
-  const loginUrl = appUrl ? `${appUrl}/login` : '';
-  const subject = `Sie wurden zum Team von ${params.orgName} hinzugefügt`;
-  const text = [
-    `Hallo,`,
-    ``,
-    `Ihr bestehendes Zendori-Konto wurde zum Team von ${params.orgName} hinzugefügt.`,
-    `Melden Sie sich wie gewohnt an — die Organisation erscheint in Ihrer Auswahl.`,
-    loginUrl ? `` : '',
-    loginUrl,
-  ].join('\n');
-  const html = `
-<div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
-  <h2 style="margin:0 0 12px">Neues Team in Zendori</h2>
-  <p>Ihr bestehendes Zendori-Konto wurde zum Team von <strong>${esc(params.orgName)}</strong> hinzugefügt.</p>
-  <p>Melden Sie sich wie gewohnt an — die Organisation erscheint in Ihrer Auswahl.</p>
-  ${loginUrl ? `<p style="margin:24px 0"><a href="${esc(loginUrl)}" style="background:#0bb8ba;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:9999px;font-weight:600">Zur Anmeldung</a></p>` : ''}
-</div>`;
-  await sendEmail({ from: systemFrom(), to: params.to, subject, text, html });
+  const orgName = escapeHtml(params.orgName);
+  const { html, text } = renderZendoriEmail({
+    preheader: `Ihr Zendori-Konto wurde zum Team von ${params.orgName} hinzugefügt.`,
+    paragraphs: [
+      `Ihr bestehendes Zendori-Konto wurde zum Team von <strong>${orgName}</strong> hinzugefügt.`,
+      `Melden Sie sich wie gewohnt an — die Organisation erscheint anschließend in Ihrer Auswahl.`,
+    ],
+    cta: { label: 'Zur Anmeldung', url: `${appUrl()}/login` },
+    appUrl: appUrl(),
+  });
+  await sendEmail({
+    from: systemFrom(),
+    to: params.to,
+    subject: `Sie wurden zum Team von ${params.orgName} hinzugefügt`,
+    text,
+    html,
+  });
 }
