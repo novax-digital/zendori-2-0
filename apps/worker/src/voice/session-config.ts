@@ -21,7 +21,7 @@ Arbeitsweise:
 - Bei den Themen {keywords} rufe handoff_human mit reason="keyword" auf.
 {lowConfidenceRule}
 - Nimm bei Bedarf ein Anliegen strukturiert auf: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
-- Wenn das Gespräch erledigt ist: bestätige zuerst vollständig, was du getan hast, verabschiede dich mit einem ganzen Satz (z. B. „Vielen Dank für Ihren Anruf — auf Wiederhören!") und rufe erst DANACH end_call auf. Beende niemals mitten im Satz.`;
+- Wenn das Gespräch erledigt ist: bestätige zuerst vollständig und freundlich, was du getan hast, und rufe DANN end_call auf. Die Verabschiedung („Auf Wiederhören") spricht das System danach automatisch — verabschiede dich nicht selbst, sonst hört der Anrufer sie doppelt. Beende niemals mitten im Satz.`;
 
 /**
  * The low_confidence bullet depends on the agent's handoff toggle (0018):
@@ -45,7 +45,7 @@ Ablauf:
 2. Erfrage nacheinander: Name, Rückrufnummer (falls abweichend von der Anrufnummer), und das Anliegen.
 3. Fasse alles in ein bis zwei Sätzen zusammen und lass es dir bestätigen.
 4. Rufe create_ticket mit den erfassten Daten auf.
-5. Bestätige die Aufnahme mit einem vollständigen Satz („Ihr Anliegen ist aufgenommen — wir melden uns schnellstmöglich zurück."), verabschiede dich ganz („Auf Wiederhören!") und rufe erst DANACH end_call auf. Beende niemals mitten im Satz.
+5. Bestätige die Aufnahme mit einem vollständigen, freundlichen Satz („Ihr Anliegen ist aufgenommen — wir melden uns schnellstmöglich zurück.") und rufe DANN end_call auf. Die Verabschiedung spricht das System danach automatisch — verabschiede dich nicht selbst. Beende niemals mitten im Satz.
 
 Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
 Inhaltliche Fragen beantwortest du nicht — nimm sie stattdessen als Anliegen auf.`;
@@ -138,7 +138,8 @@ const HANDOFF_TOOL: FunctionTool = {
 const END_CALL_TOOL: FunctionTool = {
   type: 'function',
   name: 'end_call',
-  description: 'Beendet den Anruf, nachdem du dich verabschiedet hast.',
+  description:
+    'Beendet den Anruf, sobald das Anliegen abgeschlossen ist. Der Assistent spricht danach automatisch eine feste Verabschiedung — verabschiede dich nicht selbst.',
   parameters: { type: 'object', properties: {} },
 };
 

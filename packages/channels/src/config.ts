@@ -143,6 +143,10 @@ export const voiceChannelConfigSchema = z.object({
   /** Whether the caller may barge into the configured greeting (default: no —
    *  the opening plays out fully). Only meaningful when `greeting` is set. */
   greetingInterruptible: z.boolean().default(false),
+  /** Spoken VERBATIM by the session on end_call (force_message) BEFORE the
+   *  hangup — the farewell is deterministic, never left to the model (owner
+   *  2026-07-24: calls must not end abruptly). Absent = German default text. */
+  farewell: z.string().max(500).optional(),
   /** eve|ara|rex|sal|leo or a custom voice id. */
   voice: z.string().default('eve'),
   /** BCP-47 ASR language hint — doubles as the conversation language (the

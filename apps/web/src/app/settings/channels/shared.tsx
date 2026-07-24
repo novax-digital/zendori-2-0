@@ -188,6 +188,7 @@ export type VoiceChannelView = {
   phoneNumber: string;
   greeting: string;
   greetingInterruptible: boolean;
+  farewell: string;
   voice: string;
   languageHint: string;
   keyterms: string;
@@ -206,6 +207,7 @@ export function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     phoneNumber?: unknown;
     greeting?: unknown;
     greetingInterruptible?: unknown;
+    farewell?: unknown;
     voice?: unknown;
     languageHint?: unknown;
     keyterms?: unknown;
@@ -220,6 +222,7 @@ export function toVoiceChannelView(channel: Channel): VoiceChannelView | null {
     phoneNumber: config.phoneNumber,
     greeting: typeof config.greeting === 'string' ? config.greeting : '',
     greetingInterruptible: config.greetingInterruptible === true,
+    farewell: typeof config.farewell === 'string' ? config.farewell : '',
     voice: typeof config.voice === 'string' ? config.voice : 'eve',
     languageHint: typeof config.languageHint === 'string' ? config.languageHint : 'de',
     keyterms: Array.isArray(config.keyterms)

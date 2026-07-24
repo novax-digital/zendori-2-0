@@ -267,6 +267,21 @@ export default async function ChannelDetailPage({
                 </p>
               </div>
               <div>
+                <label htmlFor="voice-farewell">Verabschiedung (wird am Gesprächsende immer gesprochen)</label>
+                <input
+                  id="voice-farewell"
+                  name="farewell"
+                  type="text"
+                  maxLength={500}
+                  defaultValue={vc.farewell}
+                  placeholder="Leer = „Vielen Dank für Ihren Anruf. Auf Wiederhören!“"
+                />
+                <p className="hint">
+                  Der Assistent spricht diesen Satz garantiert, bevor aufgelegt wird — kein Anruf
+                  endet abrupt.
+                </p>
+              </div>
+              <div>
                 <label htmlFor="voice-voice">Stimme</label>
                 <VoicePicker id="voice-voice" name="voice" defaultVoice={vc.voice} />
               </div>

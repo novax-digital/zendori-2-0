@@ -481,6 +481,40 @@ describe('CallSession protocol', () => {
     ).toBe(true);
   });
 
+  it('end_call speaks the deterministic farewell via force_message before hangup', async () => {
+    const fake = makeFakeSupabase();
+    startSession(fake);
+    await completeHandshake();
+
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.audio_transcript.delta', delta: 'Ihr Ticket ist angelegt.' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-fw',
+      name: 'end_call',
+      arguments: '{}',
+    });
+    serverSend({ type: 'response.done' });
+
+    await waitFor(() =>
+      fetchCalls.find((c) => c.url.includes('/v1/realtime/calls/call-abc/hangup'))
+    );
+    // the system farewell was forced BEFORE the hangup — no call ends silently
+    const farewell = received.find(
+      (e) =>
+        e.type === 'conversation.item.create' &&
+        (e as { item?: { type?: string; content?: { text?: string }[] } }).item?.type ===
+          'force_message' &&
+        (e as { item?: { content?: { text?: string }[] } }).item?.content?.[0]?.text ===
+          'Vielen Dank für Ihren Anruf. Auf Wiederhören!'
+    );
+    expect(farewell).toBeDefined();
+    serverSocket?.close();
+    await waitFor(() =>
+      fake.updates.find((u) => u.table === 'voice_calls' && u.patch.status === 'completed')
+    );
+  });
+
   it('handoff with transferNumber: refer is invoked and the call is marked transferred', async () => {
     const fake = makeFakeSupabase();
     const session = new CallSession({

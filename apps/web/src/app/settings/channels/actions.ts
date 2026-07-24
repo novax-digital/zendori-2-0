@@ -518,6 +518,7 @@ const updateVoiceSettingsSchema = z.object({
   channelId: z.uuid(),
   greeting: z.string().max(500),
   greetingInterruptible: z.boolean(),
+  farewell: z.string().max(500),
   voice: z.string().min(1).max(80),
   /** Conversation + ASR language (UI offers a fixed list; schema keeps BCP-47ish). */
   languageHint: z.string().regex(/^[a-z]{2}(-[A-Za-z0-9]{2,8})?$/),
@@ -543,6 +544,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     channelId: formData.get('channelId'),
     greeting: textField(formData.get('greeting')),
     greetingInterruptible: formData.get('greetingInterruptible') === 'on',
+    farewell: textField(formData.get('farewell')),
     voice: textField(formData.get('voice')),
     languageHint: textField(formData.get('languageHint')) || 'de',
     keyterms: textField(formData.get('keyterms')),
@@ -563,6 +565,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     channelId,
     greeting,
     greetingInterruptible,
+    farewell,
     voice,
     languageHint,
     keyterms,
@@ -616,6 +619,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
   const overrides = {
     greeting: greeting || undefined,
     greetingInterruptible,
+    farewell: farewell || undefined,
     voice,
     languageHint,
     keyterms: keytermList,
@@ -636,6 +640,7 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
   // Explicitly clear optional fields the form emptied (spread keeps old values),
   // and drop the pre-0011 behavioral keys — they live on the agent now.
   if (!overrides.greeting) delete nextConfig.greeting;
+  if (!overrides.farewell) delete nextConfig.farewell;
   if (!overrides.transferNumber) delete nextConfig.transferNumber;
   delete nextConfig.agentMode;
   delete nextConfig.instructions;

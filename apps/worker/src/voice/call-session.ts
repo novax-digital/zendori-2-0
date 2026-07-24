@@ -40,6 +40,11 @@ const TRANSFER_HOLD_TEXT =
 /** Mandatory §201-StGB consent notice — spoken verbatim BEFORE the greeting. */
 const RECORDING_NOTICE_TEXT =
   'Dieses Gespräch wird zur Qualitätssicherung aufgezeichnet.';
+/** Deterministic end_call farewell (owner 2026-07-24): spoken via
+ * force_message so no call ever ends without a goodbye; channels may override
+ * the wording (config.farewell). The prompt tells the model NOT to speak its
+ * own farewell — the system always does. */
+const DEFAULT_FAREWELL_TEXT = 'Vielen Dank für Ihren Anruf. Auf Wiederhören!';
 const GOODBYE_TIMEOUT_TEXT =
   'Wir müssen das Gespräch aus technischen Gründen beenden. Wir rufen Sie schnellstmöglich zurück. Auf Wiederhören.';
 const PING_INTERVAL_MS = 15_000;
@@ -619,14 +624,19 @@ export class CallSession {
         for (const r of results) {
           if (r.output !== null) this.send(functionCallOutputEvent(r.callId, r.output));
         }
+        // Deterministic farewell (owner 2026-07-24): end_call always SPEAKS a
+        // goodbye via force_message — never rely on the model having said one.
+        const farewell = this.p.channelConfig.farewell?.trim() || DEFAULT_FAREWELL_TEXT;
+        this.send(forceMessageEvent(farewell));
         // response.done means the farewell is fully GENERATED, not fully PLAYED
         // — the SIP/carrier pipeline buffers several seconds, and an immediate
         // hangup cut the goodbye mid-word (live 2026-07-21: "Dein Ticket
         // wurde—" *click*). Wait roughly the spoken duration of the final turn
-        // (~14 chars/s German speech) before hanging up; the caller hanging up
-        // first during the grace just finalizes normally.
+        // PLUS the forced farewell (~14 chars/s German speech) before hanging
+        // up; the caller hanging up first during the grace finalizes normally.
         const graceMs =
-          this.p.hangupGraceMs ?? Math.min(9_000, Math.max(2_500, lastTurnChars * 70 + 1_200));
+          this.p.hangupGraceMs ??
+          Math.min(12_000, Math.max(3_000, (lastTurnChars + farewell.length) * 70 + 1_200));
         this.endCallTimer = setTimeout(() => {
           void hangupCall(this.p.apiKey, this.p.providerCallId).catch((err: unknown) => {
             this.p.logger.warn(
