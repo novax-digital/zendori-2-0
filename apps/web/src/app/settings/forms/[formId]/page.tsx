@@ -5,6 +5,8 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
 import FormBuilder from '@/components/FormBuilder';
+import { canViewArea, isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 // The form builder (Phase 10): full-width editor with live preview.
 
@@ -17,7 +19,8 @@ export default async function FormBuilderPage({
 }) {
   const { formId } = await params;
   const query = await searchParams;
-  const { orgId, role } = await requireActiveOrg(query.org);
+  const { orgId, role, access } = await requireActiveOrg(query.org);
+  if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Formulare" />;
   const supabase = await createSupabaseServerClient();
 
   const { data } = await supabase
@@ -78,7 +81,7 @@ export default async function FormBuilderPage({
         publicToken={form.public_token}
         notificationEmails={notificationEmails}
         dailyLimit={form.daily_submission_limit}
-        isOwner={role === 'owner'}
+        isOwner={isAdminRole(role)}
         embedBase={appUrl().replace(/\/+$/, '')}
       />
     </div>

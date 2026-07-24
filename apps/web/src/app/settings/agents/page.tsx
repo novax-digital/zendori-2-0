@@ -8,6 +8,8 @@ import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import { createAgent, updateAgent, deleteAgent } from './actions';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
+import { canViewArea, isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 type AgentRow = {
   id: string;
@@ -126,9 +128,10 @@ export default async function AgentsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs, role } = await requireActiveOrg(org);
+  const { orgId, orgs, role, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'agents')) return <NoAccessPanel title="KI-Agenten" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const isOwner = role === 'owner';
+  const isOwner = isAdminRole(role);
   const disabled = !isOwner;
 
   const [agents, channels] = await Promise.all([listAgents(orgId), listChannels(orgId)]);

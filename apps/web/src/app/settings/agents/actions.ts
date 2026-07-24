@@ -35,8 +35,9 @@ async function requireOwner(org: string): Promise<void> {
     .eq('org_id', org)
     .eq('user_id', user.id)
     .maybeSingle();
-  if ((data as { role: string } | null)?.role !== 'owner') {
-    redirect(agentsUrl(org, { error: 'Nur Inhaber können Agenten verwalten.' }));
+  const memberRole = (data as { role: string } | null)?.role;
+  if (memberRole !== 'owner' && memberRole !== 'admin') {
+    redirect(agentsUrl(org, { error: 'Nur Inhaber und Admins können Agenten verwalten.' }));
   }
 }
 

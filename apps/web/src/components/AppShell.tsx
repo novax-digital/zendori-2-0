@@ -6,6 +6,16 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { signOut } from '@/app/actions';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import ThemeToggle from './ThemeToggle';
+import {
+  EMPTY_PERMISSIONS,
+  LEGACY_AGENT_PERMISSIONS,
+  canEditArea,
+  canViewArea,
+  parseMemberPermissions,
+  type AreaKey,
+  type MemberAccess,
+  type OrgRole,
+} from '@zendori/core';
 
 // Routes that render without the app chrome (auth + embeddable/demo surfaces).
 const BARE_PREFIXES = [
@@ -198,6 +208,35 @@ const NAV: NavSection[] = [
   },
 ];
 
+/**
+ * 0024 nav gating: which permission each nav item needs. 'admin' = owner/admin
+ * only; undefined = always visible. Pages enforce authoritatively — this only
+ * hides what the member cannot use anyway.
+ */
+const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'admin'> = {
+  '/inbox': { area: 'inbox', level: 'view' },
+  '/settings/agents': { area: 'agents', level: 'view' },
+  '/settings/knowledge': { area: 'knowledge', level: 'view' },
+  '/settings/channels': { area: 'channels', level: 'view' },
+  '/settings/forms': { area: 'channels', level: 'view' },
+  '/settings/phone-numbers': { area: 'channels', level: 'view' },
+  '/settings/ai': { area: 'handoff', level: 'view' },
+  '/settings/canned-responses': { area: 'canned', level: 'view' },
+  '/settings/members': 'admin',
+  '/settings/integrations': 'admin',
+  '/settings/billing': { area: 'billing', level: 'view' },
+  '/test-channel': { area: 'inbox', level: 'edit' },
+  '/widget-demo': { area: 'inbox', level: 'view' },
+};
+
+function navItemVisible(access: MemberAccess | null, href: string): boolean {
+  if (!access) return true; // loading / pre-0024: show everything (pages guard)
+  const need = NAV_ACCESS[href];
+  if (!need) return true;
+  if (need === 'admin') return access.role === 'owner' || access.role === 'admin';
+  return need.level === 'edit' ? canEditArea(access, need.area) : canViewArea(access, need.area);
+}
+
 type OrgOption = { id: string; name: string };
 
 function SidebarAccount({ collapsed, org }: { collapsed: boolean; org: string | null }) {
@@ -278,6 +317,7 @@ function Sidebar() {
   const org = searchParams.get('org');
   const [collapsed, setCollapsed] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [memberAccess, setMemberAccess] = useState<MemberAccess | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem('zendori-nav-collapsed');
@@ -300,11 +340,44 @@ function Sidebar() {
         .eq('user_id', user.id)
         .maybeSingle();
       if (active && data) setIsAdmin(true);
+      // 0024: own membership (role + permissions) for nav gating. permissions
+      // is post-migration — fall back to role-only on 42703.
+      const activeOrg = org;
+      // eslint-disable-next-line prefer-const -- memberRows IS reassigned in the fallback
+      let { data: memberRows, error: memberErr } = await supabase
+        .from('org_members')
+        .select('org_id, role, permissions')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true });
+      if (memberErr && (memberErr as { code?: string }).code === '42703') {
+        const retry = await supabase
+          .from('org_members')
+          .select('org_id, role')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true });
+        memberRows = retry.data as unknown as typeof memberRows;
+      }
+      if (active && memberRows && memberRows.length > 0) {
+        const rows = memberRows as { org_id: string; role: OrgRole; permissions?: unknown }[];
+        const row = rows.find((r) => r.org_id === activeOrg) ?? rows[0];
+        if (row) {
+          setMemberAccess({
+            role: row.role,
+            // Pre-0024 skew: agents keep legacy full access instead of lockout.
+            permissions:
+              row.permissions === undefined
+                ? row.role === 'agent'
+                  ? LEGACY_AGENT_PERMISSIONS
+                  : EMPTY_PERMISSIONS
+                : parseMemberPermissions(row.permissions),
+          });
+        }
+      }
     })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [org]);
 
   const toggle = () =>
     setCollapsed((c) => {
@@ -340,7 +413,7 @@ function Sidebar() {
         {NAV.map((section, i) => (
           <div key={section.title ?? `sec-${i}`}>
             {section.title ? <div className="app-nav-section">{section.title}</div> : null}
-            {section.items.map((item) => (
+            {section.items.filter((item) => navItemVisible(memberAccess, item.href)).map((item) => (
               <Link
                 key={item.href}
                 href={withOrg(item.href)}

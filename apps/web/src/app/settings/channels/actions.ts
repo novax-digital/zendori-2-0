@@ -247,8 +247,9 @@ export async function setChannelAgent(formData: FormData): Promise<void> {
     .eq('org_id', org)
     .eq('user_id', user.id)
     .maybeSingle();
-  if ((memberRow as { role: string } | null)?.role !== 'owner') {
-    redirect(channelsUrl(org, { error: 'Nur Inhaber können den Agenten eines Kanals ändern.' }));
+  const memberRole = (memberRow as { role: string } | null)?.role;
+  if (memberRole !== 'owner' && memberRole !== 'admin') {
+    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können den Agenten eines Kanals ändern.' }));
   }
 
   const { data, error } = await supabase
@@ -312,8 +313,9 @@ export async function updateConversationSplit(formData: FormData): Promise<void>
     .eq('org_id', org)
     .eq('user_id', user.id)
     .maybeSingle();
-  if ((memberRow as { role: string } | null)?.role !== 'owner') {
-    redirect(channelsUrl(org, { error: 'Nur Inhaber können diese Einstellung ändern.' }));
+  const memberRole = (memberRow as { role: string } | null)?.role;
+  if (memberRole !== 'owner' && memberRole !== 'admin') {
+    redirect(channelsUrl(org, { error: 'Nur Inhaber und Admins können diese Einstellung ändern.' }));
   }
 
   const { data: channelRow } = await supabase
@@ -567,9 +569,10 @@ export async function updateVoiceChannelSettings(formData: FormData): Promise<vo
     .eq('org_id', org)
     .eq('user_id', user.id)
     .maybeSingle();
-  if ((memberRow as { role: string } | null)?.role !== 'owner') {
+  const memberRole = (memberRow as { role: string } | null)?.role;
+  if (memberRole !== 'owner' && memberRole !== 'admin') {
     redirect(
-      channelsUrl(org, { error: 'Nur Inhaber können die Voice-Einstellungen ändern.' })
+      channelsUrl(org, { error: 'Nur Inhaber und Admins können die Voice-Einstellungen ändern.' })
     );
   }
 

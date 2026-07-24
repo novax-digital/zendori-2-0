@@ -12,6 +12,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { requireAreaEdit } from '@/lib/access';
 
 /** Display name of the system source (never read from storage — worker-compiled). */
 const LEARNED_SOURCE_NAME = 'gelernte-antworten';
@@ -46,6 +47,7 @@ const approveSchema = decisionSchema.extend({
  * guards against double-submits and concurrent reviewers.
  */
 export async function approveLearnedAnswer(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => learnedUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = approveSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -103,6 +105,7 @@ export async function approveLearnedAnswer(formData: FormData): Promise<void> {
 
 /** Reject a proposal (proposed→rejected). */
 export async function rejectLearnedAnswer(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => learnedUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = decisionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -134,6 +137,7 @@ export async function rejectLearnedAnswer(formData: FormData): Promise<void> {
 
 /** Retry a failed distillation: error→candidate re-arms the worker poll. */
 export async function retryLearnedCandidate(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => learnedUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = decisionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),

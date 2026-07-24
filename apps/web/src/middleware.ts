@@ -3,9 +3,10 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { publicSupabaseEnv } from './lib/env';
 
-// Only /login is public — self-registration is disabled (admins create accounts).
-// /register still exists but immediately redirects to /login.
-const PUBLIC_PATHS = ['/login', '/register'];
+// Public: /login, /register (redirects to /login — self-registration is
+// disabled) and /invite (team invitees open their password-setup link without a
+// session; the page authenticates itself by redeeming the mailed OTP token).
+const PUBLIC_PATHS = ['/login', '/register', '/invite'];
 
 export async function middleware(request: NextRequest) {
   // public surfaces that authenticate themselves and are called by third

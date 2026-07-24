@@ -4,6 +4,8 @@ import type { AutoAckTexts, BusinessHours } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { saveAiSettings } from './actions';
+import { canViewArea, isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 type Weekday = (typeof WEEKDAYS)[number];
@@ -31,9 +33,10 @@ export default async function AiSettingsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs, role } = await requireActiveOrg(org);
+  const { orgId, orgs, role, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'handoff')) return <NoAccessPanel title="Übergabe & Zeiten" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const isOwner = role === 'owner';
+  const isOwner = isAdminRole(role);
 
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase

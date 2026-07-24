@@ -63,7 +63,7 @@ export default async function DashboardPage() {
                   <td>{m.organizations.name}</td>
                   <td>{m.organizations.slug}</td>
                   <td>
-                    <span className="badge">{m.role === 'owner' ? 'Inhaber' : 'Agent'}</span>
+                    <span className="badge">{m.role === 'owner' ? 'Inhaber' : m.role === 'admin' ? 'Admin' : 'Mitarbeiter'}</span>
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <Link className="primary" href={`/inbox?org=${m.organizations.id}`}>

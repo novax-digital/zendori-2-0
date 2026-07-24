@@ -2,6 +2,8 @@ import type { PhoneNumberStatus, PhoneNumberType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requestPhoneNumber, withdrawPhoneNumberRequest } from './actions';
+import { canViewArea, isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 // Telefonnummern (0016): the org's number inventory + self-service requests.
 // Numbers are provisioned by the operator (Twilio purchase under the Novax
@@ -47,9 +49,10 @@ export default async function PhoneNumbersPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs, role } = await requireActiveOrg(org);
+  const { orgId, orgs, role, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Telefonnummern" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const isOwner = role === 'owner';
+  const isOwner = isAdminRole(role);
 
   const supabase = await createSupabaseServerClient();
   const [{ data: numberData }, { data: channelData }] = await Promise.all([

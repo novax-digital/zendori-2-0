@@ -8,6 +8,7 @@ import { parseQaCsv } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { publicSupabaseEnv } from '@/lib/env';
+import { requireAreaEdit } from '@/lib/access';
 
 const KB_BUCKET = 'kb-files';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -64,6 +65,7 @@ const addUrlSchema = z.object({
 });
 
 export async function addUrlSource(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = addUrlSchema.safeParse({
     org: formData.get('org'),
     knowledgeBaseId: formData.get('knowledgeBaseId'),
@@ -112,6 +114,7 @@ const addTextSchema = z.object({
  * uri = 'text'). The title is prepended to the body so it becomes searchable context.
  */
 export async function addTextSource(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const rawText = formData.get('text');
   const parsed = addTextSchema.safeParse({
     org: formData.get('org'),
@@ -199,6 +202,7 @@ const addQaCsvSchema = z.object({
  * turns every pair into its own chunk. Storage/rollback mirrors addTextSource.
  */
 export async function addQaCsvSource(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = addQaCsvSchema.safeParse({
     org: formData.get('org'),
     knowledgeBaseId: formData.get('knowledgeBaseId'),
@@ -330,6 +334,7 @@ export async function prepareKbUploads(
   knowledgeBaseId: string,
   files: { name: string; size: number }[]
 ): Promise<{ error?: string; uploads?: PreparedUpload[] }> {
+  await requireAreaEdit(org, 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = prepareUploadsSchema.safeParse({ org, knowledgeBaseId, files });
   if (!parsed.success) {
     return { error: `Bitte 1–${MAX_FILES_PER_BATCH} Dateien auswählen.` };
@@ -393,6 +398,7 @@ export async function finalizeKbUploads(
   knowledgeBaseId: string,
   uploads: { path: string; filename: string }[]
 ): Promise<void> {
+  await requireAreaEdit(org, 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = finalizeUploadsSchema.safeParse({ org, knowledgeBaseId, uploads });
   if (!parsed.success) {
     redirect(knowledgeUrl(typeof org === 'string' ? org : '', { error: 'Upload fehlgeschlagen.' }));
@@ -477,6 +483,7 @@ const createKbSchema = z.object({
 
 /** Creates a knowledge base (member-level content management, like sources). */
 export async function createKnowledgeBase(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = createKbSchema.safeParse({
     org: formData.get('org'),
     name: textField(formData.get('name')),
@@ -518,6 +525,7 @@ const deleteKbSchema = z.object({
  * before any service-role storage cleanup runs (§7).
  */
 export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = deleteKbSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -585,6 +593,7 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
 const rowActionSchema = z.object({ org: z.uuid(), id: z.uuid() });
 
 export async function reindexSource(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = rowActionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -614,6 +623,7 @@ export async function reindexSource(formData: FormData): Promise<void> {
 }
 
 export async function deleteSource(formData: FormData): Promise<void> {
+  await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
   const parsed = rowActionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),

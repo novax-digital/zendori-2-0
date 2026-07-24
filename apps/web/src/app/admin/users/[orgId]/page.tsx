@@ -169,7 +169,8 @@ export default async function AdminOrgPage({
       <div className="panel">
         <h2>Mitglied hinzufügen</h2>
         <p className="help">
-          Erstellt ein neues Konto und fügt es dieser Organisation hinzu. Das Konto ist sofort aktiv.
+          Fügt ein Konto per E-Mail-Einladung hinzu — das Mitglied legt sein Passwort selbst fest.
+          Granulare Mitarbeiter-Rechte verwaltet der Kunde unter Einstellungen → Team.
         </p>
         <form className="stack" action={addMember} style={{ maxWidth: '28rem' }}>
           <input type="hidden" name="orgId" value={org.id} />
@@ -185,27 +186,15 @@ export default async function AdminOrgPage({
             />
           </div>
           <div>
-            <label htmlFor="mem-password">Initial-Passwort</label>
-            <input
-              id="mem-password"
-              name="password"
-              type="text"
-              required
-              minLength={8}
-              maxLength={200}
-              autoComplete="off"
-              placeholder="min. 8 Zeichen"
-            />
-          </div>
-          <div>
             <label htmlFor="mem-role">Rolle</label>
             <select id="mem-role" name="role" defaultValue="agent">
-              <option value="agent">Agent</option>
-              <option value="owner">Owner</option>
+              <option value="agent">Mitarbeiter</option>
+              <option value="admin">Admin</option>
+              <option value="owner">Inhaber</option>
             </select>
           </div>
           <button className="primary" type="submit">
-            Mitglied anlegen
+            Mitglied einladen
           </button>
         </form>
       </div>

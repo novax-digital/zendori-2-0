@@ -8,6 +8,8 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import { approveLearnedAnswer, rejectLearnedAnswer, retryLearnedCandidate } from './actions';
+import { canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 type LearnedRow = {
   id: string;
@@ -37,7 +39,8 @@ export default async function LearnedAnswersPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId } = await requireActiveOrg(org);
+  const { orgId, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Gelernte Antworten" />;
 
   const supabase = await createSupabaseServerClient();
   const countByStatus = (status: string) =>

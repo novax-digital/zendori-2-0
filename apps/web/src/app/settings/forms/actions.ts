@@ -47,7 +47,8 @@ async function requireOwner(org: string): Promise<boolean> {
     .eq('org_id', org)
     .eq('user_id', user.id)
     .maybeSingle();
-  return (data as { role: string } | null)?.role === 'owner';
+  const memberRole = (data as { role: string } | null)?.role;
+  return memberRole === 'owner' || memberRole === 'admin';
 }
 
 // --- create -----------------------------------------------------------------------

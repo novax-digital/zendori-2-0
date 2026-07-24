@@ -11,6 +11,8 @@ import IntegrationGallery, {
   type IntegrationTileMeta,
 } from '@/components/IntegrationGallery';
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
+import { isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 // listTicketPipelines returns network data → parsed defensively (labels tolerate
 // absence so a client-shape drift never crashes the settings page).
@@ -79,7 +81,8 @@ export default async function IntegrationsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs } = await requireActiveOrg(org);
+  const { orgId, orgs, role } = await requireActiveOrg(org);
+  if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
 
   const supabase = await createSupabaseServerClient();

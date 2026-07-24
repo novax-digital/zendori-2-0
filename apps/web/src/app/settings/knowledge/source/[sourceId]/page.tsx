@@ -7,6 +7,8 @@ import { notFound } from 'next/navigation';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 const PAGE_SIZE = 50;
 
@@ -57,7 +59,8 @@ export default async function SourceChunksPage({
 }) {
   const { sourceId } = await params;
   const { org, page } = await searchParams;
-  const { orgId } = await requireActiveOrg(org);
+  const { orgId, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Wissensdatenbank" />;
 
   const supabase = await createSupabaseServerClient();
   const { data: sourceData } = await supabase

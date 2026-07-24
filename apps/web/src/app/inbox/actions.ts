@@ -10,6 +10,8 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { deliverOutboundEmail } from '@/lib/email/dispatch';
 import { deliverOutboundWhatsApp } from '@/lib/whatsapp/dispatch';
 import { checkChannelQuota } from '@/lib/channel-limits';
+import { getMemberAccess, hasAreaEdit, hasConversationEdit } from '@/lib/access';
+import { canAccessChannel, canEditArea } from '@zendori/core';
 
 // --- form field helpers ------------------------------------------------------
 
@@ -125,6 +127,15 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
     .maybeSingle();
   const conversation = data as { id: string; channel_id: string; mode: string } | null;
   if (!conversation) {
+    return { error: errorText };
+  }
+  // 0024: Mitarbeiter need inbox edit + access to this conversation's channel.
+  const callerAccess = await getMemberAccess(org);
+  if (
+    !callerAccess ||
+    !canEditArea(callerAccess, 'inbox') ||
+    !canAccessChannel(callerAccess, conversation.channel_id)
+  ) {
     return { error: errorText };
   }
 
@@ -251,6 +262,9 @@ const statusSchema = z.object({
 });
 
 export async function setConversationStatus(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Status konnte nicht geändert werden.';
   const parsed = statusSchema.safeParse({
     org: formData.get('org'),
@@ -310,6 +324,9 @@ const assigneeSchema = z.object({
 });
 
 export async function setConversationAssignee(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Zuweisung konnte nicht gespeichert werden.';
   const parsed = assigneeSchema.safeParse({
     org: formData.get('org'),
@@ -362,6 +379,9 @@ const noteSchema = z.object({
 });
 
 export async function addNote(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Notiz konnte nicht gespeichert werden.';
   const parsed = noteSchema.safeParse({
     org: formData.get('org'),
@@ -419,6 +439,9 @@ const contactUpdateSchema = z.object({
 });
 
 export async function updateContact(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Kontakt konnte nicht gespeichert werden.';
   const parsed = contactUpdateSchema.safeParse({
     org: formData.get('org'),
@@ -462,6 +485,9 @@ const cannedResponseSchema = z.object({
 });
 
 export async function saveCannedResponse(formData: FormData): Promise<void> {
+  if (!(await hasAreaEdit(formData.get('org'), 'canned'))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const parsed = cannedResponseSchema.safeParse({
     org: formData.get('org'),
     shortcut: textField(formData.get('shortcut')),
@@ -505,6 +531,9 @@ const deleteCannedResponseSchema = z.object({
 });
 
 export async function deleteCannedResponse(formData: FormData): Promise<void> {
+  if (!(await hasAreaEdit(formData.get('org'), 'canned'))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const parsed = deleteCannedResponseSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -537,6 +566,9 @@ const testChannelSchema = z.object({
 });
 
 export async function createTestChannel(formData: FormData): Promise<void> {
+  if (!(await hasAreaEdit(formData.get('org'), 'inbox'))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const parsed = testChannelSchema.safeParse({
     org: formData.get('org'),
     name: textField(formData.get('name')),
@@ -582,6 +614,9 @@ const ingestSchema = z.object({
  * external_id). Serves as the template for the real channel webhooks later.
  */
 export async function ingestTestMessage(formData: FormData): Promise<void> {
+  if (!(await hasAreaEdit(formData.get('org'), 'inbox'))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const parsed = ingestSchema.safeParse({
     org: formData.get('org'),
     channelId: formData.get('channelId'),
@@ -785,6 +820,15 @@ async function sendAgentReply(
   if (!conversation) {
     return { ok: false, error: 'Konversation wurde nicht gefunden.' };
   }
+  // 0024: Mitarbeiter need inbox edit + access to this conversation's channel.
+  const callerAccess = await getMemberAccess(org);
+  if (
+    !callerAccess ||
+    !canEditArea(callerAccess, 'inbox') ||
+    !canAccessChannel(callerAccess, conversation.channel_id)
+  ) {
+    return { ok: false, error: 'Keine Berechtigung für diesen Kanal.' };
+  }
 
   const { data: insertedRow, error } = await supabase
     .from('messages')
@@ -888,6 +932,9 @@ const handoffActionSchema = z.object({
  * records a manual handoff_event. While mode='human' the worker stays silent.
  */
 export async function takeOverConversation(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Konversation konnte nicht übernommen werden.';
   const parsed = handoffActionSchema.safeParse({
     org: formData.get('org'),
@@ -934,6 +981,9 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
 
 /** „An Bot zurückgeben": hands control back to the bot (mode='bot'); status stays. */
 export async function returnToBot(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Konversation konnte nicht an den Bot zurückgegeben werden.';
   const parsed = handoffActionSchema.safeParse({
     org: formData.get('org'),
@@ -971,6 +1021,9 @@ export async function returnToBot(formData: FormData): Promise<void> {
  * auto-sending. The worker clears force_draft after the draft is stored.
  */
 export async function requestDraft(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Entwurf konnte nicht angefordert werden.';
   const parsed = handoffActionSchema.safeParse({
     org: formData.get('org'),
@@ -1047,6 +1100,9 @@ const editDraftSchema = draftActionSchema.extend({
  * only the request that flips exactly one row proceeds to deliver.
  */
 export async function acceptDraft(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Vorschlag konnte nicht übernommen werden.';
   const parsed = draftActionSchema.safeParse({
     org: formData.get('org'),
@@ -1097,6 +1153,9 @@ export async function acceptDraft(formData: FormData): Promise<void> {
 
 /** Verwerfen: marks the pending draft discarded without sending anything. */
 export async function discardDraft(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Vorschlag konnte nicht verworfen werden.';
   const parsed = draftActionSchema.safeParse({
     org: formData.get('org'),
@@ -1136,6 +1195,9 @@ export async function discardDraft(formData: FormData): Promise<void> {
  * through the same path as a normal agent reply.
  */
 export async function markDraftEdited(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'Bearbeitete Antwort konnte nicht gesendet werden.';
   const parsed = editDraftSchema.safeParse({
     org: formData.get('org'),
@@ -1205,6 +1267,9 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
  * (RLS restricts to org members); never logs conversation content.
  */
 export async function syncToHubspot(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
   const errorText = 'An HubSpot senden fehlgeschlagen.';
   const parsed = handoffActionSchema.safeParse({
     org: formData.get('org'),

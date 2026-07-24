@@ -20,6 +20,8 @@ import ConversationView from '@/components/inbox/ConversationView';
 import FilterBar from '@/components/inbox/FilterBar';
 import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
 import SuggestedReply from '@/components/inbox/SuggestedReply';
+import { allowedChannelIds, canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 type InboxSearchParams = {
   org?: string;
@@ -93,16 +95,18 @@ export default async function InboxPage({
   searchParams: Promise<InboxSearchParams>;
 }) {
   const params = await searchParams;
-  const { orgId } = await requireActiveOrg(params.org);
+  const { orgId, access } = await requireActiveOrg(params.org);
+  if (!canViewArea(access, 'inbox')) return <NoAccessPanel title="Inbox" />;
+  const scopedChannelIds = allowedChannelIds(access);
   const filters = parseFilters(params.status, params.channel);
   const selectedId = params.c;
 
   const [conversations, channels, members, cannedResponses, detail, hubspot] = await Promise.all([
-    listConversations(orgId, filters),
-    listChannels(orgId),
+    listConversations(orgId, filters, scopedChannelIds),
+    listChannels(orgId, scopedChannelIds),
     listMembers(orgId),
     listCannedResponses(orgId),
-    selectedId ? getConversationDetail(orgId, selectedId) : Promise.resolve(null),
+    selectedId ? getConversationDetail(orgId, selectedId, scopedChannelIds) : Promise.resolve(null),
     getHubspotSidebarInfo(orgId),
   ]);
 

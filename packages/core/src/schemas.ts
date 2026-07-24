@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // --- domain enums ------------------------------------------------------------
 
-export const orgRoleSchema = z.enum(['owner', 'agent']);
+export const orgRoleSchema = z.enum(['owner', 'admin', 'agent']);
 export type OrgRole = z.infer<typeof orgRoleSchema>;
 
 export const channelTypeSchema = z.enum(['chat', 'email', 'whatsapp', 'voice']);

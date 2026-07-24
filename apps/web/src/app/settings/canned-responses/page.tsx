@@ -1,6 +1,8 @@
 import { requireActiveOrg } from '@/lib/org';
 import { listCannedResponses } from '@/lib/inbox/queries';
 import { deleteCannedResponse, saveCannedResponse } from '@/app/inbox/actions';
+import { canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 
 export default async function CannedResponsesPage({
@@ -9,7 +11,8 @@ export default async function CannedResponsesPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs } = await requireActiveOrg(org);
+  const { orgId, orgs, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'canned')) return <NoAccessPanel title="Textbausteine" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const responses = await listCannedResponses(orgId);
 

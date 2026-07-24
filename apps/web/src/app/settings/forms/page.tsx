@@ -4,6 +4,8 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { checkChannelQuota } from '@/lib/channel-limits';
 import { createForm } from './actions';
+import { canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 // Form-builder list page (Phase 10): all builder forms of the org + create.
 // Building happens on /settings/forms/[formId] (full-width builder).
@@ -23,7 +25,8 @@ export default async function FormsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const params = await searchParams;
-  const { orgId } = await requireActiveOrg(params.org);
+  const { orgId, access } = await requireActiveOrg(params.org);
+  if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Formulare" />;
   const supabase = await createSupabaseServerClient();
 
   const { data, error: loadError } = await supabase

@@ -56,9 +56,12 @@ type ConversationRow = Conversation & {
 
 export async function listConversations(
   orgId: string,
-  filters: InboxFilters
+  filters: InboxFilters,
+  /** 0024 channel scope for Mitarbeiter: null = unrestricted. */
+  allowedChannelIds: string[] | null = null
 ): Promise<ConversationListItem[]> {
   const supabase = await createSupabaseServerClient();
+  if (allowedChannelIds !== null && allowedChannelIds.length === 0) return [];
 
   let query = supabase
     .from('conversations')
@@ -66,6 +69,9 @@ export async function listConversations(
       '*, channel:channels(id, name, type), contact:contacts(id, name, email), messages(content, created_at)'
     )
     .eq('org_id', orgId);
+  if (allowedChannelIds !== null) {
+    query = query.in('channel_id', allowedChannelIds);
+  }
   if (filters.status !== 'all') {
     query = query.eq('status', filters.status);
   }
@@ -219,7 +225,9 @@ async function attachMessageAttachments(
 
 export async function getConversationDetail(
   orgId: string,
-  conversationId: string
+  conversationId: string,
+  /** 0024 channel scope for Mitarbeiter: null = unrestricted. */
+  allowedChannelIds: string[] | null = null
 ): Promise<ConversationDetail | null> {
   const supabase = await createSupabaseServerClient();
 
@@ -232,6 +240,12 @@ export async function getConversationDetail(
     .eq('id', conversationId)
     .maybeSingle();
   if (!conversationData) return null;
+  if (
+    allowedChannelIds !== null &&
+    !allowedChannelIds.includes((conversationData as { channel_id?: string }).channel_id ?? '')
+  ) {
+    return null;
+  }
 
   const { channel: channelRow, contact, ...conversation } =
     conversationData as unknown as ConversationDetailRow;
@@ -297,13 +311,18 @@ export async function getConversationDetail(
   return { conversation, channel, agent, contact, messages, notes, draft };
 }
 
-export async function listChannels(orgId: string): Promise<Channel[]> {
+export async function listChannels(
+  orgId: string,
+  /** 0024 channel scope for Mitarbeiter: null = unrestricted. */
+  allowedChannelIds: string[] | null = null
+): Promise<Channel[]> {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase
-    .from('channels')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: true });
+  if (allowedChannelIds !== null && allowedChannelIds.length === 0) return [];
+  let query = supabase.from('channels').select('*').eq('org_id', orgId);
+  if (allowedChannelIds !== null) {
+    query = query.in('id', allowedChannelIds);
+  }
+  const { data } = await query.order('created_at', { ascending: true });
   return (data ?? []) as unknown as Channel[];
 }
 

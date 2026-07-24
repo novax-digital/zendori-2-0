@@ -126,8 +126,8 @@ export default async function AdminUsersPage({
       <div className="panel">
         <h2>Neuen Kunden anlegen</h2>
         <p className="help">
-          Erstellt eine neue Organisation samt Owner-Konto. Das Konto ist sofort aktiv (keine
-          E-Mail-Bestätigung nötig) — teile die Zugangsdaten dem Kunden sicher mit.
+          Erstellt eine neue Organisation samt Owner-Konto. Der Inhaber erhält eine
+          Einladungs-E-Mail und legt sein Passwort selbst fest.
         </p>
         <form className="stack" action={createCustomer} style={{ maxWidth: '28rem' }}>
           <div>
@@ -153,21 +153,8 @@ export default async function AdminUsersPage({
               placeholder="inhaber@kunde.de"
             />
           </div>
-          <div>
-            <label htmlFor="cust-password">Initial-Passwort</label>
-            <input
-              id="cust-password"
-              name="password"
-              type="text"
-              required
-              minLength={8}
-              maxLength={200}
-              autoComplete="off"
-              placeholder="min. 8 Zeichen"
-            />
-          </div>
           <button className="primary" type="submit">
-            Kunde anlegen
+            Kunde anlegen & einladen
           </button>
         </form>
       </div>

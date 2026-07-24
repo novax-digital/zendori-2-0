@@ -1305,6 +1305,140 @@ describe.skipIf(!enabled)('RLS: pricing & packages (0022)', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: team roles & permissions (0024)', () => {
+  let admin: SupabaseClient;
+  let ownerClient: SupabaseClient;
+  let adminClient: SupabaseClient;
+  let ownerId: string;
+  let adminUserId: string;
+  let orgId: string;
+  const ownerEmail = `team-owner-${randomUUID()}@test.zendori.dev`;
+  const adminEmail = `team-admin-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, adminEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    adminUserId = created[1]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Team Org', slug: `team-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: ownerId, role: 'owner' },
+      {
+        org_id: orgId,
+        user_id: adminUserId,
+        role: 'admin',
+        permissions: { areas: {}, channelIds: null },
+      },
+    ]);
+
+    ownerClient = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    adminClient = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect(
+      (await ownerClient.auth.signInWithPassword({ email: ownerEmail, password })).error
+    ).toBeNull();
+    expect(
+      (await adminClient.auth.signInWithPassword({ email: adminEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+    if (adminUserId) await admin.auth.admin.deleteUser(adminUserId);
+  });
+
+  it('admin role is owner-equivalent for owner-gated writes (agents)', async () => {
+    const { error } = await adminClient
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Admin Agent', kind: 'text', mode: 'draft_only' });
+    expect(error).toBeNull();
+  });
+
+  it('admin cannot promote themselves to owner (escalation guard)', async () => {
+    const { data } = await adminClient
+      .from('org_members')
+      .update({ role: 'owner' })
+      .eq('org_id', orgId)
+      .eq('user_id', adminUserId)
+      .select('role');
+    // the BEFORE trigger raises → the update errors or affects no rows
+    const { data: check } = await admin
+      .from('org_members')
+      .select('role')
+      .eq('org_id', orgId)
+      .eq('user_id', adminUserId)
+      .single();
+    expect((check as { role: string }).role).toBe('admin');
+    expect((data ?? []).every((r) => (r as { role: string }).role !== 'owner')).toBe(true);
+  });
+
+  it('admin cannot delete the owner membership', async () => {
+    await adminClient
+      .from('org_members')
+      .delete()
+      .eq('org_id', orgId)
+      .eq('user_id', ownerId);
+    const { data: check } = await admin
+      .from('org_members')
+      .select('role')
+      .eq('org_id', orgId)
+      .eq('user_id', ownerId)
+      .maybeSingle();
+    expect(check).not.toBeNull(); // owner row survived
+  });
+
+  it('admin cannot delete the organization (true-owner only)', async () => {
+    await adminClient.from('organizations').delete().eq('id', orgId);
+    const { data: still } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('id', orgId)
+      .maybeSingle();
+    expect(still).not.toBeNull();
+  });
+
+  it('org creation still bootstraps the creator as owner (guard exemption)', async () => {
+    const slug = `team-boot-${randomUUID().slice(0, 8)}`;
+    const { error } = await adminClient.from('organizations').insert({ name: 'Boot Org', slug });
+    expect(error).toBeNull();
+    const { data: bootOrg } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('slug', slug)
+      .single();
+    const { data: membership } = await admin
+      .from('org_members')
+      .select('role')
+      .eq('org_id', bootOrg!.id as string)
+      .eq('user_id', adminUserId)
+      .single();
+    expect((membership as { role: string }).role).toBe('owner');
+    await admin.from('organizations').delete().eq('id', bootOrg!.id as string);
+  });
+
+  it('members can read their own permissions column', async () => {
+    const { data, error } = await adminClient
+      .from('org_members')
+      .select('permissions')
+      .eq('org_id', orgId)
+      .eq('user_id', adminUserId)
+      .single();
+    expect(error).toBeNull();
+    expect(data).not.toBeNull();
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

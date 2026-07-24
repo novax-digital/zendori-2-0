@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { ingestTestMessage } from '@/app/inbox/actions';
+import { canEditArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 
 
@@ -11,7 +13,8 @@ export default async function TestChannelPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId } = await requireActiveOrg(org);
+  const { orgId, access } = await requireActiveOrg(org);
+  if (!canEditArea(access, 'inbox')) return <NoAccessPanel title="Test-Channel" />;
   const activeChannels = (await listChannels(orgId)).filter((channel) => channel.is_active);
 
   return (

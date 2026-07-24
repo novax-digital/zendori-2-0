@@ -22,6 +22,8 @@ import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
 import { appUrl } from '@/lib/env';
 import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
 import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
+import { canViewArea, isAdminRole } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 type AgentOption = { id: string; name: string; is_active: boolean; kind: AgentKind; mode: AgentMode };
 
@@ -320,9 +322,10 @@ export default async function ChannelsPage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs, role } = await requireActiveOrg(org);
+  const { orgId, orgs, role, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Kanäle" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
-  const isOwner = role === 'owner';
+  const isOwner = isAdminRole(role);
   const [channels, agentOptions, limits, hoursRow] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),

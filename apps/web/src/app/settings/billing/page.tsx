@@ -13,6 +13,7 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
+import { canViewArea } from '@zendori/core';
 
 export default async function CustomerBillingPage({
   searchParams,
@@ -20,9 +21,9 @@ export default async function CustomerBillingPage({
   searchParams: Promise<{ org?: string; month?: string }>;
 }) {
   const { org, month } = await searchParams;
-  const { orgId, role } = await requireActiveOrg(org);
+  const { orgId, access } = await requireActiveOrg(org);
 
-  if (role !== 'owner') {
+  if (!canViewArea(access, 'billing')) {
     return (
       <div className="shell">
         <div className="page-head">

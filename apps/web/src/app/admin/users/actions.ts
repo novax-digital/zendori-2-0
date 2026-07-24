@@ -5,6 +5,12 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import {
+  buildPasswordSetupLink,
+  ensureAuthUser,
+  sendAddedToTeamMail,
+  sendInviteMail,
+} from '@/lib/team/invite';
 
 function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -45,14 +51,14 @@ function orgUrl(orgId: string, message?: { error?: string; notice?: string }): s
 const createCustomerSchema = z.object({
   orgName: z.string().min(2).max(120),
   email: z.email(),
-  password: z.string().min(8).max(200),
 });
 
 /**
- * Creates a whole new customer: an auth user (owner), a fresh organization, and
- * the owner membership. Runs entirely with the service role — the org insert
- * therefore does NOT auto-add an owner (the trigger only does that for
- * authenticated inserts), so we assign the owner explicitly.
+ * Creates a whole new customer: an auth user (owner, no password — the invite
+ * mail carries a password-setup link), a fresh organization, and the owner
+ * membership. Runs entirely with the service role — the org insert therefore
+ * does NOT auto-add an owner (the trigger only does that for authenticated
+ * inserts), so we assign the owner explicitly.
  */
 export async function createCustomer(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
@@ -60,32 +66,23 @@ export async function createCustomer(formData: FormData): Promise<void> {
   const parsed = createCustomerSchema.safeParse({
     orgName: textField(formData.get('orgName')),
     email: textField(formData.get('email')),
-    password: textField(formData.get('password')),
   });
   if (!parsed.success) {
-    redirect(
-      usersUrl({ error: 'Bitte Firmenname, gültige E-Mail und Passwort (min. 8 Zeichen) angeben.' })
-    );
+    redirect(usersUrl({ error: 'Bitte Firmenname und eine gültige E-Mail angeben.' }));
   }
-  const { orgName, email, password } = parsed.data;
+  const { orgName, email } = parsed.data;
 
   const admin = createSupabaseAdminClient();
   if (!admin) redirect(usersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
-  // 1) create the auth user first — fail early on a taken e-mail (no orphan org)
-  const { data: userData, error: userError } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-  if (userError || !userData.user) {
-    redirect(
-      usersUrl({
-        error: 'Konto konnte nicht angelegt werden — die E-Mail ist evtl. bereits vergeben.',
-      })
-    );
+  // 1) create (or find) the auth user first — fail early, no orphan org
+  let userId: string;
+  let created: boolean;
+  try {
+    ({ userId, created } = await ensureAuthUser(admin, email));
+  } catch {
+    redirect(usersUrl({ error: 'Konto konnte nicht angelegt werden.' }));
   }
-  const userId = userData.user.id;
 
   // 2) create the organization (its org_settings row is created by the trigger)
   let orgId: string | null = null;
@@ -103,7 +100,7 @@ export async function createCustomer(formData: FormData): Promise<void> {
     if (error && error.code !== '23505') break; // non-collision error → stop retrying
   }
   if (!orgId) {
-    await admin.auth.admin.deleteUser(userId); // roll back the just-created account
+    if (created) await admin.auth.admin.deleteUser(userId); // roll back the just-created account
     redirect(usersUrl({ error: 'Organisation konnte nicht angelegt werden.' }));
   }
 
@@ -113,12 +110,25 @@ export async function createCustomer(formData: FormData): Promise<void> {
     .insert({ org_id: orgId, user_id: userId, role: 'owner' });
   if (memberError) {
     await admin.from('organizations').delete().eq('id', orgId); // avoid an ownerless org
-    await admin.auth.admin.deleteUser(userId);
+    if (created) await admin.auth.admin.deleteUser(userId);
     redirect(usersUrl({ error: 'Owner konnte nicht zugewiesen werden.' }));
   }
 
+  // 4) invitation mail (best-effort: membership stands; team page can resend)
+  let mailNote = '';
+  try {
+    if (created) {
+      const link = await buildPasswordSetupLink(admin, email);
+      await sendInviteMail({ to: email, orgName, link });
+    } else {
+      await sendAddedToTeamMail({ to: email, orgName });
+    }
+  } catch {
+    mailNote = ' Die Einladungs-E-Mail konnte nicht gesendet werden — bitte erneut senden.';
+  }
+
   revalidatePath('/admin/users');
-  redirect(orgUrl(orgId, { notice: `Kunde „${orgName}" angelegt.` }));
+  redirect(orgUrl(orgId, { notice: `Kunde „${orgName}" angelegt. Einladung an ${email}.${mailNote}` }));
 }
 
 // --- add a member to an existing organization ------------------------------------
@@ -126,11 +136,14 @@ export async function createCustomer(formData: FormData): Promise<void> {
 const addMemberSchema = z.object({
   orgId: z.uuid(),
   email: z.email(),
-  password: z.string().min(8).max(200),
-  role: z.enum(['owner', 'agent']),
+  role: z.enum(['owner', 'admin', 'agent']),
 });
 
-/** Creates a new auth user and adds them to an existing org with the given role. */
+/**
+ * Adds a member to an existing org by e-mail invitation: the account is created
+ * without a password (the mail carries a password-setup link); existing
+ * accounts just gain the membership.
+ */
 export async function addMember(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
 
@@ -138,51 +151,62 @@ export async function addMember(formData: FormData): Promise<void> {
   const parsed = addMemberSchema.safeParse({
     orgId: orgIdRaw,
     email: textField(formData.get('email')),
-    password: textField(formData.get('password')),
     role: textField(formData.get('role')),
   });
   if (!parsed.success) {
-    redirect(
-      orgUrl(orgIdRaw, {
-        error: 'Bitte gültige E-Mail, Passwort (min. 8 Zeichen) und Rolle angeben.',
-      })
-    );
+    redirect(orgUrl(orgIdRaw, { error: 'Bitte gültige E-Mail und Rolle angeben.' }));
   }
-  const { orgId, email, password, role } = parsed.data;
+  const { orgId, email, role } = parsed.data;
 
   const admin = createSupabaseAdminClient();
   if (!admin) redirect(orgUrl(orgId, { error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
 
   const { data: orgRow } = await admin
     .from('organizations')
-    .select('id')
+    .select('id, name')
     .eq('id', orgId)
     .maybeSingle();
   if (!orgRow) redirect(usersUrl({ error: 'Organisation wurde nicht gefunden.' }));
+  const orgName = (orgRow as { name?: string }).name ?? 'Zendori';
 
-  const { data: userData, error: userError } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-  if (userError || !userData.user) {
-    redirect(
-      orgUrl(orgId, {
-        error: 'Konto konnte nicht angelegt werden — die E-Mail ist evtl. bereits vergeben.',
-      })
-    );
+  let userId: string;
+  let created: boolean;
+  try {
+    ({ userId, created } = await ensureAuthUser(admin, email));
+  } catch {
+    redirect(orgUrl(orgId, { error: 'Konto konnte nicht angelegt werden.' }));
   }
+
+  const { data: existing } = await admin
+    .from('org_members')
+    .select('user_id')
+    .eq('org_id', orgId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (existing) redirect(orgUrl(orgId, { error: 'Diese E-Mail-Adresse ist bereits im Team.' }));
 
   const { error: memberError } = await admin
     .from('org_members')
-    .insert({ org_id: orgId, user_id: userData.user.id, role });
+    .insert({ org_id: orgId, user_id: userId, role });
   if (memberError) {
-    await admin.auth.admin.deleteUser(userData.user.id); // roll back the just-created account
+    if (created) await admin.auth.admin.deleteUser(userId); // roll back the just-created account
     redirect(orgUrl(orgId, { error: 'Mitglied konnte nicht hinzugefügt werden.' }));
   }
 
+  let mailNote = '';
+  try {
+    if (created) {
+      const link = await buildPasswordSetupLink(admin, email);
+      await sendInviteMail({ to: email, orgName, link });
+    } else {
+      await sendAddedToTeamMail({ to: email, orgName });
+    }
+  } catch {
+    mailNote = ' Die Einladungs-E-Mail konnte nicht gesendet werden — bitte über Einstellungen → Team erneut senden.';
+  }
+
   revalidatePath(`/admin/users/${orgId}`);
-  redirect(orgUrl(orgId, { notice: 'Mitglied hinzugefügt.' }));
+  redirect(orgUrl(orgId, { notice: `Mitglied hinzugefügt. Einladung an ${email}.${mailNote}` }));
 }
 
 // --- channel quotas per customer (0017) --------------------------------------------

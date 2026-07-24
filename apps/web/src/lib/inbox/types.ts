@@ -17,7 +17,7 @@ export type NoteItem = {
 export type MemberOption = {
   user_id: string;
   email: string | null;
-  role: 'owner' | 'agent';
+  role: 'owner' | 'admin' | 'agent';
 };
 
 export type CannedResponseItem = {

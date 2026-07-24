@@ -18,6 +18,8 @@ import {
   deleteSource,
   reindexSource,
 } from './actions';
+import { canViewArea } from '@zendori/core';
+import NoAccessPanel from '@/components/NoAccessPanel';
 
 type KbRow = {
   id: string;
@@ -87,7 +89,8 @@ export default async function KnowledgePage({
   searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
 }) {
   const { org, error, notice } = await searchParams;
-  const { orgId, orgs } = await requireActiveOrg(org);
+  const { orgId, orgs, access } = await requireActiveOrg(org);
+  if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Wissensdatenbank" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
 
   const supabase = await createSupabaseServerClient();
