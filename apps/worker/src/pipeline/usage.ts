@@ -15,6 +15,8 @@ import { toErrorInfo } from '../db.js';
 export type UsageCategory =
   | 'voice_minutes'
   | 'index_embeddings'
+  /** 0025: Anthropic vision call that describes a knowledge-base image. */
+  | 'index_vision'
   | 'whatsapp_message'
   | 'email'
   | 'sip_minutes'

@@ -4,6 +4,12 @@
 // outbound persist + channel delivery. Message content is never logged (§7).
 import { deliverOutboundEmail, deliverOutboundWhatsApp } from '@zendori/channels';
 import type { ChannelType, HandoffReason, SupabaseClient } from '@zendori/core';
+import {
+  loadReleasedFiles,
+  persistOutboundAttachments,
+  type AttachedFile,
+  type ReleasedFile,
+} from './outbound-files.js';
 
 export interface DetectHandoffInput {
   /** Draft confidence from the Sonnet draft step (0..1). */
@@ -100,6 +106,11 @@ export interface DeliverBotReplyParams {
   content: string;
   /** 'bot' for auto-sent answers, 'system' for auto-ack notices (§6). */
   senderType: 'bot' | 'system';
+  /**
+   * Released knowledge-base files to attach (0025). Already gated by
+   * resolveReleasedFiles: the answer used the source AND an owner released it.
+   */
+  files?: ReleasedFile[];
 }
 
 /**
@@ -116,6 +127,9 @@ export async function deliverBotReply(
   params: DeliverBotReplyParams
 ): Promise<void> {
   const { conv, channel, content, senderType } = params;
+  // Voice can carry no file at all — drop them here rather than relying on the
+  // persist-only branch below, so a future channel fallthrough cannot leak one.
+  const requestedFiles = channel.type === 'voice' ? [] : (params.files ?? []);
 
   const { data: inserted, error: insertError } = await supabase
     .from('messages')
@@ -136,6 +150,26 @@ export async function deliverBotReply(
   }
   const outboundId = (inserted as { id: string }).id;
 
+  // Attachments are resolved AFTER the insert because their storage path is keyed
+  // by the outbound message id. Every step is failure-tolerant: if anything about
+  // a file goes wrong the text reply still goes out without it, recorded as
+  // metadata.delivery.files_failed. The text must never fail because of a file.
+  let attached: AttachedFile[] = [];
+  let filesFailed = false;
+  if (requestedFiles.length > 0) {
+    try {
+      const loaded = await loadReleasedFiles(supabase, requestedFiles);
+      attached = await persistOutboundAttachments(supabase, {
+        orgId: conv.org_id,
+        messageId: outboundId,
+        files: loaded,
+      });
+      filesFailed = attached.length < requestedFiles.length;
+    } catch {
+      filesFailed = true;
+    }
+  }
+
   // Email and WhatsApp actually deliver; both record the outcome on the row and
   // never throw. Chat/Voice persist only.
   let metadata: Record<string, unknown> | null = null;
@@ -145,6 +179,13 @@ export async function deliverBotReply(
       orgId: conv.org_id,
       channelId: channel.id,
       content,
+      // Resend takes the bytes inline (base64), so we reuse the buffers we
+      // already downloaded rather than reading them back out of storage.
+      attachments: attached.map((file) => ({
+        filename: file.filename,
+        content: file.bytes.toString('base64'),
+        contentType: file.mime,
+      })),
     });
     metadata = result.ok
       ? { email: { message_id: result.messageId } }
@@ -157,10 +198,16 @@ export async function deliverBotReply(
       channelId: channel.id,
       content,
       allowTemplateFallback: true,
+      // WhatsApp carries one medium per message — send the first released file.
+      ...(attached[0] ? { attachment: { storagePath: attached[0].storagePath } } : {}),
     });
     metadata = result.ok
       ? { whatsapp: { message_sid: result.externalId } }
       : { delivery: { failed: true, error: result.error } };
+  }
+
+  if (filesFailed) {
+    metadata = { ...(metadata ?? {}), delivery: { ...(metadata?.delivery as object), files_failed: true } };
   }
 
   if (metadata) {

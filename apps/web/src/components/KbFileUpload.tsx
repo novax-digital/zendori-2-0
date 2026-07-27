@@ -13,7 +13,9 @@ import { finalizeKbUploads, prepareKbUploads } from '@/app/settings/knowledge/ac
  * (creates the kb_sources rows and redirects with the notice).
  */
 
-const ACCEPT = '.pdf,.docx,.txt,.md';
+// CSV stays out of this dialog on purpose (it has its own Q&A tab). Images were
+// added in 0025: the worker describes them with a vision call at index time.
+const ACCEPT = '.pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp';
 const MAX_BYTES = 15 * 1024 * 1024;
 const KB_BUCKET = 'kb-files';
 
@@ -142,7 +144,9 @@ export default function KbFileUpload({
         <span className="kb-dropzone-title">
           Dateien hierher ziehen oder <span className="kb-dropzone-link">durchsuchen</span>
         </span>
-        <span className="kb-dropzone-hint">Mehrere Dateien möglich · PDF, DOCX, TXT, MD · max. 15 MB</span>
+        <span className="kb-dropzone-hint">
+          Mehrere Dateien möglich · PDF, DOCX, TXT, MD (max. 15 MB) · JPG, PNG, GIF, WEBP (max. 7 MB)
+        </span>
         <input
           ref={inputRef}
           type="file"

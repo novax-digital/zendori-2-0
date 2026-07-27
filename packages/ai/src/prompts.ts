@@ -163,6 +163,46 @@ export function buildRerankUserMessage(query: string, candidates: string[]): str
   return lines.join('\n');
 }
 
+export interface DescribeImagePromptOptions {
+  companyName: string;
+  /** Original filename — often carries the product/model name. */
+  filename: string;
+}
+
+/**
+ * System prompt for index-time image description (kb_sources.type='file' with an
+ * image extension). The output is the ONLY representation of the image the text
+ * pipeline ever sees: it is chunked, embedded and keyword-indexed like any other
+ * passage, and the answer model reads it instead of the picture. Two consequences
+ * shape this prompt:
+ *
+ *  - Recall beats elegance. Customers search in their own words ("wo ist der
+ *    Reset-Knopf"), so the description must spell out the plain-language terms a
+ *    question would use, alongside the exact strings printed on the device.
+ *  - Markings are the payload. A support image is usually a photo with a circle
+ *    or arrow pointing at something; WHAT is marked and WHERE it sits is the
+ *    fact worth retrieving, so it gets its own required sentence.
+ */
+export function buildDescribeImagePrompt(opts: DescribeImagePromptOptions): string {
+  return [
+    `Du beschreibst Bilder für die Wissensdatenbank von ${opts.companyName}.`,
+    'Deine Beschreibung ersetzt das Bild vollständig: Der Support-Assistent sieht später nur noch deinen Text und beantwortet damit Kundenfragen. Was du nicht erwähnst, ist verloren.',
+    '',
+    '## Regeln',
+    '1. Schreibe durchgehenden deutschen Fließtext, 80 bis 250 Wörter. Keine Überschriften, keine Aufzählungszeichen, kein Markdown.',
+    '2. Beginne mit einem Satz, der benennt, was das Bild zeigt (Gerät, Bauteil, Bildschirmfoto, Schaubild, Verpackung).',
+    '3. Markierungen sind das Wichtigste: Ist etwas eingekreist, mit Pfeil, Rahmen, Nummer oder Farbe hervorgehoben, schreibe in einem eigenen Satz, WAS markiert ist und WO es sich befindet — in Worten, die ein Kunde selbst benutzen würde ("der rote Kreis markiert den Reset-Knopf an der linken Seite unter der Klappe"). Gib niemals Pixel-Koordinaten an.',
+    '4. Gib jede lesbare Aufschrift wörtlich wieder: Modell- und Seriennummern, Typenschilder, Fehlercodes, Tastenbeschriftungen, Menüpunkte, Maßangaben mit Einheit. Diese exakten Zeichenfolgen sind später die wertvollsten Suchbegriffe.',
+    '5. Benenne dasselbe Element zusätzlich in Alltagssprache, wenn die Aufschrift technisch ist — der Kunde fragt nach "Stromanschluss", auf dem Gerät steht "DC-IN 12V".',
+    '6. Beschreibe nur, was tatsächlich zu sehen ist. Rate nicht, ergänze kein Vorwissen und erfinde keine Bezeichnungen. Ist etwas unscharf oder abgeschnitten, schreibe das ausdrücklich.',
+    '7. Nenne keine Personen beim Namen und beschreibe abgebildete Menschen nur so weit, wie es für das Anliegen nötig ist.',
+    '8. Enthält das Bild keinerlei verwertbaren Inhalt (leer, komplett unlesbar), antworte mit genau dem Wort: UNBRAUCHBAR',
+    '',
+    '## Kontext',
+    `Dateiname: ${neutralizeFences(opts.filename)}. Der Dateiname ist ein Hinweis auf den Inhalt, aber keine gesicherte Information — widerspricht er dem Bild, gilt das Bild.`,
+  ].join('\n');
+}
+
 export interface LearnPromptOptions {
   companyName: string;
 }

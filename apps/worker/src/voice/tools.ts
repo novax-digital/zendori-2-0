@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { retrieveRelevantChunks, EMBEDDING_MODEL } from '@zendori/ai';
-import type { SupabaseClient } from '@zendori/core';
+import { isKbImageFilename, type SupabaseClient } from '@zendori/core';
 import {
   hasConfiguredHours,
   isWithinBusinessHours,
@@ -38,6 +38,12 @@ export interface ToolContext {
    * — overloading businessHours=null would give null two meanings.
    */
   allowTransfer: boolean;
+  /**
+   * 0025 memo: ids of this org's image sources, filled on the first kb_search of
+   * a call. Image descriptions are excluded from voice results — see
+   * loadImageSourceIds.
+   */
+  imageSourceIds?: Set<string>;
 }
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
@@ -82,13 +88,47 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
     output_summary: `matches=${matches.length} mode=${searchMode}`,
   });
 
+  // Drop passages that came from an image (0025). Their text describes what a
+  // picture LOOKS like ("der rote Kreis markiert den Reset-Knopf links unten"),
+  // which a live caller cannot see — read aloud it is confusing at best. Voice
+  // has no way to show the image either. One indexed query per call, cached on
+  // the context; pure CPU inside the tool call, so no added silence.
+  const imageSourceIds = await loadImageSourceIds(ctx);
+  const usable =
+    imageSourceIds.size === 0 ? matches : matches.filter((m) => !imageSourceIds.has(m.source_id));
+
   return {
     ok: true,
-    chunks: matches.map((m) => ({
+    chunks: usable.map((m) => ({
       content: m.content.slice(0, KB_SNIPPET_MAX_CHARS),
       source_id: m.source_id,
     })),
   };
+}
+
+/**
+ * Ids of this org's image sources, resolved once per call and memoised on the
+ * tool context. Identified by file extension rather than a marker in the chunk
+ * text: the "Quelle: …" header format is a chunking detail that must not become
+ * load-bearing here.
+ */
+async function loadImageSourceIds(ctx: ToolContext): Promise<Set<string>> {
+  if (ctx.imageSourceIds) return ctx.imageSourceIds;
+  const ids = new Set<string>();
+  try {
+    const { data } = await ctx.supabase
+      .from('kb_sources')
+      .select('id, uri')
+      .eq('org_id', ctx.orgId)
+      .eq('type', 'file');
+    for (const row of (data ?? []) as { id: string; uri: string | null }[]) {
+      if (isKbImageFilename(row.uri ?? '')) ids.add(row.id);
+    }
+  } catch {
+    // On failure prefer answering with everything over failing the call.
+  }
+  ctx.imageSourceIds = ids;
+  return ids;
 }
 
 const createTicketArgsSchema = z.object({

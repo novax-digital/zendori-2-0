@@ -7,8 +7,9 @@ import { notFound } from 'next/navigation';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { canViewArea } from '@zendori/core';
+import { canViewArea, isAdminRole, isKbImageFilename } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import { setSourceShareable } from '../../actions';
 
 const PAGE_SIZE = 50;
 
@@ -18,6 +19,8 @@ type SourceRow = {
   uri: string | null;
   status: KbSourceStatus;
   last_indexed_at: string | null;
+  /** 0025: released for outbound sending by the bot. */
+  is_shareable: boolean;
   knowledge_base: { name: string } | null;
 };
 
@@ -63,14 +66,30 @@ export default async function SourceChunksPage({
   if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Wissensdatenbank" />;
 
   const supabase = await createSupabaseServerClient();
-  const { data: sourceData } = await supabase
+  const COLUMNS = 'id, type, uri, status, last_indexed_at, knowledge_base:knowledge_bases(name)';
+  // is_shareable is 0025 — retry without it while the migration is pending (the
+  // same 42703 schema-skew pattern used elsewhere; an unreleased file is the
+  // correct assumption pre-migration).
+  const withFlag = await supabase
     .from('kb_sources')
-    .select('id, type, uri, status, last_indexed_at, knowledge_base:knowledge_bases(name)')
+    .select(`${COLUMNS}, is_shareable`)
     .eq('org_id', orgId)
     .eq('id', sourceId)
     .maybeSingle();
+  let sourceData = withFlag.data;
+  const sourceError = withFlag.error;
+  let shareableSupported = true;
+  if (sourceError && (sourceError as { code?: string }).code === '42703') {
+    shareableSupported = false;
+    ({ data: sourceData } = await supabase
+      .from('kb_sources')
+      .select(COLUMNS)
+      .eq('org_id', orgId)
+      .eq('id', sourceId)
+      .maybeSingle());
+  }
   if (!sourceData) notFound();
-  const source = sourceData as unknown as SourceRow;
+  const source = { is_shareable: false, ...(sourceData as object) } as unknown as SourceRow;
 
   const pageNum = Math.max(1, Number.parseInt(page ?? '1', 10) || 1);
   const from = (pageNum - 1) * PAGE_SIZE;
@@ -87,6 +106,8 @@ export default async function SourceChunksPage({
   const totalTokens = chunks.reduce((sum, chunk) => sum + (chunk.token_count ?? 0), 0);
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const isImage = source.type === 'file' && isKbImageFilename(source.uri ?? '');
+  const canRelease = isAdminRole(access.role);
   const backHref = `/settings/knowledge?org=${orgId}`;
   const pageHref = (p: number) => `/settings/knowledge/source/${sourceId}?org=${orgId}&page=${p}`;
 
@@ -117,8 +138,47 @@ export default async function SourceChunksPage({
           Genau dieser Wortlaut liegt im Index — inklusive der „Quelle:"-Kopfzeile. Der KI-Agent
           findet und zitiert ausschließlich diese Bausteine. Wirkt etwas veraltet oder falsch?
           Quelle anpassen und neu indizieren.
+          {isImage
+            ? ' Bei Bildern steht hier die KI-Beschreibung — sie ersetzt das Bild für die Suche, das Bild selbst wird nicht durchsucht.'
+            : ''}
         </p>
       </div>
+
+      {/* Release for outbound sending (0025). Only files have bytes to send, and
+          only owners/admins may decide — the DB trigger enforces the same rule. */}
+      {source.type === 'file' && shareableSupported ? (
+        <div className="panel">
+          <h2>Weitersenden an Kunden</h2>
+          <p className="help">
+            {source.is_shareable
+              ? 'Diese Datei ist freigegeben: Nutzt der Bot diese Quelle für eine Antwort, hängt er die Datei an — im Chat, per WhatsApp oder als E-Mail-Anhang.'
+              : 'Diese Datei ist nicht freigegeben. Der Bot darf ihren Inhalt für Antworten nutzen, die Datei selbst aber nicht an Kunden schicken.'}
+          </p>
+          <p className="hint">
+            Zwei verschiedene Dinge: Ob der Bot den <em>Inhalt</em> kennt, steuern Sie über die
+            Wissensdatenbanken des Agenten. Hier geht es nur darum, ob die <em>Datei</em> das Haus
+            verlassen darf. Interne Unterlagen wie Preiskalkulationen bleiben also aus, auch wenn der
+            Bot daraus antwortet.
+          </p>
+          {canRelease ? (
+            <form action={setSourceShareable}>
+              <input type="hidden" name="org" value={orgId} />
+              <input type="hidden" name="id" value={source.id} />
+              <input type="hidden" name="shareable" value={source.is_shareable ? 'off' : 'on'} />
+              <button type="submit" className={source.is_shareable ? 'button' : 'button button--primary'}>
+                {source.is_shareable ? 'Freigabe entziehen' : 'Zum Senden freigeben'}
+              </button>
+            </form>
+          ) : (
+            <p className="hint">
+              <span className={`badge ${source.is_shareable ? 'badge--success' : ''}`}>
+                {source.is_shareable ? 'Freigegeben' : 'Nicht freigegeben'}
+              </span>{' '}
+              Ändern dürfen das nur Inhaber und Admins.
+            </p>
+          )}
+        </div>
+      ) : null}
 
       {chunks.length === 0 ? (
         <div className="panel">

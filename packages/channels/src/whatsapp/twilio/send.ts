@@ -39,6 +39,14 @@ export interface SendTwilioWhatsAppParams {
   contentSid?: string;
   /** JSON-string map of the template's numbered placeholders. */
   contentVariables?: string;
+  /**
+   * Publicly fetchable URL of ONE media file to attach (0025). WhatsApp carries a
+   * single medium per message, so this is deliberately singular. Ignored when
+   * contentSid is set — a media template is a different, pre-approved shape.
+   * Twilio fetches the URL itself, so it must be reachable without our
+   * credentials: we pass a short-lived signed Storage URL.
+   */
+  mediaUrl?: string;
 }
 
 /**
@@ -64,6 +72,7 @@ export async function sendTwilioWhatsApp(
     if (params.contentVariables) form.set('ContentVariables', params.contentVariables);
   } else {
     form.set('Body', body ?? '');
+    if (params.mediaUrl) form.set('MediaUrl', params.mediaUrl);
   }
 
   const url = `${apiBase()}/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`;

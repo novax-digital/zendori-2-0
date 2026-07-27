@@ -21,6 +21,11 @@ export interface WidgetUi {
   isOpen(): boolean;
   setOffline(visible: boolean): void;
   addAgentMessage(content: string, options?: { notify?: boolean }): void;
+  /**
+   * Appends an image the bot sent along with its reply (0025). `url` is a
+   * short-lived signed Storage URL from our own attachment endpoint.
+   */
+  addAgentImage(url: string, alt: string): void;
   addContactMessage(content: string): BubbleHandle;
   /** Clears the message list and re-renders the greeting bubble. */
   resetMessages(): void;
@@ -273,6 +278,24 @@ export function createWidgetUi(
         unreadCount += 1;
         updateUnreadBadge();
       }
+    },
+    // The one deliberate exception to "no dynamic DOM beyond textContent": an
+    // <img> element. It is still built with createElement, never innerHTML, and
+    // the src comes ONLY from our own JSON response — never parsed out of
+    // message text — so nothing a customer or a knowledge-base file contains can
+    // steer it. The endpoint additionally only ever returns raster image types.
+    addAgentImage(url: string, alt: string): void {
+      hideTyping();
+      const wrap = document.createElement('div');
+      wrap.className = 'zw-msg zw-msg-in zw-msg-img';
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = alt;
+      img.loading = 'lazy';
+      wrap.appendChild(img);
+      messages.appendChild(wrap);
+      if (typingEl) messages.appendChild(typingEl);
+      scrollToBottom();
     },
     addContactMessage(content: string): BubbleHandle {
       const wrap = document.createElement('div');

@@ -11,9 +11,14 @@ import { isIP } from 'node:net';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { htmlToText } from '@zendori/channels';
-import { chunkText, embed } from '@zendori/ai';
-import { parseQaCsv } from '@zendori/core';
-import type { KbSourceStatus, KbSourceType, SupabaseClient } from '@zendori/core';
+import { chunkText, describeImage, embed } from '@zendori/ai';
+import { isKbImageFilename, parseQaCsv, sniffImageMime } from '@zendori/core';
+import type {
+  ImageMediaType,
+  KbSourceStatus,
+  KbSourceType,
+  SupabaseClient,
+} from '@zendori/core';
 import { getServiceClient } from '../db.js';
 import { recordUsage } from './usage.js';
 
@@ -242,6 +247,58 @@ async function loadLearnedSections(
     }));
 }
 
+/**
+ * Turn an image into the one text section that represents it everywhere
+ * downstream. Runs at index time only, so its ~3-5 s latency never touches an
+ * answer, and it is deliberately the draft-tier model (AI_MODELS.vision).
+ *
+ * The section carries the filename as its title, so every chunk gets the usual
+ * "Quelle: …" provenance header and the answer path can attribute the image
+ * exactly like a PDF.
+ */
+async function describeImageSection(
+  supabase: SupabaseClient,
+  source: LoadedSource,
+  filename: string,
+  buffer: Buffer,
+  mediaType: ImageMediaType
+): Promise<ExtractedSection[]> {
+  const { data: orgRow } = await supabase
+    .from('organizations')
+    .select('name')
+    .eq('id', source.org_id)
+    .maybeSingle();
+  const companyName = (orgRow as { name: string } | null)?.name ?? 'Unternehmen';
+
+  const { result, usage, costUsd } = await describeImage({
+    companyName,
+    base64: buffer.toString('base64'),
+    mediaType,
+    filename,
+  });
+
+  // Best-effort metering, exactly like the embedding cost below it: a lost cost
+  // row is acceptable, a failed index is not.
+  await recordUsage(supabase, {
+    orgId: source.org_id,
+    category: 'index_vision',
+    provider: 'anthropic',
+    quantity: 1,
+    unit: 'images',
+    costUsd,
+    sourceRef: source.id,
+    metadata: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+  });
+
+  if (result === null) {
+    // The model reports there is nothing to describe. Failing loudly beats
+    // indexing a placeholder: the source turns 'error' and the customer sees
+    // that this particular file needs a better version.
+    throw new Error('the image contains no describable content');
+  }
+  return [{ title: filename, url: null, text: result }];
+}
+
 async function downloadFile(supabase: SupabaseClient, path: string): Promise<{ blob: Blob }> {
   const { data, error } = await supabase.storage.from(KB_BUCKET).download(path);
   if (error || !data) throw error ?? new Error('kb file not found in storage');
@@ -333,6 +390,22 @@ async function loadFile(
   const lower = filename.toLowerCase();
 
   const asSection = (text: string): ExtractedSection[] => [{ title: filename, url: null, text }];
+
+  // Images: described once here by a vision call, then indexed as ordinary text.
+  // This branch MUST come before the UTF-8 fallback at the bottom — otherwise
+  // image bytes would be decoded as text and embedded as binary noise.
+  //
+  // The extension only decides that we should LOOK; the actual format comes from
+  // the magic bytes, because the filename and the upload content-type are both
+  // caller-controlled. A file named .png that is really HTML fails here instead
+  // of reaching the model (and, later, an inline preview).
+  if (isKbImageFilename(filename)) {
+    const mediaType = sniffImageMime(new Uint8Array(buffer));
+    if (!mediaType) {
+      throw new Error('file has an image extension but is not a PNG, JPEG, GIF or WebP');
+    }
+    return describeImageSection(supabase, source, filename, buffer, mediaType);
+  }
 
   if (lower.endsWith('.pdf')) {
     const parsed = await pdfParse(buffer);
