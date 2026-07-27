@@ -17,6 +17,7 @@ import GreetingSuggestion from '@/components/GreetingSuggestion';
 import {
   deleteChannel,
   updateConversationSplit,
+  renameChannel,
   updateVoiceChannelSettings,
   updateWidgetTheme,
 } from '../actions';
@@ -25,6 +26,7 @@ import {
   ActiveToggle,
   AgentSelect,
   FLAVOR_LABELS,
+  FLAVOR_ROUTING_HINT,
   VOICE_LANGUAGES,
   channelFlavor,
   channelIdentifier,
@@ -445,6 +447,38 @@ export default async function ChannelDetailPage({
             returnTo={returnTo}
           />
         </div>
+      </div>
+
+      <div className="panel">
+        <h2>Name</h2>
+        <p className="help">
+          Der Name ist nur eine Bezeichnung für dich — er erscheint in dieser Liste und an jeder
+          Konversation im Posteingang. Umbenennen ändert nichts an der Zustellung: Die läuft weiter
+          über {FLAVOR_ROUTING_HINT[flavor]}.
+        </p>
+        <form
+          action={renameChannel}
+          style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}
+        >
+          <input type="hidden" name="org" value={orgId} />
+          <input type="hidden" name="channelId" value={channel.id} />
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <div style={{ flex: 1, minWidth: '16rem' }}>
+            <label htmlFor="channel-name">Kanalname</label>
+            <input
+              id="channel-name"
+              type="text"
+              name="name"
+              defaultValue={channel.name}
+              required
+              minLength={2}
+              maxLength={120}
+            />
+          </div>
+          <button className="primary" type="submit">
+            Namen speichern
+          </button>
+        </form>
       </div>
 
       {sections}

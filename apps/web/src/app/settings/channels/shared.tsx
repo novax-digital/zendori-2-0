@@ -45,6 +45,20 @@ export const FLAVOR_LABELS: Record<ChannelFlavor, string> = {
   test: 'Test',
 };
 
+/**
+ * What actually routes messages to this channel — used to reassure the user that
+ * renaming is only a label change and cannot break delivery.
+ */
+export const FLAVOR_ROUTING_HINT: Record<ChannelFlavor, string> = {
+  webform: 'den Einbettungs-Code des Formulars',
+  form: 'die hinterlegte Intake-Adresse',
+  email: 'die hinterlegte Intake-Adresse',
+  whatsapp: 'die verbundene WhatsApp-Nummer',
+  voice: 'die verbundene Rufnummer',
+  chat: 'den Einbettungs-Code der Website',
+  test: 'den Test-Kanal',
+};
+
 export type WidgetChannelView = {
   id: string;
   name: string;

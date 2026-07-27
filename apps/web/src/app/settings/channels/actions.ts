@@ -421,6 +421,61 @@ export async function setChannelActive(formData: FormData): Promise<void> {
   redirect(channelsUrl(org, { notice: isActive ? 'Kanal aktiviert.' : 'Kanal deaktiviert.' }, returnToOf(formData)));
 }
 
+// --- rename a channel ------------------------------------------------------------
+
+const renameChannelSchema = z.object({
+  org: z.uuid(),
+  channelId: z.uuid(),
+  name: z.string().trim().min(2).max(120),
+});
+
+/**
+ * Renames a channel. The name is a pure label — it identifies the channel in the
+ * inbox and the channel list and is never part of routing (that goes by intake
+ * address, phone number or public token), so renaming is always safe and never
+ * touches a live integration.
+ *
+ * Same access shape as the other per-channel controls (setChannelActive): RLS
+ * proves org membership, and the agent assignment stays the only owner-gated
+ * field on the row.
+ */
+export async function renameChannel(formData: FormData): Promise<void> {
+  const parsed = renameChannelSchema.safeParse({
+    org: formData.get('org'),
+    channelId: formData.get('channelId'),
+    name: formData.get('name'),
+  });
+  if (!parsed.success) {
+    redirect(
+      channelsUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte einen Namen mit 2 bis 120 Zeichen angeben.' },
+        returnToOf(formData)
+      )
+    );
+  }
+  const { org, channelId, name } = parsed.data;
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('channels')
+    .update({ name })
+    .eq('org_id', org)
+    .eq('id', channelId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(
+      channelsUrl(org, { error: 'Kanal konnte nicht umbenannt werden.' }, returnToOf(formData))
+    );
+  }
+
+  revalidatePath('/settings/channels');
+  revalidatePath(`/settings/channels/${channelId}`);
+  // The inbox shows the channel name on every conversation.
+  revalidatePath('/inbox');
+  redirect(channelsUrl(org, { notice: 'Kanal umbenannt.' }, returnToOf(formData)));
+}
+
 // --- connect a WhatsApp channel (Twilio, Phase 7a) -------------------------------
 
 const createWhatsappTwilioSchema = z.object({
