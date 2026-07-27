@@ -203,6 +203,23 @@ export async function syncConversation(conversationId: string): Promise<void> {
   // --- persist external ref + synced stamp (scheduling) -----------------------
   await finishSync(supabase, conv, externalRefs, syncStartedAt);
   await touchIntegrationSync(supabase, integration.id);
+
+  // Status 'An HubSpot gesendet' (0026): the ticket is worked in HubSpot from
+  // here on, so the conversation must not sit in the §6 'pending' queue. Set on
+  // every SUCCESSFUL sync — manual button and automatic rules end up here alike.
+  // 'resolved' is never overwritten (a closed case stays closed). Best-effort:
+  // pre-0026 the CHECK constraint rejects the value, and a failed status flip
+  // must not fail (and pg-boss-retry) an otherwise completed sync.
+  try {
+    await supabase
+      .from('conversations')
+      .update({ status: 'hubspot_sent' })
+      .eq('id', conv.id)
+      .eq('org_id', conv.org_id)
+      .in('status', ['open', 'pending']);
+  } catch {
+    // schema skew or transient error — the sync itself succeeded
+  }
 }
 
 /**

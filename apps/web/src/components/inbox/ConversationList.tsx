@@ -1,17 +1,20 @@
 import Link from 'next/link';
 import type { ConversationStatus } from '@zendori/core';
+import { channelBadgeClass } from '@/lib/inbox/channel-badge';
 import type { ConversationListItem, InboxFilters } from '@/lib/inbox/types';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'badge--info',
   pending: 'badge--warn',
   resolved: 'badge--success',
+  hubspot_sent: 'badge--hubspot',
 };
 
 const statusLabels: Record<ConversationStatus, string> = {
   open: 'Offen',
   pending: 'Wartend',
   resolved: 'Gelöst',
+  hubspot_sent: 'An HubSpot gesendet',
 };
 
 /** German relative time without a date library: gerade eben / vor X Min. / vor X Std. / date. */
@@ -78,7 +81,15 @@ export default function ConversationList({
               <span className={`badge ${STATUS_BADGE[item.status] ?? 'badge--muted'}`}>
                 {statusLabels[item.status]}
               </span>
-              {item.channel ? <span className="inbox-row-channel">{item.channel.name}</span> : null}
+              {item.channel ? (
+                <span
+                  className={channelBadgeClass(item.channel.type)}
+                  style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '11rem' }}
+                  title={item.channel.name}
+                >
+                  {item.channel.name}
+                </span>
+              ) : null}
             </div>
           </Link>
         );

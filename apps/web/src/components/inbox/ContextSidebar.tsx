@@ -11,13 +11,23 @@ import {
   takeOverConversation,
   updateContact,
 } from '@/app/inbox/actions';
+import { channelBadgeClass } from '@/lib/inbox/channel-badge';
 import type { ConversationDetail, HubspotSidebarInfo, MemberOption } from '@/lib/inbox/types';
 
-const statusOptions: { value: ConversationStatus; label: string }[] = [
+const BASE_STATUS_OPTIONS: { value: ConversationStatus; label: string }[] = [
   { value: 'open', label: 'Offen' },
   { value: 'pending', label: 'Wartend' },
   { value: 'resolved', label: 'Gelöst' },
 ];
+
+// 'An HubSpot gesendet' exists only while a HubSpot integration is active: the
+// ticket is worked over there, so the conversation leaves the §6 waiting queue.
+// A conversation already carrying the status keeps showing it even after the
+// integration was switched off (render truth, don't hide state).
+const HUBSPOT_STATUS_OPTION: { value: ConversationStatus; label: string } = {
+  value: 'hubspot_sent',
+  label: 'An HubSpot gesendet',
+};
 
 // urgent/high stand out; normal/low stay calm (uses existing tokens only)
 const PRIORITY_BADGE: Record<string, string> = {
@@ -125,7 +135,10 @@ export default function ContextSidebar({
         <h3>Status</h3>
         <form action={setConversationStatus} className="inbox-status-buttons">
           {hiddenFields}
-          {statusOptions.map((option) => {
+          {(hubspot.active || conversation.status === 'hubspot_sent'
+            ? [...BASE_STATUS_OPTIONS, HUBSPOT_STATUS_OPTION]
+            : BASE_STATUS_OPTIONS
+          ).map((option) => {
             const isActive = conversation.status === option.value;
             return (
               <button
@@ -181,7 +194,7 @@ export default function ContextSidebar({
       <section>
         <h3>Kanal &amp; Modus</h3>
         <div className="inbox-badges-row">
-          {channel ? <span className="badge badge--muted">{channel.name}</span> : null}
+          {channel ? <span className={channelBadgeClass(channel.type)}>{channel.name}</span> : null}
           <span className="badge">
             {conversation.mode === 'bot' ? 'Bot' : 'Mensch'}
           </span>

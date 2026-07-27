@@ -1302,6 +1302,29 @@ th {
   background: var(--surface-2);
   color: var(--text-muted);
 }
+/* Channel badges (inbox): one fixed colour per channel TYPE so the source of a
+   conversation is recognisable at a glance, whatever the channel is named. */
+.badge--channel-chat {
+  background: var(--brand-50);
+  color: var(--brand-700);
+}
+.badge--channel-email {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.badge--channel-whatsapp {
+  background: #ecfdf5;
+  color: #047857;
+}
+.badge--channel-voice {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+/* Status 'An HubSpot gesendet' — HubSpot orange, distinct from every channel. */
+.badge--hubspot {
+  background: #fff1ec;
+  color: #b93815;
+}
 .badge--dot::before {
   content: '';
   width: 6px;
@@ -1726,6 +1749,12 @@ code.invite-link {
   background: var(--success-tint);
   border-color: #a7f3d0;
   color: var(--success-ink);
+}
+/* HubSpot orange: the ticket is worked over there, not in this inbox. */
+.inbox-status-btn-active-hubspot_sent {
+  background: #fff1ec;
+  border-color: #ffd3c2;
+  color: #b93815;
 }
 .inbox-badges-row {
   display: flex;

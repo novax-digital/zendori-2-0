@@ -34,7 +34,9 @@ type InboxSearchParams = {
 
 function parseFilters(status?: string, channel?: string): InboxFilters {
   const parsedStatus =
-    status === 'open' || status === 'pending' || status === 'resolved' ? status : 'all';
+    status === 'open' || status === 'pending' || status === 'resolved' || status === 'hubspot_sent'
+      ? status
+      : 'all';
   const parsedChannel = channel && z.uuid().safeParse(channel).success ? channel : 'all';
   return { status: parsedStatus, channelId: parsedChannel };
 }
@@ -145,6 +147,7 @@ export default async function InboxPage({
             channels={channels}
             filters={filters}
             selectedConversationId={selectedId}
+            showHubspotStatus={hubspot.active}
           />
           <ConversationList
             items={conversations}

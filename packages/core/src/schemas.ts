@@ -8,7 +8,7 @@ export type OrgRole = z.infer<typeof orgRoleSchema>;
 export const channelTypeSchema = z.enum(['chat', 'email', 'whatsapp', 'voice']);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
-export const conversationStatusSchema = z.enum(['open', 'pending', 'resolved']);
+export const conversationStatusSchema = z.enum(['open', 'pending', 'resolved', 'hubspot_sent']);
 export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
 
 export const conversationModeSchema = z.enum(['bot', 'human']);

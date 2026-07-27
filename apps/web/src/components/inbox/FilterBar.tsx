@@ -9,11 +9,19 @@ const statusTabs: { value: InboxFilters['status']; label: string }[] = [
   { value: 'resolved', label: 'Gelöst' },
 ];
 
+/** Shown additionally while the org has an active HubSpot integration. */
+const HUBSPOT_TAB: { value: InboxFilters['status']; label: string } = {
+  value: 'hubspot_sent',
+  label: 'An HubSpot gesendet',
+};
+
 type FilterBarProps = {
   orgId: string;
   channels: Channel[];
   filters: InboxFilters;
   selectedConversationId?: string;
+  /** Active HubSpot integration ⇒ the 'An HubSpot gesendet' filter appears. */
+  showHubspotStatus?: boolean;
 };
 
 export default function FilterBar({
@@ -21,11 +29,12 @@ export default function FilterBar({
   channels,
   filters,
   selectedConversationId,
+  showHubspotStatus = false,
 }: FilterBarProps) {
   return (
     <div className="inbox-filterbar">
       <nav className="inbox-tabs" aria-label="Status-Filter">
-        {statusTabs.map((tab) => {
+        {(showHubspotStatus ? [...statusTabs, HUBSPOT_TAB] : statusTabs).map((tab) => {
           const query = new URLSearchParams({
             org: orgId,
             status: tab.value,
