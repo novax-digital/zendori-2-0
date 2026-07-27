@@ -89,6 +89,20 @@ export interface SendEmailParams {
   inReplyTo?: string;
   /** Full RFC References chain. */
   references?: string[];
+  /**
+   * Files to attach. `content` is base64 without a data: prefix. Resend caps a
+   * message at 40 MB after base64 encoding; the product limits in
+   * @zendori/core (MAX_OUTBOUND_ATTACHMENTS*) sit far below that.
+   */
+  attachments?: EmailAttachment[];
+}
+
+export interface EmailAttachment {
+  filename: string;
+  /** Base64-encoded bytes, no data: prefix and no newlines. */
+  content: string;
+  /** Resend derives this from the filename when omitted; we always set it. */
+  contentType?: string;
 }
 
 /**
@@ -122,6 +136,14 @@ export async function sendEmail(
     text: params.text,
     html: params.html,
     headers,
+    // snake_case on the wire, like reply_to above.
+    attachments: params.attachments?.length
+      ? params.attachments.map((file) => ({
+          filename: file.filename,
+          content: file.content,
+          content_type: file.contentType,
+        }))
+      : undefined,
   };
 
   const res = await resendRequest('/emails', { method: 'POST', body: JSON.stringify(body) });

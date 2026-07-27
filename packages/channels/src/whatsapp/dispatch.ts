@@ -21,7 +21,19 @@ export interface DeliverOutboundWhatsAppParams {
    * error instead of silently sending a generic template in place of their text.
    */
   allowTemplateFallback?: boolean;
+  /**
+   * One released knowledge-base file to attach (0025), already copied into the
+   * `attachments` bucket. WhatsApp carries a single medium per message, hence
+   * singular. Dropped outside the 24h window (template-only there).
+   */
+  attachment?: { storagePath: string };
 }
+
+/**
+ * Lifetime of the signed URL handed to Twilio. Long enough for their fetch and a
+ * retry, short enough that a leaked URL is worthless.
+ */
+const MEDIA_URL_TTL_SECONDS = 900;
 
 function masterKey(): string | null {
   const key = process.env.MASTER_ENCRYPTION_KEY;
@@ -141,8 +153,20 @@ export async function deliverOutboundWhatsApp(
 
       if (!inWindow && template?.twilioContentSid) {
         sendParams.contentSid = template.twilioContentSid;
+        // Out of window only the approved template is deliverable; an attachment
+        // is dropped rather than failing the message (a media template is a
+        // separate, pre-approved shape and out of scope here).
       } else {
         sendParams.body = content;
+        // Twilio fetches the media itself, so it needs a URL reachable without
+        // our credentials. Signed WITHOUT download disposition, otherwise the
+        // content type WhatsApp sees would be wrong. Short TTL, never logged (§7).
+        if (params.attachment) {
+          const { data: signed } = await supabase.storage
+            .from('attachments')
+            .createSignedUrl(params.attachment.storagePath, MEDIA_URL_TTL_SECONDS);
+          if (signed?.signedUrl) sendParams.mediaUrl = signed.signedUrl;
+        }
       }
       const { sid } = await sendTwilioWhatsApp(sendParams);
       return { ok: true, externalId: sid };

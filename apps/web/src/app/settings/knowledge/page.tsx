@@ -196,9 +196,12 @@ export default async function KnowledgePage({
       panel: (
         <>
           <p className="help">
-            PDF, DOCX, TXT, MD oder CSV, maximal 15 MB pro Datei. Mehrere Dateien auf einmal
-            möglich — der Text wird aus jeder Datei extrahiert und indiziert (CSV-Dateien werden
-            als Frage-Antwort-Paare eingelesen, siehe Tab „Q&amp;A (CSV)").
+            PDF, DOCX, TXT, MD oder CSV bis 15 MB und Bilder (JPG, PNG, GIF, WEBP) bis 7 MB pro
+            Datei. Mehrere Dateien auf einmal möglich — der Text wird aus jeder Datei extrahiert und
+            indiziert (CSV-Dateien werden als Frage-Antwort-Paare eingelesen, siehe Tab „Q&amp;A
+            (CSV)"). Bilder beschreibt die KI beim Hochladen: Was zu sehen ist, welche Stellen
+            markiert sind und was auf dem Gerät steht. Danach sind sie über diese Beschreibung
+            auffindbar.
           </p>
           <KbFileUpload org={orgId} knowledgeBaseId={kb.id} />
         </>

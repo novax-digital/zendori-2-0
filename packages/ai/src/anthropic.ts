@@ -11,6 +11,7 @@ import { AI_MODELS } from './index.js';
 import { anthropicCost, type TokenUsage } from './cost.js';
 import {
   buildClassifyPrompt,
+  buildDescribeImagePrompt,
   buildDraftPrompt,
   buildExtractPrompt,
   buildLearnPrompt,
@@ -230,6 +231,64 @@ export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult
   );
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage) };
+}
+
+/** Sentinel the describe-image prompt returns for an image with no usable content. */
+export const IMAGE_UNUSABLE = 'UNBRAUCHBAR';
+
+export interface DescribeImageInput {
+  companyName: string;
+  /** Raw image bytes, base64-encoded without a data: prefix and without newlines. */
+  base64: string;
+  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+  /** Original filename — a content hint for the model, never authoritative. */
+  filename: string;
+}
+
+/**
+ * Describe a knowledge-base image so the text pipeline can index it (index time
+ * only — never on the answer path, so its latency is irrelevant and its quality
+ * is worth paying for). Returns null when the model reports the image as
+ * unusable, so the caller can fail the source with a precise message instead of
+ * indexing the sentinel as if it were content.
+ *
+ * The image goes in BEFORE the text block: Claude performs better on
+ * image-then-text ordering. Oversized images are downscaled server-side, so no
+ * client-side image library is needed anywhere in the monorepo.
+ */
+export async function describeImage(
+  input: DescribeImageInput
+): Promise<AiCallResult<string | null>> {
+  const client = getClient();
+  const message = await client.messages.create({
+    model: AI_MODELS.vision,
+    max_tokens: 1024,
+    // temperature 0: re-indexing the same image should not silently reword the
+    // only searchable representation of it. See the classify() temperature note.
+    temperature: 0,
+    system: buildDescribeImagePrompt({
+      companyName: input.companyName,
+      filename: input.filename,
+    }),
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: input.mediaType, data: input.base64 } },
+          { type: 'text', text: 'Beschreibe dieses Bild nach den Regeln.' },
+        ],
+      },
+    ],
+  });
+  const text = extractText(message).trim();
+  const usage = toUsage(message.usage);
+  const costUsd = anthropicCost(AI_MODELS.vision, usage);
+  // Exact-match the sentinel: a description that merely mentions the word
+  // (e.g. "die Aufschrift ist unbrauchbar unscharf") must stay usable content.
+  if (text === IMAGE_UNUSABLE || text.length === 0) {
+    return { result: null, usage, costUsd };
+  }
+  return { result: text, usage, costUsd };
 }
 
 /** Short, language-aware fallback consistent with draft-prompt rule 2. */

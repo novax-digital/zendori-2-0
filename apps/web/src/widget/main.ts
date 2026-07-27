@@ -1,4 +1,10 @@
-import { createOrResumeSession, fetchBootstrap, sendWidgetMessage, WidgetApiError } from './api';
+import {
+  createOrResumeSession,
+  fetchBootstrap,
+  fetchReplyImages,
+  sendWidgetMessage,
+  WidgetApiError,
+} from './api';
 import { RealtimeConnection } from './realtime';
 import {
   clearStoredSession,
@@ -190,6 +196,20 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     if (renderedIds.has(message.id)) return;
     renderedIds.add(message.id);
     ui.addAgentMessage(message.content);
+    void appendReplyImages(message.id);
+  }
+
+  /**
+   * Fetch and append any images the bot attached to a reply (0025). Fire and
+   * forget: the text is already on screen, and a failure leaves the chat intact.
+   * One small request per agent/bot reply — the broadcast payload cannot carry
+   * this, see fetchReplyImages.
+   */
+  async function appendReplyImages(messageId: string): Promise<void> {
+    const session = activeSession;
+    if (!session) return;
+    const images = await fetchReplyImages(config, session, messageId);
+    for (const image of images) ui.addAgentImage(image.url, 'Bild zur Antwort');
   }
 
   /**
@@ -235,6 +255,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
         ui.addContactMessage(message.content).setState('sent');
       } else {
         ui.addAgentMessage(message.content, { notify: false });
+        void appendReplyImages(message.id);
       }
     }
     for (const item of queue) {

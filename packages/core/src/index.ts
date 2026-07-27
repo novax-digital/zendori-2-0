@@ -4,6 +4,7 @@ export * from './standard-webhooks.js';
 export * from './env.js';
 export * from './db.js';
 export * from './logger.js';
+export * from './media.js';
 export * from './qa-csv.js';
 export * from './billing.js';
 export * from './permissions.js';

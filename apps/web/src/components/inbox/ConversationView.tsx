@@ -1,3 +1,4 @@
+import { INLINE_RENDERABLE_MIMES } from '@zendori/core';
 import type { SenderType } from '@zendori/core';
 import type { ConversationDetail } from '@/lib/inbox/types';
 
@@ -104,6 +105,32 @@ export default function ConversationView({ detail }: { detail: ConversationDetai
                         </audio>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                           🎧 {attachment.filename} ({formatBytes(attachment.size)})
+                        </span>
+                      </span>
+                    ) : INLINE_RENDERABLE_MIMES.has(attachment.mime) && attachment.url ? (
+                      // Raster images render as a thumbnail (0025). The URL is only
+                      // signed without a download disposition for this exact
+                      // allowlist of types, so nothing here can execute.
+                      <span
+                        key={attachment.id}
+                        style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
+                      >
+                        <a href={attachment.url} target="_blank" rel="noreferrer">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={attachment.url}
+                            alt={attachment.filename}
+                            loading="lazy"
+                            style={{
+                              maxWidth: '100%',
+                              maxHeight: '240px',
+                              borderRadius: '6px',
+                              display: 'block',
+                            }}
+                          />
+                        </a>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          🖼 {attachment.filename} ({formatBytes(attachment.size)})
                         </span>
                       </span>
                     ) : (

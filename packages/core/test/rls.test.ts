@@ -1439,6 +1439,160 @@ describe.skipIf(!enabled)('RLS: team roles & permissions (0024)', () => {
   });
 });
 
+describe.skipIf(!enabled)('RLS: knowledge-source release flag (0025)', () => {
+  let admin: SupabaseClient;
+  let ownerClient: SupabaseClient;
+  let agentClient: SupabaseClient;
+  let ownerId: string;
+  let agentId: string;
+  let orgId: string;
+  let kbId: string;
+  let fileSourceId: string;
+  let textSourceId: string;
+  const ownerEmail = `kbshare-owner-${randomUUID()}@test.zendori.dev`;
+  const agentEmail = `kbshare-agent-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, agentEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    agentId = created[1]!.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'KB Share Org', slug: `kbshare-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: ownerId, role: 'owner' },
+      { org_id: orgId, user_id: agentId, role: 'agent' },
+    ]);
+
+    const { data: kb } = await admin
+      .from('knowledge_bases')
+      .insert({ org_id: orgId, name: 'Handbuch' })
+      .select('id')
+      .single();
+    kbId = kb!.id as string;
+
+    const { data: sources } = await admin
+      .from('kb_sources')
+      .insert([
+        { org_id: orgId, knowledge_base_id: kbId, type: 'file', uri: 'geraet.png', status: 'indexed' },
+        { org_id: orgId, knowledge_base_id: kbId, type: 'text', uri: 'text', status: 'indexed' },
+      ])
+      .select('id, type');
+    const rows = (sources ?? []) as { id: string; type: string }[];
+    fileSourceId = rows.find((r) => r.type === 'file')!.id;
+    textSourceId = rows.find((r) => r.type === 'text')!.id;
+
+    ownerClient = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    agentClient = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect(
+      (await ownerClient.auth.signInWithPassword({ email: ownerEmail, password })).error
+    ).toBeNull();
+    expect(
+      (await agentClient.auth.signInWithPassword({ email: agentEmail, password })).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+    if (agentId) await admin.auth.admin.deleteUser(agentId);
+  });
+
+  it('defaults to not released, so nothing leaves the org by accident', async () => {
+    const { data } = await admin
+      .from('kb_sources')
+      .select('is_shareable')
+      .eq('id', fileSourceId)
+      .single();
+    expect((data as { is_shareable: boolean }).is_shareable).toBe(false);
+  });
+
+  // The core security property: kb_sources rows are member-writable, so without
+  // the 0025 guard any Mitarbeiter could mark an internal document sendable.
+  it('a Mitarbeiter cannot release a file for sending', async () => {
+    const { error } = await agentClient
+      .from('kb_sources')
+      .update({ is_shareable: true })
+      .eq('id', fileSourceId);
+    expect(error).not.toBeNull();
+
+    const { data } = await admin
+      .from('kb_sources')
+      .select('is_shareable')
+      .eq('id', fileSourceId)
+      .single();
+    expect((data as { is_shareable: boolean }).is_shareable).toBe(false);
+  });
+
+  it('a Mitarbeiter can still edit the source otherwise (only the flag is gated)', async () => {
+    const { error } = await agentClient
+      .from('kb_sources')
+      .update({ status: 'pending' })
+      .eq('id', fileSourceId);
+    expect(error).toBeNull();
+    await admin.from('kb_sources').update({ status: 'indexed' }).eq('id', fileSourceId);
+  });
+
+  it('the owner can release and withdraw', async () => {
+    const { error: onError } = await ownerClient
+      .from('kb_sources')
+      .update({ is_shareable: true })
+      .eq('id', fileSourceId);
+    expect(onError).toBeNull();
+    const { data: on } = await admin
+      .from('kb_sources')
+      .select('is_shareable')
+      .eq('id', fileSourceId)
+      .single();
+    expect((on as { is_shareable: boolean }).is_shareable).toBe(true);
+
+    const { error: offError } = await ownerClient
+      .from('kb_sources')
+      .update({ is_shareable: false })
+      .eq('id', fileSourceId);
+    expect(offError).toBeNull();
+  });
+
+  // url/text sources have no bytes to send — the CHECK keeps the flag meaningful.
+  it('a non-file source can never be released, not even by the owner', async () => {
+    const { error } = await ownerClient
+      .from('kb_sources')
+      .update({ is_shareable: true })
+      .eq('id', textSourceId);
+    expect(error).not.toBeNull();
+  });
+
+  it('the service role (worker) may update a source without tripping the guard', async () => {
+    const { error } = await admin
+      .from('kb_sources')
+      .update({ status: 'pending' })
+      .eq('id', fileSourceId);
+    expect(error).toBeNull();
+    await admin.from('kb_sources').update({ status: 'indexed' }).eq('id', fileSourceId);
+  });
+
+  // Control for the write test above: the Mitarbeiter is a full member and CAN
+  // read the row — proving the failed release was the guard, not RLS filtering
+  // the row away (which would make the test pass for the wrong reason).
+  it('the Mitarbeiter can read the source it may not release', async () => {
+    const { data } = await agentClient
+      .from('kb_sources')
+      .select('id, is_shareable')
+      .eq('id', fileSourceId);
+    expect((data ?? []).length).toBe(1);
+  });
+});
+
 describe.skipIf(enabled)('RLS (skipped)', () => {
   it('is skipped without ZENDORI_TEST_SUPABASE_* env vars', () => {
     expect(enabled).toBe(false);

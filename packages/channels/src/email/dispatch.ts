@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
 import { buildReplySubject } from './mail-text.js';
-import { sendEmail } from './send.js';
+import { sendEmail, type EmailAttachment } from './send.js';
 
 /**
  * Minimal boundary validation of an inbound-email channel config. The shape
@@ -39,9 +39,16 @@ export function isSuppressedEmailRecipient(email: string): boolean {
  */
 export async function deliverOutboundEmail(
   supabase: SupabaseClient,
-  params: { conversationId: string; orgId: string; channelId: string; content: string }
+  params: {
+    conversationId: string;
+    orgId: string;
+    channelId: string;
+    content: string;
+    /** Released knowledge-base files to attach (0025); base64 content. */
+    attachments?: EmailAttachment[];
+  }
 ): Promise<DeliverOutboundResult> {
-  const { conversationId, orgId, channelId, content } = params;
+  const { conversationId, orgId, channelId, content, attachments } = params;
 
   // 1. channel must be an inbound-email channel; read its intake address
   const { data: channelRow } = await supabase
@@ -138,6 +145,7 @@ export async function deliverOutboundEmail(
       text: content,
       inReplyTo,
       references,
+      attachments,
     });
     return { ok: true, messageId: result.messageId };
   } catch {

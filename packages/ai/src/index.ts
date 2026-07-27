@@ -12,6 +12,14 @@ export const AI_MODELS = {
   classify: 'claude-haiku-4-5',
   /** RAG answer drafts. */
   draft: 'claude-sonnet-4-6',
+  /**
+   * Index-time image description (knowledge-base images). Deliberately the
+   * draft-tier model, not the cheap classify one: the description is the ONLY
+   * representation of the image the answer path ever sees, it is produced exactly
+   * once per (re-)index, and it is off the latency-critical path — so quality is
+   * the only axis that matters here.
+   */
+  vision: 'claude-sonnet-4-6',
 } as const;
 
 export const EMBEDDING_MODEL = 'text-embedding-3-small';

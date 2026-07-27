@@ -104,6 +104,34 @@ export async function createOrResumeSession(
   };
 }
 
+/**
+ * Images the bot attached to one outbound message (0025). Asked for separately
+ * because the realtime broadcast fires before the attachment rows exist — and
+ * because the broadcast topic is public, so a signed URL must never ride on it.
+ *
+ * Returns [] on any failure: a missing image must never break the chat.
+ */
+export async function fetchReplyImages(
+  config: WidgetConfig,
+  session: StoredSession,
+  messageId: string
+): Promise<{ url: string }[]> {
+  try {
+    const data = await postJson(`${config.apiBase}/api/widget/attachment`, {
+      conversationId: session.conversationId,
+      secret: session.secret,
+      messageId,
+    });
+    if (!isRecord(data) || !Array.isArray(data.images)) return [];
+    return data.images
+      .filter((image): image is Record<string, unknown> => isRecord(image))
+      .map((image) => ({ url: asString(image.url) }))
+      .filter((image) => image.url.startsWith('https://'));
+  } catch {
+    return [];
+  }
+}
+
 export async function sendWidgetMessage(
   config: WidgetConfig,
   session: StoredSession,

@@ -1,5 +1,6 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { INLINE_RENDERABLE_MIMES } from '@zendori/core';
 import type { Channel, Contact, Conversation, Message, OrgRole } from '@zendori/core';
 import type {
   CannedResponseItem,
@@ -183,23 +184,32 @@ async function attachMessageAttachments(
   // browser inline-render an uploaded HTML/SVG payload. Audio is the exception —
   // it must stream inline for the in-conversation player, and an audio payload
   // cannot carry executable HTML/SVG (the stored content-type governs render).
+  // Raster images (0025) join audio as the second exception, so the conversation
+  // can show a thumbnail instead of a download link. Membership is decided by an
+  // exact allowlist of raster types (INLINE_RENDERABLE_MIMES) — deliberately NOT
+  // `startsWith('image/')`, which would admit image/svg+xml and reintroduce the
+  // stored-XSS this download disposition exists to prevent. For bot-attached KB
+  // files the mime was verified from the file's magic bytes; for inbound mail it
+  // still comes from the provider, hence the strict set rather than a prefix.
   const admin = createSupabaseAdminClient();
   const signedUrlByPath = new Map<string, string>();
   if (admin && rows.length > 0) {
-    const audioPaths = rows.filter((r) => r.mime.startsWith('audio/')).map((r) => r.storage_path);
+    const inlinePaths = rows
+      .filter((r) => r.mime.startsWith('audio/') || INLINE_RENDERABLE_MIMES.has(r.mime))
+      .map((r) => r.storage_path);
     const downloadPaths = rows
-      .filter((r) => !r.mime.startsWith('audio/'))
+      .filter((r) => !r.mime.startsWith('audio/') && !INLINE_RENDERABLE_MIMES.has(r.mime))
       .map((r) => r.storage_path);
     const storage = admin.storage.from('attachments');
-    const [downloadSigned, audioSigned] = await Promise.all([
+    const [downloadSigned, inlineSigned] = await Promise.all([
       downloadPaths.length > 0
         ? storage.createSignedUrls(downloadPaths, 3600, { download: true })
         : Promise.resolve({ data: [] }),
-      audioPaths.length > 0
-        ? storage.createSignedUrls(audioPaths, 3600)
+      inlinePaths.length > 0
+        ? storage.createSignedUrls(inlinePaths, 3600)
         : Promise.resolve({ data: [] }),
     ]);
-    for (const entry of [...(downloadSigned.data ?? []), ...(audioSigned.data ?? [])]) {
+    for (const entry of [...(downloadSigned.data ?? []), ...(inlineSigned.data ?? [])]) {
       if (entry.path && entry.signedUrl) signedUrlByPath.set(entry.path, entry.signedUrl);
     }
   }

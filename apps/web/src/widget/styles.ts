@@ -174,6 +174,19 @@ export const WIDGET_CSS = `
   border-bottom-left-radius: 4px;
 }
 
+/* Image bubble (0025): no text padding, the picture is the content. */
+.zw-msg-img {
+  padding: 4px;
+  max-width: 85%;
+}
+
+.zw-msg-img img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
 .zw-msg-out {
   background: var(--zw-color, #4f46e5);
   color: #fff;

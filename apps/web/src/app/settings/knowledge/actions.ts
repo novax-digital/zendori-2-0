@@ -4,18 +4,30 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { parseQaCsv } from '@zendori/core';
+import {
+  isAdminRole,
+  KB_UPLOAD_EXTENSIONS,
+  MAX_KB_DOCUMENT_BYTES,
+  MAX_KB_IMAGE_BYTES,
+  maxKbUploadBytes,
+  parseQaCsv,
+} from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { publicSupabaseEnv } from '@/lib/env';
-import { requireAreaEdit } from '@/lib/access';
+import { getMemberAccess, requireAreaEdit } from '@/lib/access';
 
 const KB_BUCKET = 'kb-files';
-const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 100_000;
-const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md', 'csv'] as const;
+// Extensions and per-type size caps come from @zendori/core so the upload gate,
+// the worker's type dispatch and the outbound send path cannot drift apart
+// (0025 added the image formats).
+const ALLOWED_EXTENSIONS = KB_UPLOAD_EXTENSIONS;
 
 type AllowedExtension = (typeof ALLOWED_EXTENSIONS)[number];
+
+const MB = 1024 * 1024;
+const UPLOAD_HINT = `Erlaubt: PDF, DOCX, TXT, MD, CSV bis ${MAX_KB_DOCUMENT_BYTES / MB} MB sowie JPG, PNG, GIF, WEBP bis ${MAX_KB_IMAGE_BYTES / MB} MB.`;
 
 function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -342,15 +354,18 @@ export async function prepareKbUploads(
 
   const rejected: string[] = [];
   for (const file of parsed.data.files) {
-    const ext = fileExtension(sanitizeFilename(file.name));
-    if (file.size > MAX_FILE_BYTES) rejected.push(`${file.name} (zu groß, max. 15 MB)`);
-    else if (!ALLOWED_EXTENSIONS.includes(ext as AllowedExtension))
+    const safeName = sanitizeFilename(file.name);
+    const ext = fileExtension(safeName);
+    if (!ALLOWED_EXTENSIONS.includes(ext as AllowedExtension)) {
       rejected.push(`${file.name} (Format nicht unterstützt)`);
+      continue;
+    }
+    // Images have a tighter cap than documents (see maxKbUploadBytes).
+    const cap = maxKbUploadBytes(safeName);
+    if (file.size > cap) rejected.push(`${file.name} (zu groß, max. ${cap / MB} MB)`);
   }
   if (rejected.length > 0) {
-    return {
-      error: `Nicht hochgeladen: ${rejected.join(', ')}. Erlaubt: PDF, DOCX, TXT, MD, CSV bis 15 MB.`,
-    };
+    return { error: `Nicht hochgeladen: ${rejected.join(', ')}. ${UPLOAD_HINT}` };
   }
 
   // Membership gate (RLS): only members see the knowledge base row.
@@ -586,6 +601,71 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
   revalidatePath('/settings/knowledge');
   revalidatePath('/settings/agents');
   redirect(knowledgeUrl(org, { notice: 'Wissensdatenbank samt Quellen gelöscht.' }));
+}
+
+// --- release for outbound sending (0025) -----------------------------------------
+
+const setShareableSchema = z.object({
+  org: z.uuid(),
+  id: z.uuid(),
+  shareable: z.enum(['on', 'off']),
+});
+
+/**
+ * Release (or withdraw) one file for outbound sending: the bot may attach it to a
+ * customer reply when the answer actually used that source.
+ *
+ * Owner/admin only — this decides whether org data reaches an outside recipient,
+ * so it is gated the same way as form notification recipients. The DB trigger
+ * (0025 kb_sources_guard) is the real enforcement; the check here exists to give
+ * a readable German message instead of a raw Postgres exception, and the detail
+ * page hides the control for Mitarbeiter.
+ */
+export async function setSourceShareable(formData: FormData): Promise<void> {
+  const orgRaw = textField(formData.get('org'));
+  const parsed = setShareableSchema.safeParse({
+    org: formData.get('org'),
+    id: formData.get('id'),
+    shareable: formData.get('shareable'),
+  });
+  if (!parsed.success) {
+    redirect(knowledgeUrl(orgRaw, { error: 'Freigabe konnte nicht geändert werden.' }));
+  }
+  const { org, id, shareable } = parsed.data;
+
+  const access = await getMemberAccess(org);
+  if (!access || !isAdminRole(access.role)) {
+    redirect(
+      knowledgeUrl(org, {
+        error: 'Nur Inhaber und Admins dürfen Dateien zum Versand freigeben.',
+      })
+    );
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('kb_sources')
+    .update({ is_shareable: shareable === 'on' })
+    .eq('org_id', org)
+    .eq('id', id)
+    // The CHECK constraint already limits the flag to files; narrowing here turns
+    // a would-be constraint violation into a plain "not found".
+    .eq('type', 'file')
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(knowledgeUrl(org, { error: 'Freigabe konnte nicht geändert werden.' }));
+  }
+
+  revalidatePath('/settings/knowledge');
+  revalidatePath(`/settings/knowledge/source/${id}`);
+  redirect(
+    knowledgeUrl(org, {
+      notice:
+        shareable === 'on'
+          ? 'Datei ist freigegeben — der Bot darf sie an Kunden senden.'
+          : 'Freigabe entzogen — die Datei wird nicht mehr versendet.',
+    })
+  );
 }
 
 // --- reindex / delete ------------------------------------------------------------

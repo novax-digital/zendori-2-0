@@ -13,6 +13,7 @@ export type RateLimitName =
   | 'widget-session-ip'
   | 'widget-message-ip'
   | 'widget-message-conversation'
+  | 'widget-attachment-ip'
   | 'form-bootstrap-ip'
   | 'form-submit-ip'
   | 'form-submit-token';
@@ -49,6 +50,13 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(15, '1 m'),
       prefix: 'zendori:rl:widget-message-conversation',
+    }),
+    // The widget asks for a reply's images once per received bot message, so this
+    // sits above widget-message-ip: reading is cheaper than writing.
+    'widget-attachment-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(60, '1 m'),
+      prefix: 'zendori:rl:widget-attachment-ip',
     }),
     'form-bootstrap-ip': new Ratelimit({
       redis,

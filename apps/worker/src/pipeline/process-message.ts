@@ -52,6 +52,7 @@ import {
   detectHandoff,
   matchesEscalationKeyword,
 } from './handoff.js';
+import { resolveReleasedFiles } from './outbound-files.js';
 
 /**
  * Default ticket categories (docs/legacy-analysis.md §2.4). v2 has no per-org
@@ -635,11 +636,19 @@ export async function processMessage(messageId: string): Promise<void> {
       const claimed = await claimMessageDone(supabase, message.id, updatedMetadata);
       if (!claimed) return; // a prior run/retry already processed this message
       await persistDraft(supabase, { ...draftPersist, status: 'accepted' });
+      // Released files to attach (0025). One indexed lookup on ids the draft
+      // already named — no extra model call, and it only runs on the auto-send
+      // path, so a handoff or a low-confidence draft never ships a file.
+      const files = await resolveReleasedFiles(supabase, {
+        orgId,
+        usedSourceIds: draftResult.used_source_ids,
+      });
       await deliverBotReply(supabase, {
         conv,
         channel,
         content: draftResult.reply,
         senderType: 'bot',
+        files,
       });
       await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
       return; // message already marked done by the claim
