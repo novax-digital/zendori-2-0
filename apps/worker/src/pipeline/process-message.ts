@@ -693,7 +693,7 @@ export async function processMessage(messageId: string): Promise<void> {
  * are swallowed — a missed request is recovered by a later status change /
  * manual button. Never logs content.
  */
-async function maybeRequestHubspotSync(
+export async function maybeRequestHubspotSync(
   supabase: SupabaseClient,
   orgId: string,
   channelId: string,

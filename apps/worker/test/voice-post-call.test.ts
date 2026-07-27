@@ -60,12 +60,15 @@ interface Recorded {
 function makeFake(opts: {
   singles?: Record<string, unknown>;
   lists?: Record<string, unknown[]>;
+  /** Rows an update()…select() chain returns per table (RETURNING). */
+  updateData?: Record<string, unknown[]>;
 }): { client: SupabaseClient; uploads: { bucket: string; path: string; size: number }[] } & Recorded {
   const inserts: Recorded['inserts'] = [];
   const updates: Recorded['updates'] = [];
   const uploads: { bucket: string; path: string; size: number }[] = [];
   const singles = opts.singles ?? {};
   const lists = opts.lists ?? {};
+  const updateData = opts.updateData ?? {};
 
   function makeChain(table: string, kind: 'select' | 'update' | 'insert') {
     const proxy: Record<string, unknown> = new Proxy(
@@ -76,7 +79,7 @@ function makeFake(opts: {
             const result =
               kind === 'select'
                 ? { data: lists[table] ?? [], error: null }
-                : { data: null, error: null };
+                : { data: kind === 'update' ? (updateData[table] ?? null) : null, error: null };
             return (resolve: (v: unknown) => void) => resolve(result);
           }
           if (prop === 'maybeSingle' || prop === 'single') {
@@ -262,6 +265,91 @@ describe('processPostCall', () => {
     expect(fake.updates.some((u) => u.table === 'voice_calls' && u.patch.post_processed_at)).toBe(
       false
     );
+  });
+});
+
+// Voice's ONLY automatic HubSpot hook lives in post-call (calls bypass the text
+// pipeline entirely, so process-message's sync requests never fire for them).
+// Regression tests for the 2026-07-27 bug: "An HubSpot senden" worked, the
+// automatic sync for voice conversations never happened.
+describe('HubSpot sync request (voice auto-sync)', () => {
+  const hubspotAll = { rules: { mode: 'all' } };
+
+  function successSeeds(integrations?: unknown) {
+    return {
+      singles: {
+        voice_calls: CALL_ROW,
+        organizations: { name: 'Testfirma' },
+        conversations: { subject: 'Anruf von +4930…', contact_id: null },
+        ...(integrations !== undefined ? { integrations } : {}),
+      },
+      lists: { messages: TURNS },
+    };
+  }
+
+  const syncRequested = (fake: Recorded): boolean =>
+    fake.updates.some(
+      (u) => u.table === 'conversations' && u.patch.hubspot_sync_requested_at !== undefined
+    );
+
+  it('requests the sync after a successful post-call when rules say all', async () => {
+    classifyMock.mockResolvedValue(classificationResult());
+    extractMock.mockResolvedValue(extractionResult());
+    const fake = makeFake(successSeeds(hubspotAll));
+    dbHolder.client = fake.client;
+    await processPostCall('call-1');
+    expect(syncRequested(fake)).toBe(true);
+  });
+
+  it("mode 'manual' never requests automatically (the button stays the only path)", async () => {
+    classifyMock.mockResolvedValue(classificationResult());
+    extractMock.mockResolvedValue(extractionResult());
+    const fake = makeFake(successSeeds({ rules: { mode: 'manual' } }));
+    dbHolder.client = fake.client;
+    await processPostCall('call-1');
+    expect(syncRequested(fake)).toBe(false);
+  });
+
+  it('no active integration → no request, pipeline unaffected', async () => {
+    classifyMock.mockResolvedValue(classificationResult());
+    extractMock.mockResolvedValue(extractionResult());
+    const fake = makeFake(successSeeds());
+    dbHolder.client = fake.client;
+    await processPostCall('call-1');
+    expect(syncRequested(fake)).toBe(false);
+    expect(fake.updates.some((u) => u.table === 'voice_calls' && u.patch.post_processed_at)).toBe(
+      true
+    );
+  });
+
+  it('a missed call (no transcript) is still requested — it is an inbox conversation', async () => {
+    const fake = makeFake({
+      singles: { voice_calls: CALL_ROW, integrations: hubspotAll },
+      lists: { messages: [] },
+    });
+    dbHolder.client = fake.client;
+    await processPostCall('call-1');
+    expect(classifyMock).not.toHaveBeenCalled();
+    expect(syncRequested(fake)).toBe(true);
+  });
+
+  it('the terminal stamp (AI retries exhausted) still requests the sync', async () => {
+    const fake = makeFake({
+      singles: { integrations: hubspotAll },
+      updateData: {
+        voice_calls: [{ org_id: 'org-1', channel_id: 'chan-1', conversation_id: 'conv-1' }],
+      },
+    });
+    dbHolder.client = fake.client;
+    await markPostCallTerminal('call-1');
+    expect(syncRequested(fake)).toBe(true);
+  });
+
+  it('a second terminal call (0 rows updated) does not re-request', async () => {
+    const fake = makeFake({ singles: { integrations: hubspotAll }, updateData: {} });
+    dbHolder.client = fake.client;
+    await markPostCallTerminal('call-1');
+    expect(syncRequested(fake)).toBe(false);
   });
 });
 

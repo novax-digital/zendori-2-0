@@ -2,6 +2,7 @@ import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
 import { createLogger, loadWorkerEnv, voiceMinutesCostUsd } from '@zendori/core';
 import { getServiceClient, toErrorInfo } from '../db.js';
+import { maybeRequestHubspotSync } from './process-message.js';
 import { recordUsage } from './usage.js';
 import {
   deleteRecording,
@@ -27,11 +28,19 @@ export const POST_CALL_RETRY_LIMIT = 2;
  */
 export async function markPostCallTerminal(voiceCallId: string): Promise<void> {
   const supabase = getServiceClient();
-  await supabase
+  const { data } = await supabase
     .from('voice_calls')
     .update({ post_processed_at: new Date().toISOString() })
     .eq('id', voiceCallId)
-    .is('post_processed_at', null);
+    .is('post_processed_at', null)
+    .select('org_id, channel_id, conversation_id');
+  // Only the AI refinement failed — the transcript conversation exists and
+  // still belongs in HubSpot per the org's rules. The RETURNING clause doubles
+  // as the idempotency gate: a second terminal call updates 0 rows.
+  const row = ((data ?? []) as { org_id: string; channel_id: string; conversation_id: string }[])[0];
+  if (row) {
+    await maybeRequestHubspotSync(supabase, row.org_id, row.channel_id, row.conversation_id);
+  }
 }
 
 const log = createLogger('voice-post-call');
@@ -246,6 +255,9 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
   }[];
   if (turns.length === 0) {
     await stamp();
+    // Even a missed/silent call is an inbox conversation ("Verpasster Anruf") —
+    // if the org's rules say so, it belongs in HubSpot like any other.
+    await maybeRequestHubspotSync(supabase, call.org_id, call.channel_id, call.conversation_id);
     return;
   }
 
@@ -341,6 +353,15 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
   }
 
   await stamp();
+
+  // Voice's ONLY automatic HubSpot hook (the fix for "Anrufe kommen nie
+  // automatisch in HubSpot an"): calls bypass the text pipeline entirely
+  // (transcript turns are stored processing_state='skipped'), so none of the
+  // six maybeRequestHubspotSync call sites in process-message.ts ever fire for
+  // them. Requested AFTER the subject/priority refinement above so the ticket
+  // is created from the enriched conversation. Best-effort inside the helper;
+  // rules (all | channels | manual) are evaluated there.
+  await maybeRequestHubspotSync(supabase, call.org_id, call.channel_id, call.conversation_id);
 }
 
 async function logRun(
