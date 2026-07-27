@@ -449,6 +449,23 @@ export function formatEur(amount: number): string {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 }
 
+/**
+ * EUR formatting for INTERNAL cost figures, where a single event is often worth
+ * a fraction of a cent (one Haiku classification ≈ 0,1–0,3 Cent). Standard
+ * two-decimal formatting rounds those to 0,00 € and makes real, correctly
+ * metered costs look like a metering bug. Sub-cent amounts therefore get four
+ * decimals; everything from one cent up renders like formatEur.
+ */
+export function formatEurCost(amount: number): string {
+  const subCent = amount !== 0 && Math.abs(amount) < 0.005;
+  return new Intl.NumberFormat('de-DE', {
+    style: 'currency',
+    currency: 'EUR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: subCent ? 4 : 2,
+  }).format(amount);
+}
+
 export function formatQuantity(quantity: number, unit: string): string {
   const rounded = unit === 'Minuten' ? Math.round(quantity * 10) / 10 : Math.round(quantity);
   return `${new Intl.NumberFormat('de-DE').format(rounded)} ${unit}`;

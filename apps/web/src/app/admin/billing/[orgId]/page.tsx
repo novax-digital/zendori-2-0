@@ -8,6 +8,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
   currentMonth,
   formatEur,
+  formatEurCost,
   formatQuantity,
   getOrgInvoice,
   loadBillingCatalog,
@@ -271,7 +272,11 @@ export default async function AdminOrgBillingPage({
                   <td style={{ color: 'var(--text-muted)' }}>{formatDateTime(t.when)}</td>
                   <td>{t.label}</td>
                   <td style={{ color: 'var(--text-muted)' }}>{t.source}</td>
-                  <td style={{ textAlign: 'right' }}>{formatEur(costEur(t.costUsd))}</td>
+                  {/* Unrounded: a single Haiku call is worth ~0,1–0,3 Cent, and
+                      cent-rounding rendered every KI row as a misleading 0,00 €. */}
+                  <td style={{ textAlign: 'right' }}>
+                    {formatEurCost(t.costUsd * catalog.ctx.usdToEur)}
+                  </td>
                 </tr>
               ))}
             </tbody>
