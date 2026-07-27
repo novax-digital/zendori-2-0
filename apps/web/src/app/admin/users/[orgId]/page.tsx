@@ -4,7 +4,9 @@ import type { Channel, ChannelKind } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { CHANNEL_KIND_LABELS, countChannelsByKind } from '@/lib/channel-limits';
-import { addMember, setChannelLimits } from '../actions';
+import { loadBillingCatalog } from '@/lib/billing';
+import { addMember } from '../actions';
+import { assignPackage, removeSubscription } from '../../billing/actions';
 
 type MemberRow = { user_id: string; role: string; created_at: string };
 
@@ -49,10 +51,11 @@ export default async function AdminOrgPage({
     .order('created_at', { ascending: true });
   const members = (memberData ?? []) as MemberRow[];
 
-  // Channel quotas (0017): current limits + live counts per kind.
-  const [{ data: limitData }, { data: channelData }] = await Promise.all([
+  // Effective quotas (0017, plan-derived since the unification) + live counts.
+  const [{ data: limitData }, { data: channelData }, catalog] = await Promise.all([
     admin.from('org_channel_limits').select('channel_kind, max_count').eq('org_id', orgId),
     admin.from('channels').select('type, config').eq('org_id', orgId),
+    loadBillingCatalog(admin),
   ]);
   const limits = new Map(
     ((limitData ?? []) as { channel_kind: ChannelKind; max_count: number }[]).map((r) => [
@@ -61,6 +64,13 @@ export default async function AdminOrgPage({
     ])
   );
   const counts = countChannelsByKind((channelData ?? []) as Pick<Channel, 'type' | 'config'>[]);
+
+  const sub = catalog.subscriptions.get(orgId);
+  const currentPackage = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
+  const tiers = [...catalog.tiers.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const packages = [...catalog.packages.values()]
+    .filter((p) => p.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const emailByUserId = new Map<string, string>();
   await Promise.all(
@@ -125,45 +135,96 @@ export default async function AdminOrgPage({
       </div>
 
       <div className="panel">
-        <h2>Kanal-Kontingente</h2>
+        <h2>Plan</h2>
         <p className="help">
-          Wie viele Kanäle dieser Kunde je Kanalart anlegen darf. Leer = unbegrenzt, 0 = gesperrt
-          (die Kanalart verschwindet beim Kunden aus der Galerie, solange keine Kanäle existieren).
-          Bestehende Kanäle bleiben immer erhalten.
+          Der Plan bestimmt Paketgebühren, Verbrauchspreise und die Kanal-Kontingente dieser
+          Organisation. Kontingente werden beim Zuweisen aus dem Plan übernommen — Kanalarten
+          ohne Eintrag im Plan sind unbegrenzt. Pläne pflegst du unter{' '}
+          <Link href="/admin/pricing">Preise &amp; Pakete</Link>.
         </p>
-        <form className="stack" action={setChannelLimits} style={{ maxWidth: '30rem' }}>
+        <form className="stack" action={assignPackage} style={{ maxWidth: '26rem' }}>
           <input type="hidden" name="orgId" value={org.id} />
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-              gap: '0.75rem',
-            }}
-          >
-            {KIND_ORDER.map((kind) => (
-              <div key={kind}>
-                <label htmlFor={`limit-${kind}`}>
-                  {CHANNEL_KIND_LABELS[kind]}{' '}
-                  <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>
-                    ({counts.get(kind) ?? 0} vorhanden)
-                  </span>
-                </label>
-                <input
-                  id={`limit-${kind}`}
-                  name={`limit_${kind}`}
-                  type="number"
-                  min={0}
-                  max={999}
-                  defaultValue={limits.has(kind) ? String(limits.get(kind)) : ''}
-                  placeholder="∞"
-                />
-              </div>
-            ))}
+          <input type="hidden" name="returnTo" value="org" />
+          <div>
+            <label htmlFor="packageId">Plan</label>
+            <select id="packageId" name="packageId" defaultValue={sub?.packageId ?? ''}>
+              <option value="">— kein Plan —</option>
+              {packages.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </div>
-          <button className="primary" type="submit">
-            Kontingente speichern
-          </button>
+          <div>
+            <label htmlFor="priceTierId">Preisliste (optional, bessere Konditionen)</label>
+            <select id="priceTierId" name="priceTierId" defaultValue={sub?.priceTierId ?? ''}>
+              <option value="">— aus Plan übernehmen —</option>
+              {tiers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="interval">Laufzeit</label>
+            <select id="interval" name="interval" defaultValue={sub?.interval ?? 'monthly'}>
+              <option value="monthly">Monatlich</option>
+              <option value="yearly">Jährlich</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="setupFeeEur">Setup-Gebühr-Override (€, optional)</label>
+            <input
+              id="setupFeeEur"
+              name="setupFeeEur"
+              type="text"
+              inputMode="decimal"
+              placeholder="aus Plan"
+              defaultValue={sub?.setupFeeEur != null ? String(sub.setupFeeEur) : ''}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button className="primary" type="submit">
+              {sub?.packageId ? 'Plan aktualisieren' : 'Plan zuweisen'}
+            </button>
+          </div>
         </form>
+        {sub ? (
+          <form action={removeSubscription} style={{ marginTop: '0.75rem' }}>
+            <input type="hidden" name="orgId" value={org.id} />
+            <input type="hidden" name="returnTo" value="org" />
+            <button className="ghost" type="submit">Zuweisung entfernen</button>
+          </form>
+        ) : null}
+      </div>
+
+      <div className="panel">
+        <h2>Wirksame Kanal-Kontingente</h2>
+        <p className="help">
+          {currentPackage
+            ? `Aus dem Plan „${currentPackage.name}" übernommen — hier nur zur Kontrolle.`
+            : 'Kein Plan zugewiesen. Ohne Plan gelten keine Kontingent-Grenzen.'}
+        </p>
+        <table style={{ maxWidth: '30rem' }}>
+          <thead>
+            <tr>
+              <th>Kanalart</th>
+              <th style={{ textAlign: 'right' }}>Vorhanden</th>
+              <th style={{ textAlign: 'right' }}>Kontingent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {KIND_ORDER.map((kind) => (
+              <tr key={kind}>
+                <td>{CHANNEL_KIND_LABELS[kind]}</td>
+                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
+                  {counts.get(kind) ?? 0}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  {limits.has(kind) ? String(limits.get(kind)) : 'unbegrenzt'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <div className="panel">
