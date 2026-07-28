@@ -28,17 +28,19 @@ type InboxSearchParams = {
   c?: string;
   status?: string;
   channel?: string;
+  q?: string;
   error?: string;
   notice?: string;
 };
 
-function parseFilters(status?: string, channel?: string): InboxFilters {
+function parseFilters(status?: string, channel?: string, q?: string): InboxFilters {
   const parsedStatus =
     status === 'open' || status === 'pending' || status === 'resolved' || status === 'hubspot_sent'
       ? status
       : 'all';
   const parsedChannel = channel && z.uuid().safeParse(channel).success ? channel : 'all';
-  return { status: parsedStatus, channelId: parsedChannel };
+  const parsedQ = typeof q === 'string' ? q.trim().slice(0, 200) : '';
+  return { status: parsedStatus, channelId: parsedChannel, q: parsedQ };
 }
 
 /** Neutral fallback when no (non-suppressed) handoff event exists for the conversation. */
@@ -100,7 +102,7 @@ export default async function InboxPage({
   const { orgId, access } = await requireActiveOrg(params.org);
   if (!canViewArea(access, 'inbox')) return <NoAccessPanel title="Inbox" />;
   const scopedChannelIds = allowedChannelIds(access);
-  const filters = parseFilters(params.status, params.channel);
+  const filters = parseFilters(params.status, params.channel, params.q);
   const selectedId = params.c;
 
   const [conversations, channels, members, cannedResponses, detail, hubspot] = await Promise.all([
@@ -172,6 +174,7 @@ export default async function InboxPage({
                   pausedHint={handoffHint}
                   filterStatus={filters.status}
                   filterChannel={filters.channelId}
+                  filterQ={filters.q}
                 />
               ) : handoffHint ? (
                 // handed off without a draft (e.g. reason='intake'): show the
@@ -186,6 +189,7 @@ export default async function InboxPage({
                 conversationId={detail.conversation.id}
                 filterStatus={filters.status}
                 filterChannel={filters.channelId}
+                filterQ={filters.q}
                 cannedResponses={cannedResponses}
               />
             </>
@@ -206,6 +210,7 @@ export default async function InboxPage({
               hubspot={hubspot}
               filterStatus={filters.status}
               filterChannel={filters.channelId}
+              filterQ={filters.q}
             />
           ) : (
             <div className="inbox-placeholder">Keine Konversation ausgewählt.</div>

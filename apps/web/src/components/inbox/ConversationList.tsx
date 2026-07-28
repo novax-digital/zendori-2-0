@@ -46,7 +46,11 @@ export default function ConversationList({
   if (items.length === 0) {
     return (
       <div className="inbox-list">
-        <p className="inbox-list-empty">Keine Konversationen gefunden.</p>
+        <p className="inbox-list-empty">
+          {filters.q !== ''
+            ? `Keine Treffer für „${filters.q}".`
+            : 'Keine Konversationen gefunden.'}
+        </p>
       </div>
     );
   }
@@ -60,6 +64,7 @@ export default function ConversationList({
           status: filters.status,
           channel: filters.channelId,
         });
+        if (filters.q !== '') query.set('q', filters.q);
         const displayName = item.contact?.name ?? item.contact?.email ?? 'Unbekannter Kontakt';
         return (
           <Link

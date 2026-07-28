@@ -27,7 +27,7 @@ function optionalField(value: FormDataEntryValue | null): string | undefined {
 /** Keeps the status filter only if it is a valid value, otherwise falls back to 'all'. */
 function sanitizeFilterStatus(value: FormDataEntryValue | null): string {
   const v = typeof value === 'string' ? value : '';
-  return v === 'open' || v === 'pending' || v === 'resolved' ? v : 'all';
+  return v === 'open' || v === 'pending' || v === 'resolved' || v === 'hubspot_sent' ? v : 'all';
 }
 
 /** Keeps the channel filter only if it is a uuid, otherwise falls back to 'all'. */
@@ -36,13 +36,19 @@ function sanitizeFilterChannel(value: FormDataEntryValue | null): string {
   return z.uuid().safeParse(v).success ? v : 'all';
 }
 
-// --- redirect targets (always preserve org/c/status/channel) ------------------
+/** Keeps the search term (0028) — trimmed and capped like parseFilters does. */
+function sanitizeFilterQ(value: FormDataEntryValue | null): string {
+  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+}
+
+// --- redirect targets (always preserve org/c/status/channel/q) ----------------
 
 type InboxRedirect = {
   org: string;
   c?: string;
   status: string;
   channel: string;
+  q?: string;
   error?: string;
   notice?: string;
 };
@@ -53,6 +59,7 @@ function inboxUrl(target: InboxRedirect): string {
   if (target.c) params.set('c', target.c);
   params.set('status', target.status);
   params.set('channel', target.channel);
+  if (target.q) params.set('q', target.q);
   if (target.error) params.set('error', target.error);
   if (target.notice) params.set('notice', target.notice);
   return `/inbox?${params.toString()}`;
@@ -84,6 +91,7 @@ function fallbackInboxRedirect(formData: FormData, error: string): InboxRedirect
     c: textField(formData.get('conversationId')),
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
     error,
   };
 }
@@ -116,6 +124,7 @@ export async function sendReply(formData: FormData): Promise<{ error: string } |
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -280,6 +289,7 @@ export async function setConversationStatus(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -342,6 +352,7 @@ export async function setConversationAssignee(formData: FormData): Promise<void>
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -397,6 +408,7 @@ export async function addNote(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -435,6 +447,7 @@ const contactUpdateSchema = z.object({
   conversationId: z.uuid(),
   contactId: z.uuid(),
   name: z.string().max(200),
+  email: z.string().max(200),
   phone: z.string().max(50),
   company: z.string().max(200),
 });
@@ -449,6 +462,7 @@ export async function updateContact(formData: FormData): Promise<void> {
     conversationId: formData.get('conversationId'),
     contactId: formData.get('contactId'),
     name: textField(formData.get('name')),
+    email: textField(formData.get('email')),
     phone: textField(formData.get('phone')),
     company: textField(formData.get('company')),
   });
@@ -461,13 +475,38 @@ export async function updateContact(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
+  // Email is the contact-dedupe identity key ((org_id, lower(email)) unique,
+  // 0006) and drives threading + the HubSpot match — stored lowercased, only
+  // syntactically valid addresses, duplicate gets its own German error.
+  const email = parsed.data.email.toLowerCase();
+  if (email !== '' && !z.email().safeParse(email).success) {
+    redirect(inboxUrl({ ...base, error: 'Bitte eine gültige E-Mail-Adresse eingeben.' }));
+  }
+
   const supabase = await createSupabaseServerClient();
+
+  // Bind the contact to the guarded conversation: hasConversationEdit checked
+  // inbox-edit + 0024 channel scope only for conversationId — without this
+  // check a channel-scoped member could pass any org contact's id and edit a
+  // contact whose conversations live on channels hidden from them (email now
+  // steers outbound reply routing, so that matters).
+  const { data: convRow } = await supabase
+    .from('conversations')
+    .select('contact_id')
+    .eq('org_id', org)
+    .eq('id', conversationId)
+    .maybeSingle();
+  if ((convRow as { contact_id: string | null } | null)?.contact_id !== contactId) {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
   let { data, error } = await supabase
     .from('contacts')
     .update({
       name: name === '' ? null : name,
+      email: email === '' ? null : email,
       phone: phone === '' ? null : phone,
       company: company === '' ? null : company,
     })
@@ -476,14 +515,26 @@ export async function updateContact(formData: FormData): Promise<void> {
     .select('id');
   const skewCode = (error as { code?: string } | null)?.code;
   if (error && (skewCode === '42703' || skewCode === 'PGRST204')) {
-    // contacts.company not migrated yet (web ahead of 0027) — keep name/phone
+    // contacts.company not migrated yet (web ahead of 0027) — keep the other
     // edits working; the company value is dropped until the migration lands.
     ({ data, error } = await supabase
       .from('contacts')
-      .update({ name: name === '' ? null : name, phone: phone === '' ? null : phone })
+      .update({
+        name: name === '' ? null : name,
+        email: email === '' ? null : email,
+        phone: phone === '' ? null : phone,
+      })
       .eq('org_id', org)
       .eq('id', contactId)
       .select('id'));
+  }
+  if ((error as { code?: string } | null)?.code === '23505') {
+    redirect(
+      inboxUrl({
+        ...base,
+        error: 'Diese E-Mail-Adresse ist bereits einem anderen Kontakt zugeordnet.',
+      })
+    );
   }
   if (error || !data || data.length === 0) {
     redirect(inboxUrl({ ...base, error: errorText }));
@@ -966,6 +1017,7 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1015,6 +1067,7 @@ export async function returnToBot(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1055,6 +1108,7 @@ export async function requestDraft(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1135,6 +1189,7 @@ export async function acceptDraft(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1188,6 +1243,7 @@ export async function discardDraft(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1231,6 +1287,7 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();
@@ -1301,6 +1358,7 @@ export async function syncToHubspot(formData: FormData): Promise<void> {
     c: conversationId,
     status: sanitizeFilterStatus(formData.get('filterStatus')),
     channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
   };
 
   const supabase = await createSupabaseServerClient();

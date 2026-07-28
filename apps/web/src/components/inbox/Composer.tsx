@@ -19,6 +19,7 @@ type ComposerProps = {
   conversationId: string;
   filterStatus: string;
   filterChannel: string;
+  filterQ: string;
   cannedResponses: CannedResponseItem[];
 };
 
@@ -27,6 +28,7 @@ export default function Composer({
   conversationId,
   filterStatus,
   filterChannel,
+  filterQ,
   cannedResponses,
 }: ComposerProps) {
   const [content, setContent] = useState('');
@@ -49,6 +51,7 @@ export default function Composer({
       <input type="hidden" name="conversationId" value={conversationId} />
       <input type="hidden" name="filterStatus" value={filterStatus} />
       <input type="hidden" name="filterChannel" value={filterChannel} />
+      <input type="hidden" name="filterQ" value={filterQ} />
       {error ? <p className="error">{error}</p> : null}
       {cannedResponses.length > 0 ? (
         <select

@@ -55,6 +55,22 @@ type ConversationRow = Conversation & {
   messages: { content: string; created_at: string }[] | null;
 };
 
+/**
+ * Escape \ % _ so user input matches literally inside an ILIKE pattern.
+ * '*' is stripped: PostgREST aliases '*' to '%' in like/ilike filter values
+ * (a literal star is inexpressible through that operator), so leaving it in
+ * would turn the pattern into a match-everything wildcard. Only used on the
+ * degraded pre-0028 fallback path — the RPC matches '*' literally.
+ */
+function likePattern(term: string): string {
+  const escaped = term
+    .replaceAll('*', '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', '\\%')
+    .replaceAll('_', '\\_');
+  return `%${escaped}%`;
+}
+
 export async function listConversations(
   orgId: string,
   filters: InboxFilters,
@@ -63,6 +79,43 @@ export async function listConversations(
 ): Promise<ConversationListItem[]> {
   const supabase = await createSupabaseServerClient();
   if (allowedChannelIds !== null && allowedChannelIds.length === 0) return [];
+
+  // Search (0028): search_conversations matches subject + contact fields +
+  // message contents server-side (SECURITY INVOKER — RLS applies) and returns
+  // the conversation ids; the regular list query below then loads the rows so
+  // the rendered shape stays identical to the unsearched list.
+  let searchIds: string[] | null = null;
+  let subjectOnlyFallback = false;
+  if (filters.q !== '') {
+    const channelScope =
+      filters.channelId !== 'all'
+        ? allowedChannelIds !== null && !allowedChannelIds.includes(filters.channelId)
+          ? []
+          : [filters.channelId]
+        : allowedChannelIds;
+    if (channelScope !== null && channelScope.length === 0) return [];
+    const { data: hits, error } = await supabase.rpc('search_conversations', {
+      p_org_id: orgId,
+      p_query: filters.q,
+      p_status: filters.status === 'all' ? null : filters.status,
+      p_channel_ids: channelScope,
+      p_limit: 100,
+    });
+    if (error) {
+      // Expected only as migration skew: search_conversations not deployed yet
+      // (web ahead of 0028) — degrade to a subject-only match so the search box
+      // still does something useful. Any OTHER error (timeout, transient) gets
+      // a content-free diagnostic log so silent degradation is visible (§7).
+      const code = (error as { code?: string }).code;
+      if (code !== 'PGRST202' && code !== '42883') {
+        console.error(`search_conversations failed (code=${code ?? 'unknown'})`);
+      }
+      subjectOnlyFallback = true;
+    } else {
+      searchIds = ((hits ?? []) as { id: string }[]).map((row) => row.id);
+      if (searchIds.length === 0) return [];
+    }
+  }
 
   let query = supabase
     .from('conversations')
@@ -78,6 +131,11 @@ export async function listConversations(
   }
   if (filters.channelId !== 'all') {
     query = query.eq('channel_id', filters.channelId);
+  }
+  if (searchIds !== null) {
+    query = query.in('id', searchIds);
+  } else if (subjectOnlyFallback) {
+    query = query.ilike('subject', likePattern(filters.q));
   }
 
   const { data } = await query

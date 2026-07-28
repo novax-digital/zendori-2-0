@@ -81,6 +81,8 @@ export type ConversationDetail = {
 export type InboxFilters = {
   status: ConversationStatus | 'all';
   channelId: string | 'all';
+  /** Search term (0028) — '' = no search. */
+  q: string;
 };
 
 /**

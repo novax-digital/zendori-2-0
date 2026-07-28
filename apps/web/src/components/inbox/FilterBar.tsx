@@ -40,6 +40,7 @@ export default function FilterBar({
             status: tab.value,
             channel: filters.channelId,
           });
+          if (filters.q !== '') query.set('q', filters.q);
           if (selectedConversationId) query.set('c', selectedConversationId);
           return (
             <Link
@@ -52,13 +53,21 @@ export default function FilterBar({
           );
         })}
       </nav>
-      {/* plain GET form: filtering works without any client-side JS */}
+      {/* plain GET form: filtering + search work without any client-side JS */}
       <form method="get" action="/inbox" className="inbox-filter-form">
         <input type="hidden" name="org" value={orgId} />
         <input type="hidden" name="status" value={filters.status} />
         {selectedConversationId ? (
           <input type="hidden" name="c" value={selectedConversationId} />
         ) : null}
+        <input
+          type="search"
+          name="q"
+          defaultValue={filters.q}
+          maxLength={200}
+          placeholder="Suchen (Betreff, Kontakt, Nachrichten)…"
+          aria-label="Inbox durchsuchen"
+        />
         <select name="channel" defaultValue={filters.channelId} aria-label="Kanal-Filter">
           <option value="all">Alle Kanäle</option>
           {channels.map((channel) => (

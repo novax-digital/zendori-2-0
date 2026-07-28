@@ -65,6 +65,7 @@ type ContextSidebarProps = {
   hubspot: HubspotSidebarInfo;
   filterStatus: string;
   filterChannel: string;
+  filterQ: string;
 };
 
 export default function ContextSidebar({
@@ -74,6 +75,7 @@ export default function ContextSidebar({
   hubspot,
   filterStatus,
   filterChannel,
+  filterQ,
 }: ContextSidebarProps) {
   const { conversation, contact, channel, agent, notes } = detail;
 
@@ -94,6 +96,7 @@ export default function ContextSidebar({
       <input type="hidden" name="conversationId" value={conversation.id} />
       <input type="hidden" name="filterStatus" value={filterStatus} />
       <input type="hidden" name="filterChannel" value={filterChannel} />
+      <input type="hidden" name="filterQ" value={filterQ} />
     </>
   );
 
@@ -104,7 +107,7 @@ export default function ContextSidebar({
         {contact ? (
           // keyed so server-side contact updates re-sync the uncontrolled inputs
           <form
-            key={`${contact.id}-${contact.name ?? ''}-${contact.phone ?? ''}-${contact.company ?? ''}`}
+            key={`${contact.id}-${contact.name ?? ''}-${contact.email ?? ''}-${contact.phone ?? ''}-${contact.company ?? ''}`}
             action={updateContact}
             className="inbox-contact-form"
           >
@@ -123,10 +126,15 @@ export default function ContextSidebar({
                 maxLength={200}
               />
             </label>
-            <div className="inbox-contact-static">
-              <span>E-Mail</span>
-              <span>{contact.email ?? '—'}</span>
-            </div>
+            <label>
+              E-Mail
+              <input
+                type="email"
+                name="email"
+                defaultValue={contact.email ?? ''}
+                maxLength={200}
+              />
+            </label>
             <label>
               Telefon
               <input type="text" name="phone" defaultValue={contact.phone ?? ''} maxLength={50} />

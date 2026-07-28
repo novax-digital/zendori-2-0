@@ -239,6 +239,106 @@ describe.skipIf(!enabled)('RLS: org isolation', () => {
     await admin.from('organizations').delete().eq('id', orgC!.id);
   });
 
+  it('search_conversations (0028): members search own org, foreign orgs stay blind', async () => {
+    const { data: channel } = await admin
+      .from('channels')
+      .select('id')
+      .eq('org_id', orgAId)
+      .limit(1)
+      .single();
+    const { data: contact } = await admin
+      .from('contacts')
+      .insert({
+        org_id: orgAId,
+        name: 'Suchtest Kontakt',
+        email: `suche-${randomUUID().slice(0, 8)}@test.zendori.dev`,
+        company: 'Suchwerk GmbH',
+      })
+      .select('id')
+      .single();
+    const { data: conv } = await admin
+      .from('conversations')
+      .insert({
+        org_id: orgAId,
+        channel_id: channel!.id,
+        contact_id: contact!.id,
+        subject: 'Wallbox defekt',
+        status: 'open',
+        mode: 'bot',
+      })
+      .select('id')
+      .single();
+    await admin.from('messages').insert({
+      org_id: orgAId,
+      conversation_id: conv!.id,
+      channel_id: channel!.id,
+      direction: 'in',
+      sender_type: 'contact',
+      content: 'Das Sondersuchwort steht nur in dieser Nachricht.',
+      content_type: 'text',
+      processing_state: 'skipped',
+    });
+
+    // matches via message content, contact company, and subject substring
+    for (const q of ['Sondersuchwort', 'Suchwerk', 'Wallbox def']) {
+      const { data, error } = await alice.rpc('search_conversations', {
+        p_org_id: orgAId,
+        p_query: q,
+      });
+      expect(error).toBeNull();
+      expect(((data ?? []) as { id: string }[]).map((r) => r.id)).toContain(conv!.id);
+    }
+
+    // status filter narrows the result
+    const { data: wrongStatus } = await alice.rpc('search_conversations', {
+      p_org_id: orgAId,
+      p_query: 'Sondersuchwort',
+      p_status: 'resolved',
+    });
+    expect(((wrongStatus ?? []) as { id: string }[]).map((r) => r.id)).not.toContain(conv!.id);
+
+    // ILIKE escaping: a literal % must not act as a match-everything wildcard
+    const { data: pct, error: pctError } = await alice.rpc('search_conversations', {
+      p_org_id: orgAId,
+      p_query: '%',
+    });
+    expect(pctError).toBeNull();
+    expect(pct ?? []).toHaveLength(0);
+
+    // a foreign org's data is invisible: same seed in org E, searched by alice
+    const { data: orgE } = await admin
+      .from('organizations')
+      .insert({ name: 'Org E', slug: `org-e-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    const { data: chE } = await admin
+      .from('channels')
+      .insert({ org_id: orgE!.id, type: 'chat', name: 'c' })
+      .select('id')
+      .single();
+    const { data: convE } = await admin
+      .from('conversations')
+      .insert({
+        org_id: orgE!.id,
+        channel_id: chE!.id,
+        subject: 'Sondersuchwort fremd',
+        status: 'open',
+        mode: 'bot',
+      })
+      .select('id')
+      .single();
+    expect(convE).not.toBeNull();
+    const { data: foreign, error: foreignError } = await alice.rpc('search_conversations', {
+      p_org_id: orgE!.id,
+      p_query: 'Sondersuchwort',
+    });
+    // RLS filters, no error: a non-member simply sees zero rows
+    expect(foreignError).toBeNull();
+    expect(foreign ?? []).toHaveLength(0);
+
+    await admin.from('organizations').delete().eq('id', orgE!.id);
+  });
+
   it('accept_invite rejects a token issued for another email', async () => {
     const { data: invite } = await alice
       .from('invites')

@@ -1467,10 +1467,18 @@ code.invite-link {
 }
 .inbox-filter-form {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 .inbox-filter-form select {
   flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  padding: 0.5rem 0.6rem;
+}
+/* search input (0028) gets its own full-width row above channel + button */
+.inbox-filter-form input[type='search'] {
+  flex: 1 1 100%;
   min-width: 0;
   font-size: 0.85rem;
   padding: 0.5rem 0.6rem;

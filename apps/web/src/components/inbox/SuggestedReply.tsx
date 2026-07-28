@@ -89,6 +89,7 @@ type SuggestedReplyProps = {
   conversationId: string;
   filterStatus: string;
   filterChannel: string;
+  filterQ: string;
   mode: ConversationMode;
   draft: DraftItem;
   /** Agent assigned to this conversation's channel (threshold + name). */
@@ -112,6 +113,7 @@ export default function SuggestedReply({
   conversationId,
   filterStatus,
   filterChannel,
+  filterQ,
   mode,
   draft,
   agent,
@@ -129,6 +131,7 @@ export default function SuggestedReply({
       <input type="hidden" name="draftId" value={draft.id} />
       <input type="hidden" name="filterStatus" value={filterStatus} />
       <input type="hidden" name="filterChannel" value={filterChannel} />
+      <input type="hidden" name="filterQ" value={filterQ} />
     </>
   );
 
