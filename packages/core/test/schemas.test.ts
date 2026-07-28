@@ -3,6 +3,7 @@ import {
   channelTypeSchema,
   conversationModeSchema,
   messageSchema,
+  sanitizeIntakeFields,
   syncRulesSchema,
 } from '../src/schemas.js';
 
@@ -45,5 +46,17 @@ describe('domain schemas', () => {
     ).toBe('channels');
     expect(() => syncRulesSchema.parse({ mode: 'channels' })).toThrow();
     expect(() => syncRulesSchema.parse({ mode: 'everything' })).toThrow();
+  });
+
+  it('sanitizes intake fields: unknown values dropped, canonical order, defaults', () => {
+    // canonical order regardless of input order, duplicates collapsed
+    expect(sanitizeIntakeFields(['company', 'name', 'name'])).toEqual(['name', 'company']);
+    // unknown values are dropped
+    expect(sanitizeIntakeFields(['name', 'fax'])).toEqual(['name']);
+    // an empty array is a valid "ask nothing" choice
+    expect(sanitizeIntakeFields([])).toEqual([]);
+    // non-array (pre-0027 row / missing column) → the previous hardcoded set
+    expect(sanitizeIntakeFields(null)).toEqual(['name', 'phone']);
+    expect(sanitizeIntakeFields(undefined)).toEqual(['name', 'phone']);
   });
 });

@@ -5,7 +5,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { canViewArea, isAdminRole, type Channel } from '@zendori/core';
+import { canViewArea, isAdminRole, sanitizeIntakeFields, type Channel } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
@@ -39,14 +39,28 @@ export default async function AgentDetailPage({
   const disabled = !isOwner;
 
   const supabase = await createSupabaseServerClient();
-  const { data: agentData } = await supabase
+  let agentRes = await supabase
     .from('agents')
-    .select('id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled')
+    .select(
+      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields'
+    )
     .eq('org_id', orgId)
     .eq('id', agentId)
     .maybeSingle();
-  if (!agentData) notFound();
-  const agent = agentData as unknown as AgentRow;
+  if (agentRes.error && (agentRes.error as { code?: string }).code === '42703') {
+    // agents.intake_fields not migrated yet (web ahead of 0027) — retry without.
+    agentRes = (await supabase
+      .from('agents')
+      .select('id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled')
+      .eq('org_id', orgId)
+      .eq('id', agentId)
+      .maybeSingle()) as typeof agentRes;
+  }
+  if (!agentRes.data) notFound();
+  const raw = agentRes.data as unknown as Omit<AgentRow, 'intake_fields'> & {
+    intake_fields?: unknown;
+  };
+  const agent: AgentRow = { ...raw, intake_fields: sanitizeIntakeFields(raw.intake_fields) };
 
   const [channels, kbs, links] = await Promise.all([
     listChannels(orgId),
@@ -99,6 +113,7 @@ export default async function AgentDetailPage({
         defaultMode={agent.mode}
         defaultThreshold={agent.confidence_threshold}
         defaultHandoffEnabled={agent.handoff_enabled}
+        defaultIntakeFields={agent.intake_fields}
         disabled={disabled}
       />
       <label className="check-row">

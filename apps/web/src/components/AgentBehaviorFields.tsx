@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AgentKind, AgentMode } from '@zendori/core';
+import { INTAKE_FIELDS, type AgentKind, type AgentMode, type IntakeField } from '@zendori/core';
 
 // Kind/mode/threshold interplay for the agent forms (0015):
 //   · Voice agents offer only "Reine Annahme" and "Autopilot" — no drafts on a
@@ -28,12 +28,21 @@ const MODE_OPTIONS: Record<AgentKind, { value: AgentMode; label: string }[]> = {
   ],
 };
 
+/** Checkbox labels for the voice intake fields (0027), in canonical order. */
+const INTAKE_FIELD_LABELS: Record<IntakeField, string> = {
+  name: 'Name',
+  phone: 'Rückrufnummer',
+  email: 'E-Mail-Adresse',
+  company: 'Unternehmen',
+};
+
 export default function AgentBehaviorFields({
   idPrefix,
   kindFixed,
   defaultMode,
   defaultThreshold,
   defaultHandoffEnabled,
+  defaultIntakeFields,
   disabled,
 }: {
   idPrefix: string;
@@ -43,9 +52,12 @@ export default function AgentBehaviorFields({
   defaultThreshold?: number;
   /** 0018: per-agent human-handoff master switch (default on). */
   defaultHandoffEnabled?: boolean;
+  /** 0027: fields a voice agent asks the caller for during ticket intake. */
+  defaultIntakeFields?: IntakeField[];
   disabled: boolean;
 }) {
   const [kind, setKind] = useState<AgentKind>(kindFixed ?? 'text');
+  const intakeDefaults = new Set<IntakeField>(defaultIntakeFields ?? ['name', 'phone']);
   const options = MODE_OPTIONS[kind];
   const fallbackMode: AgentMode = kind === 'voice' ? 'intake_only' : 'draft_only';
   const effectiveDefault = options.some((o) => o.value === defaultMode)
@@ -110,6 +122,31 @@ export default function AgentBehaviorFields({
           ))}
         </select>
       </div>
+      {kind === 'voice' ? (
+        <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+          <label>Abgefragte Angaben bei der Anliegen-Aufnahme</label>
+          {/* render-time truth: a stale form without the checkboxes must not wipe the selection */}
+          <input type="hidden" name="intakeFieldsRendered" value="1" />
+          {INTAKE_FIELDS.map((field) => (
+            <label key={field} htmlFor={`${idPrefix}-intake-${field}`} className="check-row">
+              <input
+                id={`${idPrefix}-intake-${field}`}
+                name="intakeFields"
+                type="checkbox"
+                value={field}
+                defaultChecked={intakeDefaults.has(field)}
+                disabled={disabled}
+              />
+              {INTAKE_FIELD_LABELS[field]}
+            </label>
+          ))}
+          <p className="hint">
+            Bevor der Agent ein Anliegen als Ticket aufnimmt, erfragt er die angehakten Angaben
+            (die Rückrufnummer nur, falls sie von der Anrufnummer abweicht). Nicht Angehaktes wird
+            nicht aktiv erfragt — nennt der Anrufer es von selbst, wird es trotzdem gespeichert.
+          </p>
+        </fieldset>
+      ) : null}
       {mode !== 'intake_only' ? (
         <div>
           <label htmlFor={`${idPrefix}-handoff`} className="check-row">

@@ -54,6 +54,30 @@ export const agentKindSchema = z.enum(['text', 'voice']);
 export type AgentKind = z.infer<typeof agentKindSchema>;
 
 /**
+ * Contact fields a voice agent actively asks the caller for during ticket
+ * intake (agents.intake_fields, 0027). Array order = the order they are asked
+ * in. Text agents ignore the setting (their contact data comes from extraction).
+ */
+export const INTAKE_FIELDS = ['name', 'phone', 'email', 'company'] as const;
+export const intakeFieldSchema = z.enum(INTAKE_FIELDS);
+export type IntakeField = z.infer<typeof intakeFieldSchema>;
+
+/**
+ * Normalize an intake_fields value from an untrusted boundary (DB row of
+ * unknown migration state, FormData checkboxes): drop unknown values, dedupe,
+ * and impose the canonical order. A non-array (missing column, null) falls back
+ * to the pre-0027 hardcoded behavior (name + phone); an empty array is a valid
+ * "ask nothing" choice and stays empty.
+ */
+export function sanitizeIntakeFields(value: unknown): IntakeField[] {
+  if (!Array.isArray(value)) return ['name', 'phone'];
+  const chosen = new Set(
+    value.filter((v): v is IntakeField => intakeFieldSchema.safeParse(v).success)
+  );
+  return INTAKE_FIELDS.filter((f) => chosen.has(f));
+}
+
+/**
  * Channel KIND for quotas (0017) — the UI notion, finer than `type`: email
  * splits into 'form' (contact-form intake) and 'email' (forwarded mailbox),
  * chat splits into 'chat' (widget) and 'test'.
@@ -140,6 +164,8 @@ export const contactSchema = z.object({
   email: z.string().nullable(),
   phone: z.string().nullable(),
   wa_id: z.string().nullable(),
+  /** Company/organisation of the contact (0027). */
+  company: z.string().nullable(),
   external_ids: z.record(z.string(), z.unknown()),
   created_at: z.string(),
 });

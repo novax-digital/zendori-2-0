@@ -3,7 +3,13 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { agentKindSchema, agentModeSchema, type AgentKind, type AgentMode } from '@zendori/core';
+import {
+  agentKindSchema,
+  agentModeSchema,
+  sanitizeIntakeFields,
+  type AgentKind,
+  type AgentMode,
+} from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 function textField(value: FormDataEntryValue | null): string {
@@ -114,6 +120,12 @@ export async function createAgent(formData: FormData): Promise<void> {
       mode,
       confidence_threshold: confidenceThreshold,
       handoff_enabled: handoffEnabled,
+      // 0027: only voice forms render the checkboxes (marker = render-time
+      // truth) — text agents and stale forms keep the column default rather
+      // than having the selection wiped by an absent field set.
+      ...(kind === 'voice' && formData.get('intakeFieldsRendered') != null
+        ? { intake_fields: sanitizeIntakeFields(formData.getAll('intakeFields')) }
+        : {}),
     })
     .select('id')
     .single();
@@ -198,6 +210,11 @@ export async function updateAgent(formData: FormData): Promise<void> {
       is_active: isActive,
       // 0018: intake_only forces the toggle on (no UI checkbox in that mode)
       handoff_enabled: mode === 'intake_only' ? true : formData.get('handoffEnabled') === 'on',
+      // 0027: checkboxes exist only on voice forms; the marker guards against
+      // a stale form wiping the selection (see createAgent)
+      ...(kind === 'voice' && formData.get('intakeFieldsRendered') != null
+        ? { intake_fields: sanitizeIntakeFields(formData.getAll('intakeFields')) }
+        : {}),
     })
     .eq('org_id', org)
     .eq('id', agentId)

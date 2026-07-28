@@ -2,8 +2,11 @@
 //   email  → GET /contacts/{email}?idProperty=email (200 use / 404 create / 409 re-GET)
 //   phone  → search phone EQ, retry with stripCountryCode(), else create
 //   neither → error (a HubSpot ticket needs a contact association)
-// contactProperties maps email, firstname/lastname (name split), phone — NO
-// company (v2 contacts have no company field).
+// contactProperties maps email, firstname/lastname (name split), phone and
+// company (standard HubSpot contact property, 0027 — same mapping as the
+// legacy bridge). Properties are sent on CREATE; a matched existing HubSpot
+// contact gets exactly ONE gap-only patch: an empty company is filled from
+// Zendori, an existing HubSpot company is never overwritten (CRM data wins).
 import { isSuccess, parseJson, request, requestFailed, type HubSpotResponse } from './client.js';
 import {
   objectResponseSchema,
@@ -50,11 +53,36 @@ function contactProperties(
   if (firstname) props.firstname = firstname;
   if (lastname) props.lastname = lastname;
   if (resolved.phone) props.phone = resolved.phone;
+  const company = trimOrNull(contact.company);
+  if (company) props.company = company;
   return props;
 }
 
 function idFrom(response: HubSpotResponse, method: string, path: string): string {
   return parseJson(objectResponseSchema, response, method, path).id;
+}
+
+function companyFrom(response: HubSpotResponse, method: string, path: string): string | null {
+  const properties = parseJson(objectResponseSchema, response, method, path).properties;
+  const company = properties?.company;
+  return typeof company === 'string' && company.trim().length > 0 ? company : null;
+}
+
+/**
+ * Gap-only company fill on a MATCHED contact (0027): only when Zendori knows a
+ * company and the HubSpot contact has none. Best-effort — a failed patch never
+ * fails the sync (the ticket association is the critical part).
+ */
+async function patchCompanyGap(
+  config: HubSpotConfig,
+  contactId: string,
+  contact: ContactInput,
+  existingCompany: string | null
+): Promise<void> {
+  const company = trimOrNull(contact.company);
+  if (!company || existingCompany) return;
+  const path = `${CONTACTS_PATH}/${encodeURIComponent(contactId)}`;
+  await request(config, 'PATCH', path, { properties: { company } });
 }
 
 /** Upsert a HubSpot contact, matching on email first, else phone. */
@@ -75,9 +103,13 @@ async function upsertByEmail(
   email: string,
   phone?: string
 ): Promise<ContactRef> {
-  const getPath = `${CONTACTS_PATH}/${encodeURIComponent(email)}?idProperty=email`;
+  const getPath = `${CONTACTS_PATH}/${encodeURIComponent(email)}?idProperty=email&properties=company`;
   const getRes = await request(config, 'GET', getPath);
-  if (isSuccess(getRes.status)) return { id: idFrom(getRes, 'GET', getPath) };
+  if (isSuccess(getRes.status)) {
+    const id = idFrom(getRes, 'GET', getPath);
+    await patchCompanyGap(config, id, contact, companyFrom(getRes, 'GET', getPath));
+    return { id };
+  }
   if (getRes.status !== 404) throw requestFailed('GET', getPath, getRes);
 
   const createRes = await request(config, 'POST', CONTACTS_PATH, {
@@ -87,7 +119,11 @@ async function upsertByEmail(
   if (createRes.status === 409) {
     // Concurrent create: the contact now exists — re-GET by email.
     const reGet = await request(config, 'GET', getPath);
-    if (isSuccess(reGet.status)) return { id: idFrom(reGet, 'GET', getPath) };
+    if (isSuccess(reGet.status)) {
+      const id = idFrom(reGet, 'GET', getPath);
+      await patchCompanyGap(config, id, contact, companyFrom(reGet, 'GET', getPath));
+      return { id };
+    }
     throw requestFailed('GET', getPath, reGet);
   }
   throw requestFailed('POST', CONTACTS_PATH, createRes);
@@ -103,7 +139,10 @@ async function upsertByPhone(
     const stripped = stripCountryCode(phone);
     if (stripped !== phone) found = await searchContactByPhone(config, stripped);
   }
-  if (found) return { id: found };
+  if (found) {
+    await patchCompanyGap(config, found.id, contact, found.company);
+    return { id: found.id };
+  }
 
   const createRes = await request(config, 'POST', CONTACTS_PATH, {
     properties: contactProperties(contact, { phone }),
@@ -112,13 +151,22 @@ async function upsertByPhone(
   throw requestFailed('POST', CONTACTS_PATH, createRes);
 }
 
-async function searchContactByPhone(config: HubSpotConfig, phone: string): Promise<string | null> {
+async function searchContactByPhone(
+  config: HubSpotConfig,
+  phone: string
+): Promise<{ id: string; company: string | null } | null> {
   const res = await request(config, 'POST', CONTACTS_SEARCH_PATH, {
     filterGroups: [{ filters: [{ propertyName: 'phone', operator: 'EQ', value: phone }] }],
-    properties: ['phone'],
+    properties: ['phone', 'company'],
     limit: 1,
   });
   if (!isSuccess(res.status)) throw requestFailed('POST', CONTACTS_SEARCH_PATH, res);
   const parsed = parseJson(searchResponseSchema, res, 'POST', CONTACTS_SEARCH_PATH);
-  return parsed.results[0]?.id ?? null;
+  const first = parsed.results[0];
+  if (!first) return null;
+  const company = first.properties?.company;
+  return {
+    id: first.id,
+    company: typeof company === 'string' && company.trim().length > 0 ? company : null,
+  };
 }

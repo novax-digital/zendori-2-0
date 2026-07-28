@@ -41,7 +41,7 @@ describe('ClassificationResultSchema', () => {
 
 describe('ExtractionResultSchema', () => {
   const valid = {
-    contact: { name: 'Kai Beispiel', email: 'kai@example.com', phone: null },
+    contact: { name: 'Kai Beispiel', email: 'kai@example.com', phone: null, company: null },
     subject: 'Frage zur Rechnung',
     description: 'Ich habe eine Frage zu meiner letzten Rechnung.',
     category: 'Frage',

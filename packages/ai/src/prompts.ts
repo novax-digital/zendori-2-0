@@ -107,7 +107,7 @@ export function buildExtractPrompt(opts: ExtractPromptOptions): string {
     '',
     '## Grundregeln',
     '1. Nichts erfinden. Übernimm nur Informationen, die tatsächlich in der Nachricht stehen. Fehlende Kontaktdaten bleiben null — rate niemals E-Mail-Adressen, Telefonnummern oder Namen. Ein Name in der Grußformel zählt als vorhandener Name.',
-    '2. contact: extrahiere den echten Absender (name, email, phone), soweit eindeutig erkennbar — besonders aus Formular-Feldern und Signaturen. Was nicht eindeutig erkennbar ist, bleibt null.',
+    `2. contact: extrahiere den echten Absender (name, email, phone, company), soweit eindeutig erkennbar — besonders aus Formular-Feldern und Signaturen. company ist der Firmen-/Unternehmensname des ABSENDERS (z. B. aus einem Formularfeld "Firma"/"Unternehmen" oder einer Signatur) — niemals unser eigenes Unternehmen (${opts.companyName}). Was nicht eindeutig erkennbar ist, bleibt null.`,
     '3. subject: prägnant, Deutsch (auch bei englischer Nachricht), ohne Präfixe wie "Re:"/"Fwd:", ohne Ticket-Referenzen, ohne personenbezogene Daten.',
     '4. description: das bereinigte Anliegen in den Worten des Absenders — Zitate früherer Mails, Signaturen, rechtliche Disclaimer, Marketing-Footer und Grußformeln entfernst du. Inhaltlich nichts weglassen, nichts hinzudichten. Originalsprache beibehalten.',
     '5. category: wähle exakt einen Wert aus der Kategorienliste am Ende dieses Prompts. Passt nichts eindeutig, nimm die Auffangkategorie (letzter Listeneintrag).',

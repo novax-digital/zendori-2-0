@@ -30,7 +30,7 @@ describe('upsertContact by email', () => {
     expect(requests[0]?.url).toContain('idProperty=email');
   });
 
-  it('creates the contact on GET 404, mapping name → firstname/lastname (no company)', async () => {
+  it('creates the contact on GET 404, mapping name → firstname/lastname', async () => {
     const { fetchImpl, requests } = createMockFetch([
       { status: 404, body: { message: 'not found' } },
       { status: 201, body: { id: 'c-new' } },
@@ -49,7 +49,52 @@ describe('upsertContact by email', () => {
       lastname: 'von Beispiel',
       phone: '+49301112222',
     });
+    // no company provided → the property is omitted, never sent empty
     expect(createBody.properties).not.toHaveProperty('company');
+  });
+
+  it('maps company to the standard HubSpot company property on create (0027)', async () => {
+    const { fetchImpl, requests } = createMockFetch([
+      { status: 404, body: { message: 'not found' } },
+      { status: 201, body: { id: 'c-new' } },
+    ]);
+    await upsertContact(mockConfig(fetchImpl), {
+      email: 'a@b.de',
+      name: 'Anna Beispiel',
+      company: '  Beispiel GmbH  ',
+    });
+    const createBody = requests[1]?.body as { properties: Record<string, unknown> };
+    expect(createBody.properties.company).toBe('Beispiel GmbH');
+  });
+
+  it('gap-fills an empty company on a matched contact via PATCH (never the name/phone)', async () => {
+    const { fetchImpl, requests } = createMockFetch([
+      { status: 200, body: { id: 'c-existing', properties: {} } },
+      { status: 200, body: { id: 'c-existing' } },
+    ]);
+    const ref = await upsertContact(mockConfig(fetchImpl), {
+      email: 'a@b.de',
+      name: 'Anna Beispiel',
+      company: 'Beispiel GmbH',
+    });
+    expect(ref).toEqual({ id: 'c-existing' });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.method).toBe('PATCH');
+    expect(requests[1]?.url).toContain('/crm/v3/objects/contacts/c-existing');
+    expect(requests[1]?.body).toEqual({ properties: { company: 'Beispiel GmbH' } });
+  });
+
+  it('never overwrites an existing HubSpot company on match (CRM data wins)', async () => {
+    const { fetchImpl, requests } = createMockFetch([
+      { status: 200, body: { id: 'c-existing', properties: { company: 'Bestand AG' } } },
+    ]);
+    const ref = await upsertContact(mockConfig(fetchImpl), {
+      email: 'a@b.de',
+      company: 'Beispiel GmbH',
+    });
+    expect(ref).toEqual({ id: 'c-existing' });
+    // match GET only — no PATCH
+    expect(requests).toHaveLength(1);
   });
 
   it('re-GETs on a 409 create conflict', async () => {

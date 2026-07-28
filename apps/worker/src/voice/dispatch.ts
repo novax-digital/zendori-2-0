@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Logger, SupabaseClient } from '@zendori/core';
-import { loadWorkerEnv } from '@zendori/core';
+import { loadWorkerEnv, sanitizeIntakeFields } from '@zendori/core';
 import {
   businessHoursSchema,
   voiceChannelConfigSchema,
@@ -210,16 +210,25 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       identity: null,
       knowledgeBaseIds: null,
       handoffEnabled: true,
+      intakeFields: ['name', 'phone'],
     };
     let allowTransfer = false;
     if (agentId) {
-      // Column-skew chain: handoff_enabled is 0018, kind is 0015 — degrade
-      // select-by-select while migrations are pending.
+      // Column-skew chain: intake_fields is 0027, handoff_enabled is 0018,
+      // kind is 0015 — degrade select-by-select while migrations are pending.
       let agentRes = await supabase
         .from('agents')
-        .select('identity, mode, is_active, kind, handoff_enabled')
+        .select('identity, mode, is_active, kind, handoff_enabled, intake_fields')
         .eq('id', agentId)
         .maybeSingle();
+      if (isUndefinedColumn(agentRes.error)) {
+        logger.warn({ voiceCallId }, 'agents.intake_fields missing — is migration 0027 applied?');
+        agentRes = (await supabase
+          .from('agents')
+          .select('identity, mode, is_active, kind, handoff_enabled')
+          .eq('id', agentId)
+          .maybeSingle()) as typeof agentRes;
+      }
       if (isUndefinedColumn(agentRes.error)) {
         logger.warn({ voiceCallId }, 'agents.handoff_enabled missing — is migration 0018 applied?');
         agentRes = (await supabase
@@ -255,6 +264,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         is_active: boolean;
         kind?: string;
         handoff_enabled?: boolean;
+        intake_fields?: unknown;
       } | null;
       if (row && row.kind === 'text') {
         // A text agent on a voice channel (pre-0015 data — the DB guard blocks
@@ -289,6 +299,8 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
           knowledgeBaseIds,
           // pre-0018 rows: default ON = today's behavior
           handoffEnabled: row.handoff_enabled !== false,
+          // pre-0027 rows fall back to name+phone inside the sanitizer
+          intakeFields: sanitizeIntakeFields(row.intake_fields),
         };
         // A real, active, owner-configured agent answered — live transfer allowed.
         allowTransfer = true;

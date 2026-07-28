@@ -104,7 +104,7 @@ export default function ContextSidebar({
         {contact ? (
           // keyed so server-side contact updates re-sync the uncontrolled inputs
           <form
-            key={`${contact.id}-${contact.name ?? ''}-${contact.phone ?? ''}`}
+            key={`${contact.id}-${contact.name ?? ''}-${contact.phone ?? ''}-${contact.company ?? ''}`}
             action={updateContact}
             className="inbox-contact-form"
           >
@@ -113,6 +113,15 @@ export default function ContextSidebar({
             <label>
               Name
               <input type="text" name="name" defaultValue={contact.name ?? ''} maxLength={200} />
+            </label>
+            <label>
+              Unternehmen
+              <input
+                type="text"
+                name="company"
+                defaultValue={contact.company ?? ''}
+                maxLength={200}
+              />
             </label>
             <div className="inbox-contact-static">
               <span>E-Mail</span>

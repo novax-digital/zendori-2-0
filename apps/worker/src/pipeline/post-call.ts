@@ -1,7 +1,7 @@
 import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
 import { createLogger, loadWorkerEnv, voiceMinutesCostUsd } from '@zendori/core';
-import { getServiceClient, toErrorInfo } from '../db.js';
+import { getServiceClient, isMissingColumnError, toErrorInfo } from '../db.js';
 import { maybeRequestHubspotSync } from './process-message.js';
 import { recordUsage } from './usage.js';
 import {
@@ -327,24 +327,55 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
 
     // Fill contact gaps from the extraction (never overwrite existing values).
     if (conv?.contact_id) {
-      const { data: contactRow } = await supabase
+      let contactRes = await supabase
         .from('contacts')
-        .select('name, email')
+        .select('name, email, company')
         .eq('org_id', call.org_id)
         .eq('id', conv.contact_id)
         .maybeSingle();
-      const contact = contactRow as { name: string | null; email: string | null } | null;
-      const patch: Record<string, string> = {};
-      if (extraction.contact.name && !contact?.name) patch.name = extraction.contact.name;
-      if (extraction.contact.email && !contact?.email) {
-        patch.email = extraction.contact.email.toLowerCase();
-      }
-      if (Object.keys(patch).length > 0) {
-        await supabase
+      const companyColumnMissing = isMissingColumnError(contactRes.error);
+      if (companyColumnMissing) {
+        // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+        contactRes = (await supabase
           .from('contacts')
-          .update(patch)
+          .select('name, email')
           .eq('org_id', call.org_id)
-          .eq('id', conv.contact_id);
+          .eq('id', conv.contact_id)
+          .maybeSingle()) as typeof contactRes;
+      }
+      const contact = contactRes.data as {
+        name: string | null;
+        email: string | null;
+        company?: string | null;
+      } | null;
+      // Gap-only semantics need the current values: never patch off a failed read.
+      if (!contactRes.error && contact) {
+        const patch: Record<string, string> = {};
+        if (extraction.contact.name && !contact.name) patch.name = extraction.contact.name;
+        if (extraction.contact.email && !contact.email) {
+          patch.email = extraction.contact.email.toLowerCase();
+        }
+        if (extraction.contact.company && !companyColumnMissing && !contact.company) {
+          patch.company = extraction.contact.company;
+        }
+        if (Object.keys(patch).length > 0) {
+          const { error: patchError } = await supabase
+            .from('contacts')
+            .update(patch)
+            .eq('org_id', call.org_id)
+            .eq('id', conv.contact_id);
+          if (patchError && isMissingColumnError(patchError) && patch.company) {
+            // Pre-0027 skew: drop company so name/email still land.
+            delete patch.company;
+            if (Object.keys(patch).length > 0) {
+              await supabase
+                .from('contacts')
+                .update(patch)
+                .eq('org_id', call.org_id)
+                .eq('id', conv.contact_id);
+            }
+          }
+        }
       }
     }
   } catch (err) {

@@ -42,6 +42,9 @@ vi.mock('@zendori/core', async (importOriginal) => {
 vi.mock('../src/db.js', () => ({
   getServiceClient: () => dbHolder.client,
   toErrorInfo: (e: unknown) => ({ name: 'e', message: String(e) }),
+  isMissingColumnError: (e: unknown) =>
+    (e as { code?: string } | null)?.code === '42703' ||
+    (e as { code?: string } | null)?.code === 'PGRST204',
 }));
 
 const { processPostCall, markPostCallTerminal } = await import('../src/pipeline/post-call.js');
@@ -156,7 +159,7 @@ function classificationResult(over: Record<string, unknown> = {}) {
 function extractionResult(over: Record<string, unknown> = {}) {
   return {
     result: {
-      contact: { name: 'Kai Beispiel', email: 'kai@example.com', phone: null },
+      contact: { name: 'Kai Beispiel', email: 'kai@example.com', phone: null, company: 'Beispiel GmbH' },
       subject: 'Frage zum Lieferstatus',
       description: 'Kunde fragt nach dem Status der Bestellung.',
       category: 'Frage',
@@ -202,7 +205,7 @@ describe('processPostCall', () => {
         voice_calls: CALL_ROW,
         organizations: { name: 'Testfirma' },
         conversations: { subject: 'Anruf von +4930…', contact_id: 'contact-1' },
-        contacts: { name: null, email: null },
+        contacts: { name: null, email: null, company: null },
       },
       lists: { messages: TURNS },
     });
@@ -213,9 +216,13 @@ describe('processPostCall', () => {
     const convUpdate = fake.updates.find((u) => u.table === 'conversations');
     expect(convUpdate?.patch.priority).toBe('urgent');
     expect(convUpdate?.patch.subject).toBe('Frage zum Lieferstatus');
-    // contact gaps filled from the extraction (email lowercased)
+    // contact gaps filled from the extraction (email lowercased, company 0027)
     const contactUpdate = fake.updates.find((u) => u.table === 'contacts');
-    expect(contactUpdate?.patch).toEqual({ name: 'Kai Beispiel', email: 'kai@example.com' });
+    expect(contactUpdate?.patch).toEqual({
+      name: 'Kai Beispiel',
+      email: 'kai@example.com',
+      company: 'Beispiel GmbH',
+    });
     // both AI steps logged
     expect(fake.inserts.filter((i) => i.table === 'ai_runs')).toHaveLength(2);
     // success stamp
@@ -232,7 +239,7 @@ describe('processPostCall', () => {
         voice_calls: CALL_ROW,
         organizations: { name: 'Testfirma' },
         conversations: { subject: 'Defekte Wallbox', contact_id: 'contact-1' },
-        contacts: { name: 'Kai', email: 'kai@example.com' },
+        contacts: { name: 'Kai', email: 'kai@example.com', company: 'Beispiel GmbH' },
       },
       lists: { messages: TURNS },
     });

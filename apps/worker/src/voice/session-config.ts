@@ -1,4 +1,5 @@
 import type { VoiceChannelConfig } from '@zendori/channels';
+import type { IntakeField } from '@zendori/core';
 import type { FunctionTool, SessionConfig } from './xai-realtime.js';
 
 // Builds the per-call session.update config from the org's voice channel config
@@ -20,7 +21,7 @@ Arbeitsweise:
 - Wenn der Anrufer ausdrücklich einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
 - Bei den Themen {keywords} rufe handoff_human mit reason="keyword" auf.
 {lowConfidenceRule}
-- Nimm bei Bedarf ein Anliegen strukturiert auf: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
+- Nimm bei Bedarf ein Anliegen strukturiert auf: {intakeStep}fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
 - Wenn das Gespräch erledigt ist: bestätige zuerst vollständig und freundlich, was du getan hast, und rufe DANN end_call auf. Die Verabschiedung („Auf Wiederhören") spricht das System danach automatisch — verabschiede dich nicht selbst, sonst hört der Anrufer sie doppelt. Beende niemals mitten im Satz.`;
 
 /**
@@ -37,12 +38,37 @@ const LOW_CONFIDENCE_HANDOFF_OFF =
 /** Default escalation topics when the org has not configured its own list. */
 const DEFAULT_ESCALATION_TOPICS = ['Kündigung', 'Beschwerde', 'Anwalt', 'Datenschutz'];
 
+// --- configurable intake fields (0027) ---------------------------------------
+// agents.intake_fields decides which contact data the agent actively asks the
+// caller for before create_ticket. The tool keeps ALL optional parameters
+// regardless (volunteered data is still captured) — the prompt controls only
+// what is actively asked.
+
+const INTAKE_FIELD_PHRASES: Record<IntakeField, string> = {
+  name: 'Name',
+  phone: 'Rückrufnummer (falls abweichend von der Anrufnummer)',
+  email: 'E-Mail-Adresse',
+  company: 'Name des Unternehmens beziehungsweise der Firma',
+};
+
+/**
+ * Spoken-German enumeration of the configured intake fields ("Name,
+ * E-Mail-Adresse und …"). Empty selection → empty string (callers of this
+ * helper phrase their sentence without an "erfrage" part then).
+ */
+export function intakeFieldsPhrase(fields: IntakeField[]): string {
+  const phrases = fields.map((f) => INTAKE_FIELD_PHRASES[f]);
+  if (phrases.length === 0) return '';
+  if (phrases.length === 1) return phrases[0]!;
+  return `${phrases.slice(0, -1).join(', ')} und ${phrases[phrases.length - 1]!}`;
+}
+
 const INTAKE_TEMPLATE = `Du bist der telefonische Annahme-Assistent von {company}. Deine einzige Aufgabe ist es, Anliegen aufzunehmen — du beantwortest KEINE inhaltlichen Fragen.
 Sprich natürlich, kurz und klar (Höflichkeitsform). Du telefonierst — halte dich kurz, keine Aufzählungen.
 
 Ablauf:
 1. Begrüße den Anrufer und erkläre, dass du sein Anliegen aufnimmst und sich jemand zurückmeldet.
-2. Erfrage nacheinander: Name, Rückrufnummer (falls abweichend von der Anrufnummer), und das Anliegen.
+2. {intakeQuestions}
 3. Fasse alles in ein bis zwei Sätzen zusammen und lass es dir bestätigen.
 4. Rufe create_ticket mit den erfassten Daten auf.
 5. Bestätige die Aufnahme mit einem vollständigen, freundlichen Satz („Ihr Anliegen ist aufgenommen — wir melden uns schnellstmöglich zurück.") und rufe DANN end_call auf. Die Verabschiedung spricht das System danach automatisch — verabschiede dich nicht selbst. Beende niemals mitten im Satz.
@@ -103,7 +129,7 @@ const CREATE_TICKET_TOOL: FunctionTool = {
   type: 'function',
   name: 'create_ticket',
   description:
-    'Nimmt das Anliegen des Anrufers als Ticket auf. Vorher Name und Anliegen erfragen und zusammenfassen.',
+    'Nimmt das Anliegen des Anrufers als Ticket auf. Vorher die benötigten Angaben und das Anliegen erfragen und zusammenfassen.',
   parameters: {
     type: 'object',
     properties: {
@@ -112,6 +138,7 @@ const CREATE_TICKET_TOOL: FunctionTool = {
       name: { type: 'string', description: 'Name des Anrufers, falls genannt.' },
       callback_number: { type: 'string', description: 'Rückrufnummer, falls abweichend.' },
       email: { type: 'string', description: 'E-Mail-Adresse, falls genannt.' },
+      company: { type: 'string', description: 'Unternehmen/Firma des Anrufers, falls genannt.' },
     },
     required: ['subject', 'description'],
   },
@@ -171,6 +198,8 @@ export interface VoiceAgentBehavior {
   knowledgeBaseIds: string[] | null;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /** 0027: contact fields actively asked before create_ticket (canonical order). */
+  intakeFields: IntakeField[];
 }
 
 /** Builds the session.update payload from channel config + assigned agent. */
@@ -187,13 +216,22 @@ export function buildSessionConfig(
     .slice(0, 30);
   const keywordList = (keywords.length > 0 ? keywords : DEFAULT_ESCALATION_TOPICS).join(', ');
 
+  // 0027: inject the configured intake fields into the data-collection step.
+  const fieldsPhrase = intakeFieldsPhrase(agent.intakeFields);
   const template =
     agent.mode === 'intake_only'
-      ? INTAKE_TEMPLATE
-      : ANSWER_TEMPLATE.replace('{keywords}', keywordList).replace(
-          '{lowConfidenceRule}',
-          agent.handoffEnabled ? LOW_CONFIDENCE_HANDOFF_ON : LOW_CONFIDENCE_HANDOFF_OFF
-        );
+      ? INTAKE_TEMPLATE.replace(
+          '{intakeQuestions}',
+          fieldsPhrase
+            ? `Erfrage nacheinander: ${fieldsPhrase} — und dann das Anliegen.`
+            : 'Erfrage das Anliegen.'
+        )
+      : ANSWER_TEMPLATE.replace('{keywords}', keywordList)
+          .replace(
+            '{lowConfidenceRule}',
+            agent.handoffEnabled ? LOW_CONFIDENCE_HANDOFF_ON : LOW_CONFIDENCE_HANDOFF_OFF
+          )
+          .replace('{intakeStep}', fieldsPhrase ? `erfrage ${fieldsPhrase}, ` : '');
   const parts = [
     template.replaceAll('{company}', context.companyName),
     languageRules(config.languageHint),

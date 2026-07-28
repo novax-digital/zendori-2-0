@@ -101,7 +101,8 @@ export async function findTicketByRef(
   const path = `${TICKETS_PATH}/${encodeURIComponent(ref)}?idProperty=zendori_ref`;
   const res = await request(config, 'GET', path);
   if (isSuccess(res.status)) {
-    return { id: parseJson(objectResponseSchema, res, 'GET', path).id };
+    const parsed = parseJson(objectResponseSchema, res, 'GET', path);
+    return { id: parsed.id, ...(parsed.createdAt ? { createdAt: parsed.createdAt } : {}) };
   }
   if (res.status === 404) return null;
   if (res.status === 400) return searchTicketByRef(config, ref);
@@ -117,5 +118,6 @@ async function searchTicketByRef(config: HubSpotConfig, ref: string): Promise<Ti
   if (!isSuccess(res.status)) throw requestFailed('POST', TICKETS_SEARCH_PATH, res);
   const parsed = parseJson(searchResponseSchema, res, 'POST', TICKETS_SEARCH_PATH);
   const first = parsed.results[0];
-  return first ? { id: first.id } : null;
+  if (!first) return null;
+  return { id: first.id, ...(first.createdAt ? { createdAt: first.createdAt } : {}) };
 }

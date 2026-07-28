@@ -32,11 +32,12 @@ export const PRIORITY_MAP: Record<TicketPriority, HubSpotPriority> = {
 
 // --- input types -------------------------------------------------------------
 
-/** v2 contacts have no company field (§2.7). */
 export interface ContactInput {
   name?: string | null;
   email?: string | null;
   phone?: string | null;
+  /** Mapped to the standard HubSpot contact property `company` (§2.7, 0027). */
+  company?: string | null;
 }
 
 export interface TicketDraft {
@@ -66,6 +67,8 @@ export interface ContactRef {
 
 export interface TicketRef {
   id: string;
+  /** HubSpot object creation time — note-watermark fallback for tickets whose watermark was never persisted. */
+  createdAt?: string;
 }
 
 export interface TicketPipeline {
@@ -86,6 +89,7 @@ export const objectResponseSchema = z
   .object({
     id: z.string(),
     properties: z.record(z.string(), z.unknown()).optional(),
+    createdAt: z.string().optional(),
   })
   .passthrough();
 export type ObjectResponse = z.infer<typeof objectResponseSchema>;

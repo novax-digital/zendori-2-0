@@ -1,5 +1,6 @@
 // Shared pieces of the two-level agents UI (list + detail, owner 2026-07-24).
-import type { AgentKind, AgentMode, ChannelType } from '@zendori/core';
+import { sanitizeIntakeFields } from '@zendori/core';
+import type { AgentKind, AgentMode, ChannelType, IntakeField } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 
@@ -12,6 +13,8 @@ export type AgentRow = {
   confidence_threshold: number;
   is_active: boolean;
   handoff_enabled: boolean;
+  /** 0027: fields a voice agent asks the caller for during ticket intake. */
+  intake_fields: IntakeField[];
 };
 
 export const MODE_LABELS: Record<AgentMode, string> = {
@@ -29,12 +32,25 @@ export const channelTypeLabels: Record<ChannelType, string> = {
 
 export async function listAgents(orgId: string): Promise<AgentRow[]> {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase
+  let res = await supabase
     .from('agents')
-    .select('id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled')
+    .select(
+      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields'
+    )
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
-  return (data ?? []) as unknown as AgentRow[];
+  if (res.error && (res.error as { code?: string }).code === '42703') {
+    // agents.intake_fields not migrated yet (web ahead of 0027) — retry without.
+    res = (await supabase
+      .from('agents')
+      .select('id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled')
+      .eq('org_id', orgId)
+      .order('created_at', { ascending: true })) as typeof res;
+  }
+  const rows = (res.data ?? []) as unknown as (Omit<AgentRow, 'intake_fields'> & {
+    intake_fields?: unknown;
+  })[];
+  return rows.map((row) => ({ ...row, intake_fields: sanitizeIntakeFields(row.intake_fields) }));
 }
 
 export async function loadKbs(orgId: string): Promise<{ id: string; name: string }[]> {
@@ -115,6 +131,7 @@ export function AgentFields({
         defaultMode={agent?.mode}
         defaultThreshold={agent?.confidence_threshold}
         defaultHandoffEnabled={agent?.handoff_enabled}
+        defaultIntakeFields={agent?.intake_fields}
         disabled={disabled}
       />
     </>

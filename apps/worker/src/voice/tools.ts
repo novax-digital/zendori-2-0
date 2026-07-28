@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { retrieveRelevantChunks, EMBEDDING_MODEL } from '@zendori/ai';
-import { isKbImageFilename, type SupabaseClient } from '@zendori/core';
+import { isKbImageFilename, type IntakeField, type SupabaseClient } from '@zendori/core';
 import {
   hasConfiguredHours,
   isWithinBusinessHours,
   type BusinessHours,
   type VoiceChannelConfig,
 } from '@zendori/channels';
+import { isMissingColumnError } from '../db.js';
+import { intakeFieldsPhrase } from './session-config.js';
 
 // Voice function-tool handlers. All run in the worker with the org_id bound
 // from the voice_calls row (server truth — never from the model), so RLS-scoped
@@ -26,6 +28,8 @@ export interface ToolContext {
   knowledgeBaseIds: string[] | null;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /** 0027: contact fields the agent asks for during ticket intake. */
+  intakeFields: IntakeField[];
   /**
    * Org business hours (defensively parsed) — the live-transfer gate is
    * evaluated HERE at tool-call time, not at call start, so the mid-call
@@ -137,7 +141,21 @@ const createTicketArgsSchema = z.object({
   name: z.string().max(200).optional(),
   callback_number: z.string().max(50).optional(),
   email: z.string().max(200).optional(),
+  company: z.string().max(200).optional(),
 });
+
+/**
+ * The spoken instruction fragment for a callback-ticket flow ("erfrage Name
+ * und Rückrufnummer, fasse das Anliegen zusammen") — built from the agent's
+ * configured intake fields (0027) so callback flows ask the same data as the
+ * regular intake.
+ */
+export function callbackIntakeStep(fields: IntakeField[]): string {
+  const phrase = intakeFieldsPhrase(fields);
+  return phrase
+    ? `erfrage ${phrase}, fasse das Anliegen zusammen`
+    : 'fasse das Anliegen zusammen';
+}
 
 /**
  * Model-transcribed from speech: only a syntactically valid address may ever
@@ -178,19 +196,54 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     .eq('id', ctx.conversationId)
     .maybeSingle();
   const contactId = (convRow as { contact_id: string | null } | null)?.contact_id;
-  if (contactId && (args.name || email)) {
-    const { data: contactRow } = await ctx.supabase
+  const company = args.company?.trim();
+  if (contactId && (args.name || email || company)) {
+    let contactRes = await ctx.supabase
       .from('contacts')
-      .select('name, email')
+      .select('name, email, company')
       .eq('org_id', ctx.orgId)
       .eq('id', contactId)
       .maybeSingle();
-    const contact = contactRow as { name: string | null; email: string | null } | null;
-    const patch: Record<string, string> = {};
-    if (args.name && !contact?.name) patch.name = args.name;
-    if (email && !contact?.email) patch.email = email;
-    if (Object.keys(patch).length > 0) {
-      await ctx.supabase.from('contacts').update(patch).eq('org_id', ctx.orgId).eq('id', contactId);
+    const companyColumnMissing = isMissingColumnError(contactRes.error);
+    if (companyColumnMissing) {
+      // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+      contactRes = (await ctx.supabase
+        .from('contacts')
+        .select('name, email')
+        .eq('org_id', ctx.orgId)
+        .eq('id', contactId)
+        .maybeSingle()) as typeof contactRes;
+    }
+    const contact = contactRes.data as {
+      name: string | null;
+      email: string | null;
+      company?: string | null;
+    } | null;
+    // Gap-only semantics need the current values: a failed read must never be
+    // treated as an empty contact (that would overwrite existing data).
+    if (!contactRes.error && contact) {
+      const patch: Record<string, string> = {};
+      if (args.name && !contact.name) patch.name = args.name;
+      if (email && !contact.email) patch.email = email;
+      if (company && !companyColumnMissing && !contact.company) patch.company = company;
+      if (Object.keys(patch).length > 0) {
+        const { error: patchError } = await ctx.supabase
+          .from('contacts')
+          .update(patch)
+          .eq('org_id', ctx.orgId)
+          .eq('id', contactId);
+        if (patchError && isMissingColumnError(patchError) && patch.company) {
+          // Pre-0027 skew: drop company so name/email still land.
+          delete patch.company;
+          if (Object.keys(patch).length > 0) {
+            await ctx.supabase
+              .from('contacts')
+              .update(patch)
+              .eq('org_id', ctx.orgId)
+              .eq('id', contactId);
+          }
+        }
+      }
     }
   }
 
@@ -198,6 +251,7 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     `Ticket aufgenommen: ${args.subject}`,
     args.description,
     ...(args.name ? [`Name: ${args.name}`] : []),
+    ...(company ? [`Unternehmen: ${company}`] : []),
     ...(args.callback_number ? [`Rückruf: ${args.callback_number}`] : []),
     ...(email ? [`E-Mail: ${email}`] : []),
   ];
@@ -365,11 +419,12 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
   const hoursConfigured = hasConfiguredHours(ctx.businessHours);
   const outsideHours =
     hoursConfigured && !isWithinBusinessHours(new Date(), ctx.businessHours!);
+  const intakeStep = callbackIntakeStep(ctx.intakeFields);
   return {
     ok: true,
     action: 'callback',
     instruction: outsideHours
-      ? 'Wir sind gerade außerhalb der Geschäftszeiten — kein Live-Transfer. Sage das ehrlich, biete einen Rückruf am nächsten Werktag an: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, rufe create_ticket auf und beende dann das Gespräch mit end_call.'
-      : 'Kein Live-Transfer verfügbar. Biete dem Anrufer einen Rückruf an: erfrage Name und Rückrufnummer, fasse das Anliegen zusammen, rufe create_ticket auf und beende dann das Gespräch mit end_call.',
+      ? `Wir sind gerade außerhalb der Geschäftszeiten — kein Live-Transfer. Sage das ehrlich, biete einen Rückruf am nächsten Werktag an: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`
+      : `Kein Live-Transfer verfügbar. Biete dem Anrufer einen Rückruf an: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`,
   };
 }

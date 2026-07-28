@@ -28,7 +28,7 @@ import {
   type HubSpotConfig,
   type TicketDraft,
 } from '@zendori/integrations';
-import { getServiceClient } from '../db.js';
+import { getServiceClient, isMissingColumnError } from '../db.js';
 
 const logger = createLogger('worker.hubspot-sync');
 
@@ -65,6 +65,7 @@ interface LoadedContact {
   name: string | null;
   email: string | null;
   phone: string | null;
+  company: string | null;
 }
 
 interface LoadedInboundMessage {
@@ -73,6 +74,13 @@ interface LoadedInboundMessage {
   content_type: string;
   created_at: string;
   metadata: Record<string, unknown>;
+}
+
+/** One voice transcript turn (caller or assistant) for the ticket body/notes. */
+interface TranscriptTurn {
+  content: string;
+  created_at: string;
+  sender_type: string;
 }
 
 interface LoadedAttachment {
@@ -158,6 +166,7 @@ export async function syncConversation(conversationId: string): Promise<void> {
     name: contact.name,
     email: contact.email,
     phone: contact.phone,
+    company: contact.company,
   });
 
   // --- ticket: create (new) or update (existing) ------------------------------
@@ -171,20 +180,22 @@ export async function syncConversation(conversationId: string): Promise<void> {
 
   let ticketId: string;
   if (!existing) {
-    const firstMessage = await loadFirstInboundMessage(supabase, conversationId);
-    ticketId = await createTicketForConversation(
+    const created = await createTicketForConversation(
       supabase,
       hubspotConfig,
       conv,
       cfg,
       contactRef.id,
-      firstMessage,
       syncStartedAt
     );
+    ticketId = created.id;
     externalRefs.hubspot_ticket_id = ticketId;
-    // The first message went into the ticket body; seed the watermark to it so
-    // noteFollowups posts only the follow-ups (#2..N) that already exist.
-    externalRefs.hubspot_noted_through = firstMessage?.created_at ?? null;
+    // Everything in the ticket body is covered by the watermark, so
+    // noteFollowups posts only what arrived afterwards. Text channels: the
+    // first inbound message; voice: the complete transcript (owner request
+    // 2026-07-28 — the call IS the conversation, the first caller turn alone
+    // is useless in HubSpot).
+    externalRefs.hubspot_noted_through = created.notedThrough;
     await persistExternalRefs(supabase, conv, externalRefs);
   } else {
     ticketId = existing.id;
@@ -195,10 +206,13 @@ export async function syncConversation(conversationId: string): Promise<void> {
     }
   }
 
-  // Inbound customer messages after the watermark become notes (at-most-once:
-  // the watermark is advanced + persisted after each successful note, so a retry
-  // after a mid-batch failure resumes without re-posting earlier notes).
-  await noteFollowups(supabase, hubspotConfig, conv, ticketId, externalRefs);
+  // Inbound customer messages after the watermark become notes. The watermark
+  // is advanced + persisted after each successful note, so a retry after a
+  // mid-batch failure resumes from the last PERSISTED note (at-least-once: the
+  // one note whose persist failed can be re-posted). The ticket's createdAt is
+  // the last-resort boundary for tickets whose watermark was never persisted
+  // (crash between createTicket and persistExternalRefs).
+  await noteFollowups(supabase, hubspotConfig, conv, ticketId, externalRefs, existing?.createdAt ?? null);
 
   // --- persist external ref + synced stamp (scheduling) -----------------------
   await finishSync(supabase, conv, externalRefs, syncStartedAt);
@@ -223,23 +237,61 @@ export async function syncConversation(conversationId: string): Promise<void> {
 }
 
 /**
- * Post a note for every inbound customer message after the persisted watermark
- * (external_refs.hubspot_noted_through), advancing + persisting the watermark
- * after each successful note so a pg-boss retry never re-posts an already-noted
- * message. Falls back to the last sync stamp for tickets created before the
- * watermark existed.
+ * Post a note for every inbound customer message (voice: every transcript turn,
+ * both sides) after the persisted watermark (external_refs.hubspot_noted_through),
+ * advancing + persisting the watermark after each successful note. A pg-boss
+ * retry resumes from the last PERSISTED watermark — at-least-once, so the one
+ * note whose persist failed can be duplicated. Boundary fallbacks: the last
+ * sync stamp (legacy tickets), then the ticket's HubSpot createdAt (watermark
+ * never persisted because the first sync crashed right after createTicket).
  */
 async function noteFollowups(
   supabase: SupabaseClient,
   hubspotConfig: HubSpotConfig,
   conv: LoadedConversationRow,
   ticketId: string,
-  externalRefs: Record<string, unknown>
+  externalRefs: Record<string, unknown>,
+  ticketCreatedAt: string | null
 ): Promise<void> {
   const watermark = externalRefs.hubspot_noted_through;
   const boundary =
-    typeof watermark === 'string' && watermark.length > 0 ? watermark : conv.hubspot_synced_at;
+    (typeof watermark === 'string' && watermark.length > 0 ? watermark : null) ??
+    conv.hubspot_synced_at ??
+    ticketCreatedAt;
   if (!boundary) return; // no first message yet — nothing to note
+
+  if (conv.channel.type === 'voice') {
+    // Voice: notes carry BOTH sides (labeled) so a ticket synced mid-call still
+    // ends up with the complete transcript after the post-call sync. Pending
+    // turns are batched into ONE note per size cap (readable in HubSpot, fewer
+    // API calls); the watermark is persisted after each posted note, so a retry
+    // resumes at-least-once from the last persisted batch.
+    const turns = await loadTranscriptTurns(supabase, conv.id, boundary);
+    let batch: TranscriptTurn[] = [];
+    let batchLength = 0;
+    const flush = async () => {
+      if (batch.length === 0) return;
+      await attachNote(hubspotConfig, ticketId, {
+        body: batch.map(formatVoiceTurn).join('\n'),
+        sourceChannel: conv.channel.type,
+        occurredAt: batch[0]!.created_at,
+      });
+      externalRefs.hubspot_noted_through = batch[batch.length - 1]!.created_at;
+      await persistExternalRefs(supabase, conv, externalRefs);
+      batch = [];
+      batchLength = 0;
+    };
+    for (const turn of turns) {
+      const lineLength = formatVoiceTurn(turn).length + 1;
+      if (batch.length > 0 && batchLength + lineLength > VOICE_TRANSCRIPT_MAX_CHARS) {
+        await flush();
+      }
+      batch.push(turn);
+      batchLength += lineLength;
+    }
+    await flush();
+    return;
+  }
 
   const messages = await loadInboundSince(supabase, conv.id, boundary);
   for (const message of messages) {
@@ -278,19 +330,38 @@ async function createTicketForConversation(
   conv: LoadedConversationRow,
   cfg: z.infer<typeof hubspotIntegrationConfigSchema>,
   contactId: string,
-  firstMessage: LoadedInboundMessage | null,
   syncStartedAt: string
-): Promise<string> {
-  const attachments = firstMessage ? await loadAttachments(supabase, firstMessage.id) : [];
-  const body = firstMessage
-    ? cleanMessageBody(conv.channel.type, firstMessage.content, firstMessage.metadata)
-    : '(kein Text)';
-  const content = buildTicketContent({
-    body,
-    attachments,
-    channelName: conv.channel.name,
-    receivedAt: firstMessage?.created_at ?? syncStartedAt,
-  });
+): Promise<{ id: string; notedThrough: string | null }> {
+  let content: string;
+  let notedThrough: string | null;
+  if (conv.channel.type === 'voice') {
+    // Voice: the ticket body is the COMPLETE call transcript (caller +
+    // assistant turns) — see the watermark comment at the call site.
+    const turns = await loadTranscriptTurns(supabase, conv.id);
+    const transcript = buildVoiceTranscriptBody(turns);
+    content = buildTicketContent({
+      body: transcript.body,
+      attachments: [],
+      channelName: conv.channel.name,
+      receivedAt: turns[0]?.created_at ?? syncStartedAt,
+    });
+    // Watermark = last turn actually IN the body; turns cut by the size cap
+    // are delivered as notes by noteFollowups right after.
+    notedThrough = transcript.notedThrough;
+  } else {
+    const firstMessage = await loadFirstInboundMessage(supabase, conv.id);
+    const attachments = firstMessage ? await loadAttachments(supabase, firstMessage.id) : [];
+    const body = firstMessage
+      ? cleanMessageBody(conv.channel.type, firstMessage.content, firstMessage.metadata)
+      : '(kein Text)';
+    content = buildTicketContent({
+      body,
+      attachments,
+      channelName: conv.channel.name,
+      receivedAt: firstMessage?.created_at ?? syncStartedAt,
+    });
+    notedThrough = firstMessage?.created_at ?? null;
+  }
   // A conversation already resolved at first sync (e.g. rule=manual, agent
   // resolves then the closing sync creates the ticket) is created directly in
   // the resolved stage instead of the open default stage.
@@ -308,7 +379,52 @@ async function createTicketForConversation(
     ref: conv.id,
   };
   const created = await createTicket(hubspotConfig, draft, contactId);
-  return created.id;
+  return { id: created.id, notedThrough };
+}
+
+// HubSpot's note body cap is 65536; keep the ticket body safely below it too.
+const VOICE_TRANSCRIPT_MAX_CHARS = 60_000;
+
+/** "Anrufer:"/"Assistent:" lines — same labeling as the post-call AI transcript. */
+export function formatVoiceTurn(turn: TranscriptTurn): string {
+  return `${turn.sender_type === 'contact' ? 'Anrufer' : 'Assistent'}: ${turn.content}`;
+}
+
+/**
+ * The call transcript as the voice ticket body, assembled turn-by-turn so the
+ * size cap and the note watermark agree: `notedThrough` is the created_at of
+ * the last turn FULLY included — turns cut by the cap stay after the watermark
+ * and reach HubSpot as notes instead of being silently dropped.
+ */
+export function buildVoiceTranscriptBody(turns: TranscriptTurn[]): {
+  body: string;
+  notedThrough: string | null;
+} {
+  if (turns.length === 0) return { body: '(kein Transkript)', notedThrough: null };
+  const lines: string[] = [];
+  let length = 0;
+  let included = 0;
+  for (const turn of turns) {
+    const line = formatVoiceTurn(turn);
+    const extra = (lines.length > 0 ? 1 : 0) + line.length;
+    if (length + extra > VOICE_TRANSCRIPT_MAX_CHARS) break;
+    lines.push(line);
+    length += extra;
+    included += 1;
+  }
+  if (included === 0) {
+    // A single turn longer than the whole cap: include it sliced — the body
+    // must never regress to empty (the note cap would cut it anyway).
+    return {
+      body: formatVoiceTurn(turns[0]!).slice(0, VOICE_TRANSCRIPT_MAX_CHARS),
+      notedThrough: turns[0]!.created_at,
+    };
+  }
+  const truncated = included < turns.length;
+  return {
+    body: lines.join('\n') + (truncated ? '\n(Transkript gekürzt — Fortsetzung als Notiz)' : ''),
+    notedThrough: turns[included - 1]!.created_at,
+  };
 }
 
 /**
@@ -372,14 +488,44 @@ async function loadContact(
 ): Promise<LoadedContact | null> {
   // org-scoped like every write path: the worker bypasses RLS, so the tenant
   // filter is explicit rather than relying on referential integrity.
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('contacts')
-    .select('name, email, phone')
+    .select('name, email, phone, company')
     .eq('id', contactId)
     .eq('org_id', orgId)
     .maybeSingle();
+  if (error && isMissingColumnError(error)) {
+    // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    ({ data, error } = await supabase
+      .from('contacts')
+      .select('name, email, phone')
+      .eq('id', contactId)
+      .eq('org_id', orgId)
+      .maybeSingle());
+  }
   if (error) throw error;
-  return data ? (data as unknown as LoadedContact) : null;
+  return data ? ({ company: null, ...(data as object) } as LoadedContact) : null;
+}
+
+/**
+ * Voice transcript turns (caller + assistant) in chronological order — the
+ * source for the voice ticket body and the labeled follow-up notes. System
+ * messages ("Ticket aufgenommen", "Anruf beendet") stay internal.
+ */
+async function loadTranscriptTurns(
+  supabase: SupabaseClient,
+  conversationId: string,
+  sinceIso?: string
+): Promise<TranscriptTurn[]> {
+  let query = supabase
+    .from('messages')
+    .select('content, created_at, sender_type')
+    .eq('conversation_id', conversationId)
+    .or('and(direction.eq.in,sender_type.eq.contact),and(direction.eq.out,sender_type.eq.bot)');
+  if (sinceIso) query = query.gt('created_at', sinceIso);
+  const { data, error } = await query.order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as TranscriptTurn[];
 }
 
 async function loadFirstInboundMessage(

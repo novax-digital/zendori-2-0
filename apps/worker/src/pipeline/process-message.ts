@@ -45,7 +45,7 @@ import type {
   SyncRules,
 } from '@zendori/core';
 import { syncRulesSchema } from '@zendori/core';
-import { getServiceClient } from '../db.js';
+import { getServiceClient, isMissingColumnError } from '../db.js';
 import {
   decideDraftAction,
   deliverBotReply,
@@ -128,12 +128,14 @@ interface LoadedContact {
   name: string | null;
   email: string | null;
   phone: string | null;
+  company: string | null;
 }
 
 interface ExtractedContact {
   name: string | null;
   email: string | null;
   phone: string | null;
+  company: string | null;
 }
 
 interface DraftSourceEntry {
@@ -1332,16 +1334,30 @@ async function findOrCreateContactByEmail(
     return existing.id;
   }
 
-  const { data: created, error: insertError } = await supabase
+  let { data: created, error: insertError } = await supabase
     .from('contacts')
     .insert({
       org_id: orgId,
       email,
       name: extracted.name ?? null,
       phone: extracted.phone ?? null,
+      company: extracted.company ?? null,
     })
     .select('id')
     .single();
+  if (insertError && isMissingColumnError(insertError)) {
+    // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    ({ data: created, error: insertError } = await supabase
+      .from('contacts')
+      .insert({
+        org_id: orgId,
+        email,
+        name: extracted.name ?? null,
+        phone: extracted.phone ?? null,
+      })
+      .select('id')
+      .single());
+  }
   if (!insertError && created) {
     return (created as unknown as { id: string }).id;
   }
@@ -1361,16 +1377,27 @@ async function selectContactByEmail(
   orgId: string,
   email: string
 ): Promise<LoadedContact | null> {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('contacts')
-    .select('id, name, email, phone')
+    .select('id, name, email, phone, company')
     .eq('org_id', orgId)
     .eq('email', email)
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
+  if (error && isMissingColumnError(error)) {
+    // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    ({ data, error } = await supabase
+      .from('contacts')
+      .select('id, name, email, phone')
+      .eq('org_id', orgId)
+      .eq('email', email)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle());
+  }
   if (error) throw error;
-  return data ? (data as unknown as LoadedContact) : null;
+  return data ? ({ company: null, ...(data as object) } as LoadedContact) : null;
 }
 
 async function fillContactGaps(
@@ -1381,10 +1408,17 @@ async function fillContactGaps(
   const patch: Record<string, string> = {};
   const name = extracted.name?.trim();
   const phone = extracted.phone?.trim();
+  const company = extracted.company?.trim();
   if (!contact.name && name && name.length > 0) patch.name = name;
   if (!contact.phone && phone && phone.length > 0) patch.phone = phone;
+  if (!contact.company && company && company.length > 0) patch.company = company;
   if (Object.keys(patch).length === 0) return;
-  const { error } = await supabase.from('contacts').update(patch).eq('id', contact.id);
+  let { error } = await supabase.from('contacts').update(patch).eq('id', contact.id);
+  if (error && isMissingColumnError(error) && patch.company) {
+    delete patch.company;
+    if (Object.keys(patch).length === 0) return;
+    ({ error } = await supabase.from('contacts').update(patch).eq('id', contact.id));
+  }
   if (error) throw error;
 }
 
@@ -1448,13 +1482,21 @@ async function loadContact(
   supabase: SupabaseClient,
   contactId: string
 ): Promise<LoadedContact | null> {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('contacts')
-    .select('id, name, email, phone')
+    .select('id, name, email, phone, company')
     .eq('id', contactId)
     .maybeSingle();
+  if (error && isMissingColumnError(error)) {
+    // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    ({ data, error } = await supabase
+      .from('contacts')
+      .select('id, name, email, phone')
+      .eq('id', contactId)
+      .maybeSingle());
+  }
   if (error) throw error;
-  return data ? (data as unknown as LoadedContact) : null;
+  return data ? ({ company: null, ...(data as object) } as LoadedContact) : null;
 }
 
 // --- ai_runs logging ----------------------------------------------------------

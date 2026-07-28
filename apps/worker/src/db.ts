@@ -15,6 +15,17 @@ export function getServiceClient(): SupabaseClient {
 }
 
 /**
+ * Missing-column schema skew (worker deployed ahead of a migration): Postgres
+ * reports an unknown SELECT column as SQLSTATE 42703, but PostgREST rejects an
+ * unknown INSERT/UPDATE payload column from its schema cache as PGRST204 —
+ * skew retries must match both.
+ */
+export function isMissingColumnError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === '42703' || code === 'PGRST204';
+}
+
+/**
  * Reduce an unknown error to log-safe metadata (name + message only). Never
  * dumps whole error objects, which could carry request/response payloads with
  * message content (CLAUDE.md §7).

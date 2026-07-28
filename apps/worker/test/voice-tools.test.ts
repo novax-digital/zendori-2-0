@@ -117,6 +117,8 @@ function ctxWith(
     knowledgeBaseIds: null,
     // 0018 defaults: real active agent, toggle on, hours unconfigured.
     handoffEnabled: true,
+    // 0027 default: the pre-migration hardcoded behavior
+    intakeFields: ['name', 'phone'],
     businessHours: null,
     allowTransfer: true,
     ...over,
@@ -188,7 +190,7 @@ describe('createTicketTool', () => {
     const fake = makeFake({
       singles: {
         conversations: { contact_id: 'contact-1' },
-        contacts: { name: null, email: null },
+        contacts: { name: null, email: null, company: null },
       },
     });
     const result = await createTicketTool(ctxWith(fake), {
@@ -197,6 +199,7 @@ describe('createTicketTool', () => {
       name: 'Kai Beispiel',
       callback_number: '+49 170 1234567',
       email: 'kai@example.com',
+      company: 'Beispiel GmbH',
     });
 
     expect(result).toEqual({ ok: true, ticket_ref: 'conv-1' });
@@ -204,22 +207,27 @@ describe('createTicketTool', () => {
     expect(
       fake.updates.find((u) => u.table === 'conversations')?.patch.subject
     ).toBe('Rückruf gewünscht');
-    // contact gaps filled (both were null)
+    // contact gaps filled (all were null)
     const contactPatch = fake.updates.find((u) => u.table === 'contacts')?.patch;
-    expect(contactPatch).toEqual({ name: 'Kai Beispiel', email: 'kai@example.com' });
+    expect(contactPatch).toEqual({
+      name: 'Kai Beispiel',
+      email: 'kai@example.com',
+      company: 'Beispiel GmbH',
+    });
     // structured system message with all provided lines
     const msg = fake.inserts.find((i) => i.table === 'messages');
     expect(msg?.row.sender_type).toBe('system');
     expect(String(msg?.row.content)).toContain('Ticket aufgenommen: Rückruf gewünscht');
+    expect(String(msg?.row.content)).toContain('Unternehmen: Beispiel GmbH');
     expect(String(msg?.row.content)).toContain('Rückruf: +49 170 1234567');
     expect(String(msg?.row.content)).toContain('E-Mail: kai@example.com');
   });
 
-  it('never overwrites an existing contact name/email', async () => {
+  it('never overwrites an existing contact name/email/company', async () => {
     const fake = makeFake({
       singles: {
         conversations: { contact_id: 'contact-1' },
-        contacts: { name: 'Bestehender Name', email: 'alt@example.com' },
+        contacts: { name: 'Bestehender Name', email: 'alt@example.com', company: 'Alt GmbH' },
       },
     });
     await createTicketTool(ctxWith(fake), {
@@ -227,8 +235,9 @@ describe('createTicketTool', () => {
       description: 'Text',
       name: 'Neuer Name',
       email: 'neu@example.com',
+      company: 'Neu GmbH',
     });
-    // both slots already filled → no contact update at all
+    // all slots already filled → no contact update at all
     expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
   });
 

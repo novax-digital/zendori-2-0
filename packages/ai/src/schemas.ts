@@ -30,6 +30,8 @@ export const ExtractionResultSchema = z.object({
     name: z.string().nullable(),
     email: z.string().nullable(),
     phone: z.string().nullable(),
+    /** Sender's company name (0027) — the legacy bridge field, restored. */
+    company: z.string().nullable(),
   }),
   subject: z.string(),
   description: z.string(),

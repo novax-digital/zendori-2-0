@@ -22,7 +22,13 @@ import {
   transcriptionCompletedSchema,
   transcriptionUpdatedSchema,
 } from './xai-realtime.js';
-import { createTicketTool, handoffTool, kbSearchTool, type ToolContext } from './tools.js';
+import {
+  callbackIntakeStep,
+  createTicketTool,
+  handoffTool,
+  kbSearchTool,
+  type ToolContext,
+} from './tools.js';
 
 // One CallSession per live call: holds the outbound WebSocket to xAI for the
 // duration of the conversation, persists transcript turns as normal `messages`
@@ -600,8 +606,7 @@ export class CallSession {
                 ? {
                     ok: true,
                     action: 'callback',
-                    instruction:
-                      'Die Weiterleitung ist fehlgeschlagen. Entschuldige dich kurz, biete einen Rückruf an: erfrage Name und Rückrufnummer, rufe create_ticket auf und beende dann mit end_call.',
+                    instruction: `Die Weiterleitung ist fehlgeschlagen. Entschuldige dich kurz, biete einen Rückruf an: ${callbackIntakeStep(this.p.agent.intakeFields)}, rufe create_ticket auf und beende dann mit end_call.`,
                   }
                 : r.output;
             if (output !== null) this.send(functionCallOutputEvent(r.callId, output));
@@ -685,6 +690,7 @@ export class CallSession {
       agentMode: this.p.agent.mode,
       knowledgeBaseIds: this.p.agent.knowledgeBaseIds,
       handoffEnabled: this.p.agent.handoffEnabled,
+      intakeFields: this.p.agent.intakeFields,
       businessHours: this.p.businessHours ?? null,
       allowTransfer: this.p.allowTransfer ?? false,
     };

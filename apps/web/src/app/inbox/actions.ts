@@ -436,6 +436,7 @@ const contactUpdateSchema = z.object({
   contactId: z.uuid(),
   name: z.string().max(200),
   phone: z.string().max(50),
+  company: z.string().max(200),
 });
 
 export async function updateContact(formData: FormData): Promise<void> {
@@ -449,11 +450,12 @@ export async function updateContact(formData: FormData): Promise<void> {
     contactId: formData.get('contactId'),
     name: textField(formData.get('name')),
     phone: textField(formData.get('phone')),
+    company: textField(formData.get('company')),
   });
   if (!parsed.success) {
     redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
   }
-  const { org, conversationId, contactId, name, phone } = parsed.data;
+  const { org, conversationId, contactId, name, phone, company } = parsed.data;
   const base: InboxRedirect = {
     org,
     c: conversationId,
@@ -462,12 +464,27 @@ export async function updateContact(formData: FormData): Promise<void> {
   };
 
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('contacts')
-    .update({ name: name === '' ? null : name, phone: phone === '' ? null : phone })
+    .update({
+      name: name === '' ? null : name,
+      phone: phone === '' ? null : phone,
+      company: company === '' ? null : company,
+    })
     .eq('org_id', org)
     .eq('id', contactId)
     .select('id');
+  const skewCode = (error as { code?: string } | null)?.code;
+  if (error && (skewCode === '42703' || skewCode === 'PGRST204')) {
+    // contacts.company not migrated yet (web ahead of 0027) — keep name/phone
+    // edits working; the company value is dropped until the migration lands.
+    ({ data, error } = await supabase
+      .from('contacts')
+      .update({ name: name === '' ? null : name, phone: phone === '' ? null : phone })
+      .eq('org_id', org)
+      .eq('id', contactId)
+      .select('id'));
+  }
   if (error || !data || data.length === 0) {
     redirect(inboxUrl({ ...base, error: errorText }));
   }
