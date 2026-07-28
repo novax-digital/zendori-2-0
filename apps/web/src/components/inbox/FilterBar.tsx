@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { Channel } from '@zendori/core';
 import type { InboxFilters } from '@/lib/inbox/types';
+import SearchField from '@/components/inbox/SearchField';
 
 const statusTabs: { value: InboxFilters['status']; label: string }[] = [
   { value: 'all', label: 'Alle' },
@@ -60,14 +61,8 @@ export default function FilterBar({
         {selectedConversationId ? (
           <input type="hidden" name="c" value={selectedConversationId} />
         ) : null}
-        <input
-          type="search"
-          name="q"
-          defaultValue={filters.q}
-          maxLength={200}
-          placeholder="Suchen (Betreff, Kontakt, Nachrichten)…"
-          aria-label="Inbox durchsuchen"
-        />
+        {/* keyed so client-side navigations (tab links) re-sync the field */}
+        <SearchField key={filters.q} defaultValue={filters.q} />
         <select name="channel" defaultValue={filters.channelId} aria-label="Kanal-Filter">
           <option value="all">Alle Kanäle</option>
           {channels.map((channel) => (
