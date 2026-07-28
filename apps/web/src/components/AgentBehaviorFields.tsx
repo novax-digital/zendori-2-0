@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { INTAKE_FIELDS, type AgentKind, type AgentMode, type IntakeField } from '@zendori/core';
+import type { AgentKind, AgentMode, IntakeField } from '@zendori/core';
 
 // Kind/mode/threshold interplay for the agent forms (0015):
 //   · Voice agents offer only "Reine Annahme" and "Autopilot" — no drafts on a
@@ -28,13 +28,16 @@ const MODE_OPTIONS: Record<AgentKind, { value: AgentMode; label: string }[]> = {
   ],
 };
 
-/** Checkbox labels for the voice intake fields (0027), in canonical order. */
-const INTAKE_FIELD_LABELS: Record<IntakeField, string> = {
-  name: 'Name',
-  phone: 'Rückrufnummer',
-  email: 'E-Mail-Adresse',
-  company: 'Unternehmen',
-};
+// Voice intake-field checkboxes (0027) in canonical order. Defined locally
+// instead of importing INTAKE_FIELDS: this is a client component, and a VALUE
+// import from @zendori/core drags core's index (node:crypto via
+// standard-webhooks) into the browser bundle — type imports are erased.
+const INTAKE_FIELD_OPTIONS: { value: IntakeField; label: string }[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'phone', label: 'Rückrufnummer' },
+  { value: 'email', label: 'E-Mail-Adresse' },
+  { value: 'company', label: 'Unternehmen' },
+];
 
 export default function AgentBehaviorFields({
   idPrefix,
@@ -127,17 +130,21 @@ export default function AgentBehaviorFields({
           <label>Abgefragte Angaben bei der Anliegen-Aufnahme</label>
           {/* render-time truth: a stale form without the checkboxes must not wipe the selection */}
           <input type="hidden" name="intakeFieldsRendered" value="1" />
-          {INTAKE_FIELDS.map((field) => (
-            <label key={field} htmlFor={`${idPrefix}-intake-${field}`} className="check-row">
+          {INTAKE_FIELD_OPTIONS.map((option) => (
+            <label
+              key={option.value}
+              htmlFor={`${idPrefix}-intake-${option.value}`}
+              className="check-row"
+            >
               <input
-                id={`${idPrefix}-intake-${field}`}
+                id={`${idPrefix}-intake-${option.value}`}
                 name="intakeFields"
                 type="checkbox"
-                value={field}
-                defaultChecked={intakeDefaults.has(field)}
+                value={option.value}
+                defaultChecked={intakeDefaults.has(option.value)}
                 disabled={disabled}
               />
-              {INTAKE_FIELD_LABELS[field]}
+              {option.label}
             </label>
           ))}
           <p className="hint">
