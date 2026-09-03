@@ -18,9 +18,20 @@ vi.mock('@zendori/ai', () => ({
 }));
 
 // Imported AFTER the mock is registered.
-const { kbSearchTool, createTicketTool, handoffTool, decideVoiceHandoff } = await import(
-  '../src/voice/tools.js'
-);
+const {
+  kbSearchTool,
+  createTicketTool,
+  handoffTool,
+  decideVoiceHandoff,
+  KB_MISS_INSTRUCTION,
+  KB_MISS_INSTRUCTION_HANDOFF,
+  EMAIL_UNCONFIRMED_ERROR,
+  EMAIL_INVALID_ERROR,
+  EMAIL_DROPPED_NOTE,
+  EMAIL_GATE_MAX_REFUSALS,
+  TICKET_CREATED_INSTRUCTION,
+  newEmailGateState,
+} = await import('../src/voice/tools.js');
 
 // --- fake supabase ---------------------------------------------------------------
 
@@ -117,10 +128,14 @@ function ctxWith(
     knowledgeBaseIds: null,
     // 0018 defaults: real active agent, toggle on, hours unconfigured.
     handoffEnabled: true,
+    confidenceThreshold: 0.7,
     // 0027 default: the pre-migration hardcoded behavior
     intakeFields: ['name', 'phone'],
     businessHours: null,
     allowTransfer: true,
+    // e-mail gate: fresh per call, caller has spoken once
+    callerTurns: 1,
+    emailGate: newEmailGateState(),
     ...over,
   };
 }
@@ -181,6 +196,34 @@ describe('kbSearchTool', () => {
     expect(run?.row.step).toBe('retrieve');
     expect(run?.row.org_id).toBe('org-1');
   });
+
+  it('a miss escalates to handoff_human when handoff is on and the threshold > 0 (§6)', async () => {
+    retrieveMock.mockResolvedValue({ matches: [], embedCostUsd: 0.0001, searchMode: 'hybrid' });
+    const fake = makeFake();
+    const result = await kbSearchTool(ctxWith(fake), { query: 'Gibt es das in Blau?' });
+    expect(result).toEqual({ ok: true, chunks: [], instruction: KB_MISS_INSTRUCTION_HANDOFF });
+  });
+
+  it('a miss offers the ticket itself when handoff is off OR the threshold is 0', async () => {
+    retrieveMock.mockResolvedValue({ matches: [], embedCostUsd: 0.0001, searchMode: 'hybrid' });
+    for (const over of [{ handoffEnabled: false }, { confidenceThreshold: 0 }] as const) {
+      const fake = makeFake();
+      const result = await kbSearchTool(ctxWith(fake, over), { query: 'Gibt es das in Blau?' });
+      expect(result).toEqual({ ok: true, chunks: [], instruction: KB_MISS_INSTRUCTION });
+    }
+  });
+
+  it('a hit carries no instruction (the model just answers)', async () => {
+    retrieveMock.mockResolvedValue({
+      matches: [{ id: 'k1', source_id: 'src-1', content: 'Ja, in Blau.', similarity: 0.8 }],
+      embedCostUsd: 0.0001,
+      searchMode: 'hybrid',
+    });
+    const fake = makeFake();
+    const result = await kbSearchTool(ctxWith(fake), { query: 'Gibt es das in Blau?' });
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty('instruction');
+  });
 });
 
 // --- create_ticket ---------------------------------------------------------------
@@ -199,10 +242,13 @@ describe('createTicketTool', () => {
       name: 'Kai Beispiel',
       callback_number: '+49 170 1234567',
       email: 'kai@example.com',
+      email_confirmed: true,
       company: 'Beispiel GmbH',
     });
 
-    expect(result).toEqual({ ok: true, ticket_ref: 'conv-1' });
+    // id-free: the old ticket_ref UUID was read aloud to callers (2026-09-03)
+    expect(result).toEqual({ ok: true, instruction: TICKET_CREATED_INSTRUCTION });
+    expect(JSON.stringify(result)).not.toContain('conv-1');
     // subject set on the conversation
     expect(
       fake.updates.find((u) => u.table === 'conversations')?.patch.subject
@@ -235,31 +281,110 @@ describe('createTicketTool', () => {
       description: 'Text',
       name: 'Neuer Name',
       email: 'neu@example.com',
+      email_confirmed: true,
       company: 'Neu GmbH',
     });
     // all slots already filled → no contact update at all
     expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
   });
 
-  it('drops a syntactically invalid email but still records the ticket', async () => {
+  it('refuses a confirmed but syntactically invalid e-mail BEFORE any write', async () => {
     const fake = makeFake({
       singles: {
         conversations: { contact_id: 'contact-1' },
         contacts: { name: null, email: null },
       },
     });
-    const result = await createTicketTool(ctxWith(fake), {
-      subject: 'Frage',
-      description: 'Text',
-      email: 'kai [at] example dot com',
+    for (const bad of ['kai [at] example dot com', 'kai.müller@gmx.de', 'kai@gmx']) {
+      const result = await createTicketTool(ctxWith(fake), {
+        subject: 'Frage',
+        description: 'Text',
+        email: bad,
+        email_confirmed: true,
+      });
+      expect(result).toEqual({ ok: false, error: EMAIL_INVALID_ERROR });
+    }
+    expect(fake.updates).toHaveLength(0);
+    expect(fake.inserts).toHaveLength(0);
+  });
+
+  it('a confirmed retry only counts once the caller spoke after the refusal', async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null } },
     });
-    expect(result.ok).toBe(true);
-    // invalid email never reaches contacts.email …
-    const contactPatch = fake.updates.find((u) => u.table === 'contacts')?.patch;
-    expect(contactPatch?.email).toBeUndefined();
-    // … and is not printed in the system message
+    const gate = newEmailGateState();
+    const args = { subject: 'Frage', description: 'Text', email: 'kai@example.com' };
+    // refusal at caller turn 2
+    expect(await createTicketTool(ctxWith(fake, { callerTurns: 2, emailGate: gate }), args)).toEqual({
+      ok: false,
+      error: EMAIL_UNCONFIRMED_ERROR,
+    });
+    // silent immediate retry with the flag flipped — same caller turn → refused again
+    expect(
+      await createTicketTool(ctxWith(fake, { callerTurns: 2, emailGate: gate }), {
+        ...args,
+        email_confirmed: true,
+      })
+    ).toEqual({ ok: false, error: EMAIL_UNCONFIRMED_ERROR });
+    expect(fake.updates).toHaveLength(0);
+    // the caller answered (turn 3) → accepted, e-mail stored lowercased
+    const ok = await createTicketTool(ctxWith(fake, { callerTurns: 3, emailGate: gate }), {
+      ...args,
+      email: 'Kai@Example.com',
+      email_confirmed: true,
+    });
+    expect(ok).toEqual({ ok: true, instruction: TICKET_CREATED_INSTRUCTION });
+    expect(fake.updates.find((u) => u.table === 'contacts')?.patch.email).toBe('kai@example.com');
+  });
+
+  it(`after ${EMAIL_GATE_MAX_REFUSALS} refusals the ticket goes through WITHOUT the address (loop guard)`, async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null } },
+    });
+    const gate = newEmailGateState();
+    const args = { subject: 'Frage', description: 'Text', email: 'kai@example.com' };
+    for (let i = 1; i < EMAIL_GATE_MAX_REFUSALS; i += 1) {
+      expect((await createTicketTool(ctxWith(fake, { emailGate: gate }), args)).ok).toBe(false);
+    }
+    const result = await createTicketTool(ctxWith(fake, { emailGate: gate }), args);
+    expect(result).toEqual({ ok: true, instruction: TICKET_CREATED_INSTRUCTION + EMAIL_DROPPED_NOTE });
+    // nothing e-mail-ish was written
+    expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
     const msg = fake.inserts.find((i) => i.table === 'messages');
     expect(String(msg?.row.content)).not.toContain('E-Mail:');
+  });
+
+  it('refuses an unconfirmed e-mail BEFORE writing anything (spell-back gate)', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: null, email: null },
+      },
+    });
+    for (const args of [
+      { subject: 'Frage', description: 'Text', email: 'kai@example.com' },
+      { subject: 'Frage', description: 'Text', email: 'kai@example.com', email_confirmed: false },
+    ]) {
+      const result = await createTicketTool(ctxWith(fake), args);
+      expect(result).toEqual({ ok: false, error: EMAIL_UNCONFIRMED_ERROR });
+    }
+    // no subject/status flip, no contact patch, no system message
+    expect(fake.updates).toHaveLength(0);
+    expect(fake.inserts).toHaveLength(0);
+  });
+
+  it('a ticket without any e-mail never trips the spell-back gate', async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null } },
+    });
+    for (const args of [
+      { subject: 'Frage', description: 'Text' },
+      { subject: 'Frage', description: 'Text', email: '' },
+      { subject: 'Frage', description: 'Text', email: '   ' },
+    ]) {
+      const result = await createTicketTool(ctxWith(fake), args);
+      expect(result.ok).toBe(true);
+    }
   });
 
   it('returns ok:false when the subject update fails', async () => {

@@ -27,6 +27,7 @@ import {
   createTicketTool,
   handoffTool,
   kbSearchTool,
+  newEmailGateState,
   type ToolContext,
 } from './tools.js';
 
@@ -149,6 +150,14 @@ export class CallSession {
   private startedAtMs: number | null = null;
   /** Latest cumulative transcript per user item_id (xAI delta: cumulative!). */
   private readonly userTranscripts = new Map<string, string>();
+  /**
+   * Caller utterances heard so far — first sighting of a transcription item
+   * id counts as one. The e-mail spell-back gate (tools.ts) requires that
+   * the caller spoke between a refusal and the confirmed retry.
+   */
+  private callerTurns = 0;
+  private seenCallerItems = new Set<string>();
+  private readonly emailGate = newEmailGateState();
   /** Persisted user turns: item_id → { messageId, content } (for late corrections). */
   private readonly flushedItems = new Map<string, { messageId: string | null; content: string }>();
   /** Assistant transcript accumulator for the in-flight response. */
@@ -273,12 +282,16 @@ export class CallSession {
         case type === 'conversation.item.input_audio_transcription.updated': {
           const parsed = transcriptionUpdatedSchema.safeParse(event);
           // CUMULATIVE transcript: keep only the latest value per item_id.
-          if (parsed.success) this.userTranscripts.set(parsed.data.item_id, parsed.data.transcript);
+          if (parsed.success) {
+            this.noteCallerItem(parsed.data.item_id);
+            this.userTranscripts.set(parsed.data.item_id, parsed.data.transcript);
+          }
           break;
         }
         case type === 'conversation.item.input_audio_transcription.completed': {
           const parsed = transcriptionCompletedSchema.safeParse(event);
           if (parsed.success) {
+            this.noteCallerItem(parsed.data.item_id);
             this.userTranscripts.set(parsed.data.item_id, parsed.data.transcript);
             // The final ASR text may arrive AFTER the turn was flushed at
             // response.created — correct the persisted message then.
@@ -623,6 +636,37 @@ export class CallSession {
         }
       }
 
+      // A refused tool in the same batch as end_call (typically create_ticket
+      // rejecting an unconfirmed e-mail, review 2026-09-03) must get its retry
+      // turn — hanging up now would leave the caller with "aufgenommen" while
+      // nothing was written. Replace end_call's output with a refusal and fall
+      // through to the normal tail (outputs + ONE response.create; the filler
+      // is never armed when end_call is in the batch).
+      const nameOf = (callId: string) => calls.find((c) => c.callId === callId)?.name;
+      const failedOthers = results.filter(
+        (r) =>
+          nameOf(r.callId) !== 'end_call' &&
+          r.output !== null &&
+          typeof r.output === 'object' &&
+          (r.output as { ok?: unknown }).ok === false
+      );
+      if (endCallRequested && failedOthers.length > 0) {
+        this.p.logger.warn(
+          { voiceCallId: this.p.voiceCallId, failedTools: failedOthers.map((r) => nameOf(r.callId)) },
+          'voice end_call refused — a tool in the same batch failed'
+        );
+        endCallRequested = false;
+        for (const r of results) {
+          if (nameOf(r.callId) === 'end_call') {
+            r.output = {
+              ok: false,
+              error:
+                'Noch nicht auflegen: ein Werkzeugaufruf in diesem Schritt ist fehlgeschlagen (siehe dessen Fehlermeldung). Behebe das zuerst und rufe end_call danach erneut auf.',
+            };
+          }
+        }
+      }
+
       if (endCallRequested) {
         this.state = 'ending';
         this.endedReason = 'agent_end';
@@ -674,6 +718,13 @@ export class CallSession {
     }
   }
 
+  /** One caller turn per distinct transcription item (updated + completed share the id). */
+  private noteCallerItem(itemId: string): void {
+    if (this.seenCallerItems.has(itemId)) return;
+    this.seenCallerItems.add(itemId);
+    this.callerTurns += 1;
+  }
+
   private async runTool(name: string, rawArguments: string): Promise<unknown> {
     let args: unknown;
     try {
@@ -690,9 +741,12 @@ export class CallSession {
       agentMode: this.p.agent.mode,
       knowledgeBaseIds: this.p.agent.knowledgeBaseIds,
       handoffEnabled: this.p.agent.handoffEnabled,
+      confidenceThreshold: this.p.agent.confidenceThreshold,
       intakeFields: this.p.agent.intakeFields,
       businessHours: this.p.businessHours ?? null,
       allowTransfer: this.p.allowTransfer ?? false,
+      callerTurns: this.callerTurns,
+      emailGate: this.emailGate,
     };
     try {
       switch (name) {

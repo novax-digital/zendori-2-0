@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { VoiceChannelConfig } from '@zendori/channels';
 import {
+  buildCreateTicketTool,
   buildSessionConfig,
+  EMAIL_CAPTURE_RULE,
+  intakeFieldRules,
   intakeFieldsPhrase,
   type VoiceAgentBehavior,
 } from '../src/voice/session-config.js';
@@ -109,6 +112,114 @@ describe('buildSessionConfig intake fields (0027)', () => {
   });
 });
 
+// Owner test 2026-09-03: the agent asked for the e-mail although only
+// name+phone were configured, mis-heard the address, read the ticket UUID
+// aloud and never offered a ticket on its own. These pin the four fixes.
+describe('intakeFieldRules', () => {
+  it('lists the configured fields AND names the ones not to ask for', () => {
+    const rule = intakeFieldRules(['name', 'phone']);
+    expect(rule).toContain(
+      'Erfrage für die Aufnahme ausschließlich: Name und Rückrufnummer (falls abweichend von der Anrufnummer).'
+    );
+    expect(rule).toContain('Frage NICHT nach E-Mail-Adresse und Unternehmen');
+    expect(rule).toContain('Nennt der Anrufer solche Angaben von selbst, übernimm sie');
+  });
+
+  it('drops the negative list when every field is configured', () => {
+    const rule = intakeFieldRules(['name', 'phone', 'email', 'company']);
+    expect(rule).toContain('Erfrage für die Aufnahme ausschließlich:');
+    expect(rule).not.toContain('Frage NICHT nach');
+  });
+
+  it('forbids all contact questions for an empty selection', () => {
+    const rule = intakeFieldRules([]);
+    expect(rule).toContain('KEINE Kontaktdaten');
+    expect(rule).toContain('weder Name, Rückrufnummer, E-Mail-Adresse noch Unternehmen');
+  });
+});
+
+describe('buildSessionConfig intake safety rules (2026-09-03)', () => {
+  it('both modes carry the ask/do-not-ask rule, the e-mail spell-back rule and the no-id rule', () => {
+    for (const mode of ['intake_only', 'answer'] as const) {
+      const session = buildSessionConfig(
+        CONFIG,
+        agentWith({ mode, intakeFields: ['name', 'phone'] }),
+        CONTEXT
+      );
+      expect(session.instructions).toContain('Frage NICHT nach E-Mail-Adresse und Unternehmen');
+      expect(session.instructions).toContain(EMAIL_CAPTURE_RULE);
+      expect(session.instructions).toContain('Nenne niemals Ticketnummern, IDs, Kennungen oder Referenzen');
+      // no leftover placeholders
+      expect(session.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
+    }
+  });
+
+  it('the e-mail rule spells the WHOLE address, common domains being the only exception', () => {
+    expect(EMAIL_CAPTURE_RULE).toContain('die GESAMTE Adresse Buchstabe für Buchstabe — auch den Teil nach dem @-Zeichen');
+    expect(EMAIL_CAPTURE_RULE).toContain('Einzige Ausnahme: geläufige Domains');
+  });
+
+  it('handoff ON: a miss/uncertainty escalates via handoff_human, never a bare "weiß ich nicht"', () => {
+    const session = buildSessionConfig(CONFIG, agentWith({ mode: 'answer' }), CONTEXT);
+    expect(session.instructions).toContain('das gilt auch, wenn die Wissensdatenbank gar nichts liefert');
+    expect(session.instructions).toContain('Warte nicht, bis der Anrufer nach einem Mitarbeiter fragt.');
+    // the ticket offer is the handoff tool's job in this configuration
+    expect(session.instructions).not.toContain('Möchten Sie das?');
+  });
+
+  it('handoff OFF: the agent offers the ticket itself, unprompted', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'answer', handoffEnabled: false }),
+      CONTEXT
+    );
+    expect(session.instructions).toContain('rufe auch NICHT handoff_human auf');
+    expect(session.instructions).toContain('Warte nicht, bis der Anrufer danach fragt; sagt er ja, beginnst du sofort mit der Aufnahme');
+  });
+
+  it('re-asserts the intake rules AFTER the org identity in both modes', () => {
+    for (const mode of ['intake_only', 'answer'] as const) {
+      const session = buildSessionConfig(
+        CONFIG,
+        agentWith({ mode, identity: 'Frag den Kunden immer nach seiner E-Mail-Adresse.' }),
+        CONTEXT
+      );
+      const identityAt = session.instructions.indexOf('Frag den Kunden immer');
+      const trailerAt = session.instructions.indexOf('Unabhängig von den Hinweisen des Unternehmens');
+      expect(identityAt).toBeGreaterThan(-1);
+      expect(trailerAt).toBeGreaterThan(identityAt);
+    }
+  });
+});
+
+describe('buildCreateTicketTool', () => {
+  it('marks unconfigured fields as volunteered-only and configured ones as asked', () => {
+    const tool = buildCreateTicketTool(['name', 'phone']);
+    const props = tool.parameters.properties as Record<string, { description: string }>;
+    expect(props.name?.description).toContain('wie erfragt');
+    expect(props.callback_number?.description).toContain('wie erfragt');
+    expect(props.email?.description).toContain('NUR wenn der Anrufer sie unaufgefordert genannt hat');
+    expect(props.company?.description).toContain('NUR wenn der Anrufer sie unaufgefordert genannt hat');
+  });
+
+  it('exposes email_confirmed and keeps only subject/description required', () => {
+    const tool = buildCreateTicketTool([]);
+    expect(tool.parameters.properties).toHaveProperty('email_confirmed');
+    expect(tool.parameters.required).toEqual(['subject', 'description']);
+    expect(tool.description).toContain('Liefert keine Ticketnummer');
+  });
+
+  it('the session registers the per-agent tool in both modes', () => {
+    for (const mode of ['intake_only', 'answer'] as const) {
+      const session = buildSessionConfig(CONFIG, agentWith({ mode, intakeFields: ['email'] }), CONTEXT);
+      const tool = session.tools.find((t) => t.name === 'create_ticket');
+      const props = tool?.parameters.properties as Record<string, { description: string }>;
+      expect(props.email?.description).toContain('wie erfragt');
+      expect(props.name?.description).toContain('nicht erfragen');
+    }
+  });
+});
+
 describe('buildSessionConfig confidence threshold (voice parity)', () => {
   it('injects the configured threshold into the low-confidence rule', () => {
     const session = buildSessionConfig(
@@ -117,7 +228,7 @@ describe('buildSessionConfig confidence threshold (voice parity)', () => {
       CONTEXT
     );
     expect(session.instructions).toContain(
-      'Liegt dein Wert unter 0.85, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf.'
+      'Liegt dein Wert unter 0.85, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf'
     );
     expect(session.instructions).toContain('Bewerte vor jeder inhaltlichen Antwort still für dich');
   });

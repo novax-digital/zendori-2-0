@@ -638,6 +638,131 @@ describe('CallSession protocol', () => {
     await waitFor(() => fetchCalls.find((c) => c.url.includes('/call-grace/hangup')), 3000);
   });
 
+  it('end_call batched with a REFUSED create_ticket does not hang up — the model gets its retry turn', async () => {
+    const fake = makeFakeSupabase({ maybeSingle: { conversations: { contact_id: null } } });
+    // Own call id: sessions torn down by afterEach while still 'active' fire a
+    // delayed best-effort hangup for THEIR id (onWsClose after the failed
+    // rejoin) that can land during this test — never for 'call-refuse'.
+    startSession(fake, { providerCallId: 'call-refuse' });
+    await completeHandshake();
+    const baseline = received.filter((e) => e.type === 'response.create').length;
+
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.audio_transcript.delta',
+      delta: 'Ihr Anliegen ist aufgenommen.',
+    });
+    // volunteered e-mail WITHOUT the spell-back confirmation → tool refuses
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-t',
+      name: 'create_ticket',
+      arguments: JSON.stringify({
+        subject: 'Rückruf',
+        description: 'Kunde bittet um Rückruf.',
+        email: 'kai@example.com',
+      }),
+    });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-e',
+      name: 'end_call',
+      arguments: '{}',
+    });
+    serverSend({ type: 'response.done' });
+
+    // both outputs go out; end_call's is a refusal …
+    const outputs = await waitFor(() => {
+      const found = received.filter(
+        (e) =>
+          e.type === 'conversation.item.create' &&
+          (e as { item?: { type?: string } }).item?.type === 'function_call_output'
+      );
+      return found.length === 2 ? found : undefined;
+    });
+    const byCall = new Map(
+      outputs.map((e) => {
+        const item = (e as { item: { call_id: string; output: string } }).item;
+        return [item.call_id, JSON.parse(item.output) as { ok: boolean; error?: string }];
+      })
+    );
+    expect(byCall.get('call-t')?.ok).toBe(false);
+    expect(byCall.get('call-e')?.ok).toBe(false);
+    expect(byCall.get('call-e')?.error).toContain('Noch nicht auflegen');
+    // … exactly ONE response.create follows, no forced farewell, no hangup
+    await waitFor(() =>
+      received.filter((e) => e.type === 'response.create').length === baseline + 1
+        ? true
+        : undefined
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(countForceMessages()).toHaveLength(0);
+    expect(fetchCalls.find((c) => c.url.includes('/call-refuse/hangup'))).toBeUndefined();
+    // nothing was written for the ticket
+    expect(fake.updates.some((u) => u.table === 'conversations')).toBe(false);
+  });
+
+  it('caller transcription items advance the e-mail gate turn counter (silent retry refused)', async () => {
+    const fake = makeFakeSupabase({ maybeSingle: { conversations: { contact_id: null } } });
+    startSession(fake);
+    await completeHandshake();
+    const ticketArgs = {
+      subject: 'Rückruf',
+      description: 'Kunde bittet um Rückruf.',
+      email: 'kai@example.com',
+    };
+    const outputOf = async (callId: string) => {
+      const e = await waitFor(() =>
+        received.find(
+          (ev) =>
+            ev.type === 'conversation.item.create' &&
+            (ev as { item?: { type?: string; call_id?: string } }).item?.type ===
+              'function_call_output' &&
+            (ev as { item?: { call_id?: string } }).item?.call_id === callId
+        )
+      );
+      return JSON.parse((e as { item: { output: string } }).item.output) as { ok: boolean };
+    };
+
+    // 1) first attempt without confirmation → refused
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-1',
+      name: 'create_ticket',
+      arguments: JSON.stringify(ticketArgs),
+    });
+    serverSend({ type: 'response.done' });
+    expect((await outputOf('call-1')).ok).toBe(false);
+
+    // 2) immediate retry with the flag flipped, caller said nothing → refused again
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-2',
+      name: 'create_ticket',
+      arguments: JSON.stringify({ ...ticketArgs, email_confirmed: true }),
+    });
+    serverSend({ type: 'response.done' });
+    expect((await outputOf('call-2')).ok).toBe(false);
+
+    // 3) the caller answers ("Ja") → a transcription item → now the retry counts
+    serverSend({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-yes',
+      transcript: 'Ja, das ist richtig.',
+    });
+    serverSend({ type: 'response.created' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'call-3',
+      name: 'create_ticket',
+      arguments: JSON.stringify({ ...ticketArgs, email_confirmed: true }),
+    });
+    serverSend({ type: 'response.done' });
+    expect((await outputOf('call-3')).ok).toBe(true);
+  });
+
   it('failed refer: function outputs sent, response.create deferred to the hold turn response.done', async () => {
     const fake = makeFakeSupabase();
     // refer fails with 500; everything else keeps succeeding

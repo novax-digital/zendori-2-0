@@ -216,13 +216,15 @@ describe('processPostCall', () => {
     const convUpdate = fake.updates.find((u) => u.table === 'conversations');
     expect(convUpdate?.patch.priority).toBe('urgent');
     expect(convUpdate?.patch.subject).toBe('Frage zum Lieferstatus');
-    // contact gaps filled from the extraction (email lowercased, company 0027)
+    // contact gaps filled from the extraction (name, company 0027) — NEVER the
+    // e-mail: the transcript is raw ASR text, the only trusted source for a
+    // spoken address is create_ticket's spell-back gate (review 2026-09-03)
     const contactUpdate = fake.updates.find((u) => u.table === 'contacts');
     expect(contactUpdate?.patch).toEqual({
       name: 'Kai Beispiel',
-      email: 'kai@example.com',
       company: 'Beispiel GmbH',
     });
+    expect(contactUpdate?.patch).not.toHaveProperty('email');
     // both AI steps logged
     expect(fake.inserts.filter((i) => i.table === 'ai_runs')).toHaveLength(2);
     // success stamp

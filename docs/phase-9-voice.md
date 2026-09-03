@@ -67,6 +67,29 @@ eines nie erfüllbaren „unter 0"); **Übergabe-Schalter aus** = derselbe Schwe
 `handoff_human` sagt der Agent ehrlich, dass er es nicht sicher weiß, und bietet
 `create_ticket` an.
 
+### Anliegen-Aufnahme: vier Regeln aus dem Live-Test (2026-09-03)
+
+Owner-Testanruf: Ticket-UUID vorgelesen, E-Mail verhört, kein eigenes Ticket-Angebot, E-Mail
+abgefragt obwohl nicht angehakt. Die Fixes greifen an zwei Stellen — Prompt UND Tool —, weil
+der Prompt allein beim Realtime-Modell nachweislich nicht reicht:
+
+| Befund | Prompt (`session-config.ts`) | Tool (`tools.ts`) |
+| --- | --- | --- |
+| Ticketnummer vorgelesen | Stilregel „Nenne niemals Ticketnummern, IDs, Kennungen" | `create_ticket` gibt **keine** `ticket_ref` mehr zurück, sondern nur eine id-freie Sprech-Anweisung (`TICKET_CREATED_INSTRUCTION`) |
+| E-Mail verhört | `EMAIL_CAPTURE_RULE`: die **gesamte** Adresse buchstabieren (auch nach dem @), „at"/„Punkt"/„Minus"/„Unterstrich"; einzige Ausnahme: geläufige Domains (gmail.com, gmx.de, web.de, t-online.de) als Wort; Bestätigung abwarten | Parameter `email_confirmed`; `email` ohne Bestätigung ⇒ Ablehnung **vor jedem Write** (`EMAIL_UNCONFIRMED_ERROR`); ungültige bestätigte Adresse ⇒ `EMAIL_INVALID_ERROR` statt stilles Verwerfen; ein Retry mit `email_confirmed=true` zählt nur, wenn der Anrufer seit der Ablehnung gesprochen hat (`callerTurns`, Session-Zähler über Transkriptions-Items); nach 3 Ablehnungen geht das Ticket **ohne** Adresse durch (`EMAIL_DROPPED_NOTE`, Loop-Schutz). **Post-Call-Extraktion füllt `contacts.email` bei Voice nicht mehr** — Transkript = rohe ASR, einzige vertrauenswürdige Quelle ist der bestätigte `create_ticket`-Pfad |
+| Kein Ticket-Angebot | in `lowConfidenceRule` (jede Variante): „Sage NIEMALS nur, dass du es nicht weißt". Übergabe an + Schwellwert > 0 ⇒ `handoff_human` (§6; das Werkzeug entscheidet Transfer/Rückruf, sein Callback-Text enthält das Ticket-Angebot); sonst ⇒ selbst anbieten, „Warte nicht, bis der Anrufer danach fragt" | leeres `kb_search`-Ergebnis trägt dieselbe Weiche (`escalatesLowConfidence`): `KB_MISS_INSTRUCTION_HANDOFF` bzw. `KB_MISS_INSTRUCTION` — Prompt und Tool-Ausgabe schreiben nie verschiedene Werkzeuge für dieselbe Situation vor |
+| Nicht angehakte Felder abgefragt | `intakeFieldRules`: Positivliste **und** explizite „Frage NICHT nach …"-Liste (auch nicht „zur Sicherheit"); Leerauswahl ⇒ „KEINE Kontaktdaten" | `buildCreateTicketTool(fields)`: Parameter bleiben alle (Freiwilliges wird gespeichert), aber die Beschreibungen sagen pro Session „wie erfragt" bzw. „NUR wenn unaufgefordert genannt; nicht erfragen" |
+
+`email_confirmed` bleibt eine Modell-Behauptung (Sprache ist nicht prüfbar) — der Turn-Zähler
+schließt nur den stillen Sofort-Retry, nicht eine Behauptung ohne vorherige Ablehnung.
+
+Außerdem aus der Review: `end_call` im selben Batch wie ein **fehlgeschlagener** Tool-Aufruf (typisch:
+abgelehntes `create_ticket`) legt nicht auf — die Session ersetzt die `end_call`-Ausgabe durch eine
+Ablehnung und gibt dem Modell seinen Retry-Turn (`call-session.ts`, vor dem Hangup-Zweig); die
+Intake-Regeln werden nach der Agent-Identität in beiden Modi noch einmal bekräftigt
+(`INTAKE_RULES_TRAILER`), damit Persona-Text wie „frag immer nach der E-Mail" die Einstellung nicht
+aushebelt.
+
 ## Kanal-Einstellungen (Settings → Kanäle → Voice)
 
 - **Begrüßung (Welcome Message)** — wird wörtlich per `force_message` gesprochen

@@ -8,7 +8,7 @@ import {
   type VoiceChannelConfig,
 } from '@zendori/channels';
 import { isMissingColumnError } from '../db.js';
-import { intakeFieldsPhrase } from './session-config.js';
+import { escalatesLowConfidence, intakeFieldsPhrase } from './session-config.js';
 
 // Voice function-tool handlers. All run in the worker with the org_id bound
 // from the voice_calls row (server truth — never from the model), so RLS-scoped
@@ -28,8 +28,18 @@ export interface ToolContext {
   knowledgeBaseIds: string[] | null;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /** agents.confidence_threshold — with handoffEnabled decides whether a miss escalates. */
+  confidenceThreshold: number;
   /** 0027: contact fields the agent asks for during ticket intake. */
   intakeFields: IntakeField[];
+  /**
+   * Number of caller utterances heard so far (CallSession counts transcription
+   * items). The e-mail spell-back gate uses it to require that the caller
+   * actually spoke between a refusal and the confirmed retry.
+   */
+  callerTurns: number;
+  /** Session-owned, mutable: refusal bookkeeping for the e-mail gate. */
+  emailGate: EmailGateState;
   /**
    * Org business hours (defensively parsed) — the live-transfer gate is
    * evaluated HERE at tool-call time, not at call start, so the mid-call
@@ -51,6 +61,18 @@ export interface ToolContext {
 }
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
+
+/** E-mail gate state, one per call (created by CallSession, mutated here). */
+export interface EmailGateState {
+  refusals: number;
+  /** callerTurns at the last refusal — a confirmed retry needs a later turn. */
+  refusedAtTurn: number | null;
+}
+export function newEmailGateState(): EmailGateState {
+  return { refusals: 0, refusedAtTurn: null };
+}
+/** After this many refusals the ticket goes through WITHOUT the address (loop guard). */
+export const EMAIL_GATE_MAX_REFUSALS = 3;
 
 const KB_SNIPPET_MAX_CHARS = 800;
 
@@ -101,6 +123,21 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
   const usable =
     imageSourceIds.size === 0 ? matches : matches.filter((m) => !imageSourceIds.has(m.source_id));
 
+  if (usable.length === 0) {
+    // Owner test 2026-09-03: on a miss the model said "kann ich nicht sagen"
+    // and stopped — the caller had to ask for a ticket himself. The empty
+    // result now carries the next step, so it happens at the exact moment of
+    // the miss. Same predicate as the prompt's lowConfidenceRule: with handoff
+    // on, a miss is the §6 low-confidence trigger (handoff_human decides live
+    // transfer vs. callback ticket and its callback instruction already
+    // carries the ticket offer); otherwise the agent offers the ticket itself.
+    const escalate = escalatesLowConfidence(ctx.handoffEnabled, ctx.confidenceThreshold);
+    return {
+      ok: true,
+      chunks: [],
+      instruction: escalate ? KB_MISS_INSTRUCTION_HANDOFF : KB_MISS_INSTRUCTION,
+    };
+  }
   return {
     ok: true,
     chunks: usable.map((m) => ({
@@ -109,6 +146,13 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
     })),
   };
 }
+
+/** Next step after a knowledge-base miss when uncertainty does NOT escalate (see kbSearchTool). */
+export const KB_MISS_INSTRUCTION =
+  'Nichts Passendes gefunden. Falls du noch keine zweite Suche mit anderen Begriffen versucht hast, versuche jetzt genau eine. Sonst: sage ehrlich, dass du dazu keine Information hast, und biete im selben Satz von dir aus an, das Anliegen aufzunehmen (create_ticket), damit sich ein Mitarbeiter meldet — warte nicht, bis der Anrufer danach fragt.';
+/** Next step after a miss when uncertainty escalates (handoff on, threshold > 0). */
+export const KB_MISS_INSTRUCTION_HANDOFF =
+  'Nichts Passendes gefunden. Falls du noch keine zweite Suche mit anderen Begriffen versucht hast, versuche jetzt genau eine. Sonst: antworte NICHT inhaltlich, sage ehrlich, dass du das gerade nicht beantworten kannst, und rufe im selben Zug handoff_human mit reason="low_confidence" auf — das Werkzeug sagt dir danach, ob weitergeleitet wird oder du einen Rückruf aufnimmst. Warte nicht, bis der Anrufer nach einem Mitarbeiter fragt.';
 
 /**
  * Ids of this org's image sources, resolved once per call and memoised on the
@@ -141,8 +185,36 @@ const createTicketArgsSchema = z.object({
   name: z.string().max(200).optional(),
   callback_number: z.string().max(50).optional(),
   email: z.string().max(200).optional(),
+  /** Spell-back confirmation flag — required whenever email is set (see below). */
+  email_confirmed: z.boolean().optional(),
   company: z.string().max(200).optional(),
 });
+
+/**
+ * Sent back when create_ticket carries an unconfirmed e-mail: the model has
+ * to spell the address back, get a yes, and call again. Nothing is written
+ * before this gate — a mis-heard address must never reach contacts.email
+ * (replies would go to a stranger).
+ */
+export const EMAIL_UNCONFIRMED_ERROR =
+  'E-Mail-Adresse noch nicht bestätigt: wiederhole sie dem Anrufer buchstabiert, warte auf sein Ja und rufe create_ticket danach erneut auf (mit email_confirmed=true). Ohne E-Mail-Adresse darfst du das Ticket jederzeit anlegen.';
+
+/**
+ * A confirmed address that is still not a valid e-mail (umlaut, blank, missing
+ * @ or TLD): the caller must not hear "aufgenommen" while nothing was stored
+ * (review 2026-09-03). Umlauts are deliberately NOT transliterated — guessing
+ * ae/oe/ue would produce a plausible but wrong address.
+ */
+export const EMAIL_INVALID_ERROR =
+  'Die bestätigte E-Mail-Adresse ist so nicht gültig (z. B. Umlaut, Leerzeichen, fehlendes @ oder fehlende Endung wie .de). Umlaute werden in E-Mail-Adressen meist als ae/oe/ue geschrieben. Lass die Adresse noch einmal buchstabieren, bestätige sie erneut und rufe create_ticket danach noch einmal auf — oder lege das Ticket ohne E-Mail-Adresse an.';
+
+/** Appended to the success instruction when the loop guard dropped the address. */
+export const EMAIL_DROPPED_NOTE =
+  ' Die E-Mail-Adresse wurde NICHT gespeichert, weil sie nicht bestätigt werden konnte — sage dem Anrufer kurz, dass wir ihn über die anderen Angaben erreichen.';
+
+/** Spoken confirmation after a successful create_ticket — deliberately id-free. */
+export const TICKET_CREATED_INSTRUCTION =
+  'Das Anliegen ist als Ticket aufgenommen. Bestätige das dem Anrufer in einem Satz — nenne KEINE Ticketnummer, Kennung oder Referenz.';
 
 /**
  * The spoken instruction fragment for a callback-ticket flow ("erfrage Name
@@ -158,16 +230,6 @@ export function callbackIntakeStep(fields: IntakeField[]): string {
 }
 
 /**
- * Model-transcribed from speech: only a syntactically valid address may ever
- * reach contacts.email (an invalid value would break replies). Invalid input
- * drops the email but must NOT fail the whole ticket.
- */
-function validEmailOrUndefined(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return z.email().safeParse(value).success ? value.toLowerCase() : undefined;
-}
-
-/**
  * The conversation IS the ticket: set subject, fill contact gaps from what the
  * caller said, and add a structured system message so agents see the intake at
  * a glance. Post-call classify/extract refines priority afterwards.
@@ -176,7 +238,34 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
   const parsed = createTicketArgsSchema.safeParse(rawArgs);
   if (!parsed.success) return { ok: false, error: 'invalid arguments' };
   const args = parsed.data;
-  const email = validEmailOrUndefined(args.email);
+  // Spell-back gate BEFORE any write (owner test 2026-09-03: a mis-heard
+  // address was stored). email_confirmed is model-asserted; two things make it
+  // more than a promise: (1) after a refusal the confirmed retry only counts if
+  // the caller spoke in between (callerTurns advanced — a silent immediate
+  // retry with the flag flipped is refused again), (2) a syntactically invalid
+  // address is refused too instead of silently dropped. Both are capped: after
+  // EMAIL_GATE_MAX_REFUSALS the ticket goes through WITHOUT the address so a
+  // stubborn model can never loop the caller forever.
+  const rawEmail = args.email?.trim() || undefined;
+  let email: string | undefined;
+  let emailDropped = false;
+  if (rawEmail) {
+    const gate = ctx.emailGate;
+    const callerSpokeSinceRefusal =
+      gate.refusedAtTurn === null || ctx.callerTurns > gate.refusedAtTurn;
+    const confirmed = args.email_confirmed === true && callerSpokeSinceRefusal;
+    const valid = z.email().safeParse(rawEmail).success;
+    if (!confirmed || !valid) {
+      gate.refusals += 1;
+      gate.refusedAtTurn = ctx.callerTurns;
+      if (gate.refusals < EMAIL_GATE_MAX_REFUSALS) {
+        return { ok: false, error: confirmed ? EMAIL_INVALID_ERROR : EMAIL_UNCONFIRMED_ERROR };
+      }
+      emailDropped = true;
+    } else {
+      email = rawEmail.toLowerCase();
+    }
+  }
 
   // status='pending' (one-queue principle, 0018): every promised callback —
   // also from the intake/suppressed flows that never flip mode — is visible in
@@ -266,7 +355,15 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     processing_state: null,
   });
 
-  return { ok: true, ticket_ref: ctx.conversationId };
+  // No id in the output: the old ticket_ref (a UUID) was read aloud verbatim
+  // to the caller (owner test 2026-09-03). The conversation id is server truth
+  // the model never needs.
+  return {
+    ok: true,
+    instruction: emailDropped
+      ? TICKET_CREATED_INSTRUCTION + EMAIL_DROPPED_NOTE
+      : TICKET_CREATED_INSTRUCTION,
+  };
 }
 
 const handoffArgsSchema = z.object({

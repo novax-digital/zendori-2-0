@@ -352,9 +352,12 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
       if (!contactRes.error && contact) {
         const patch: Record<string, string> = {};
         if (extraction.contact.name && !contact.name) patch.name = extraction.contact.name;
-        if (extraction.contact.email && !contact.email) {
-          patch.email = extraction.contact.email.toLowerCase();
-        }
+        // NO e-mail gap-fill for voice (review 2026-09-03, owner defect #2): the
+        // transcript is raw ASR text — a mis-heard address the caller rejected
+        // during the spell-back would be extracted and stored here anyway. The
+        // only trusted e-mail source for a call is create_ticket's confirmed
+        // path, which already wrote contacts.email before this job runs; an
+        // empty column at this point means the address was never confirmed.
         if (extraction.contact.company && !companyColumnMissing && !contact.company) {
           patch.company = extraction.contact.company;
         }
