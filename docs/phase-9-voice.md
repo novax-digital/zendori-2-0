@@ -42,6 +42,31 @@ DB-Trigger erzwingen Typ-Match bei der Kanal-Zuweisung und Typ-Unveränderlichke
 solange Kanäle zugewiesen sind. Der Dispatch fällt bei Alt-Daten (Text-Agent auf
 Voice-Kanal) auf den neutralen Intake-Modus zurück.
 
+### Sicherheits-Schwellwert (0–1) — auch für Voice
+
+`agents.confidence_threshold` (dieselbe Spalte wie beim Text-Agenten, Default 0.7) steuert
+jetzt auch den Voice-Agenten. Im UI erscheint das Feld für Voice nur im Modus **Autopilot** —
+in „Reine Annahme" wird nichts beantwortet, also gibt es nichts zu regeln (der gespeicherte
+Wert bleibt beim Moduswechsel erhalten, Render-Marker `thresholdRendered`).
+
+Wirkungsweise (Unterschied zum Text-Pfad, bewusst):
+
+- **Text:** das Modell liefert eine `confidence` im Draft-JSON, der Worker vergleicht sie in
+  Code gegen den Schwellwert (`process-message.ts`).
+- **Voice:** ein Live-Gespräch hat keinen Entwurf, den man abfangen könnte — der Wert wird in
+  den Session-Prompt injiziert (`lowConfidenceRule` in `session-config.ts`), inklusive
+  derselben Anker-Skala wie im Draft-Prompt (0.9–1.0 / 0.7–0.89 / 0.4–0.69 / 0.0–0.39). Das
+  Modell bewertet sich selbst und übergibt unterhalb des Werts per `handoff_human`
+  (`reason="low_confidence"`). Das ist eine Modell-Regel, keine Code-Garantie — die harten
+  Garantien bleiben unverändert: `handoffTool` unterdrückt `low_confidence` bei
+  `handoff_enabled=false` serverseitig, und kb_search liefert nur, was die Wissensdatenbank
+  wirklich hergibt.
+
+Randfälle: **0** = „übergib nie allein wegen Unsicherheit" (eigene Prompt-Formulierung statt
+eines nie erfüllbaren „unter 0"); **Übergabe-Schalter aus** = derselbe Schwellwert, aber statt
+`handoff_human` sagt der Agent ehrlich, dass er es nicht sicher weiß, und bietet
+`create_ticket` an.
+
 ## Kanal-Einstellungen (Settings → Kanäle → Voice)
 
 - **Begrüßung (Welcome Message)** — wird wörtlich per `force_message` gesprochen

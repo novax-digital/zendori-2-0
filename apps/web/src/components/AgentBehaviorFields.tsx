@@ -5,8 +5,12 @@ import type { AgentKind, AgentMode, IntakeField } from '@zendori/core';
 
 // Kind/mode/threshold interplay for the agent forms (0015):
 //   · Voice agents offer only "Reine Annahme" and "Autopilot" — no drafts on a
-//     live call — and no confidence threshold (there is no draft gate to tune).
-//   · Text agents keep all three modes + the threshold.
+//     live call.
+//   · Text agents keep all three modes.
+//   · The confidence threshold steers when the agent stops answering and hands
+//     off. It has no meaning in "Reine Annahme" (nothing is answered), so voice
+//     shows it only in autopilot; text keeps showing it in every mode (it also
+//     gates draft_only handoffs).
 // Kind is chosen at creation and immutable afterwards (DB guard) — the edit
 // form shows it as static text.
 
@@ -68,6 +72,7 @@ export default function AgentBehaviorFields({
     : fallbackMode;
   // Mode is controlled: the handoff toggle only renders for non-intake modes.
   const [mode, setMode] = useState<AgentMode>(effectiveDefault);
+  const showThreshold = kind === 'text' || mode === 'autopilot';
 
   return (
     <>
@@ -173,9 +178,11 @@ export default function AgentBehaviorFields({
           </p>
         </div>
       ) : null}
-      {kind === 'text' ? (
+      {showThreshold ? (
         <div>
           <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1)</label>
+          {/* render-time truth: a form without the field must not reset the stored value */}
+          <input type="hidden" name="thresholdRendered" value="1" />
           <input
             id={`${idPrefix}-threshold`}
             name="confidenceThreshold"
@@ -188,9 +195,9 @@ export default function AgentBehaviorFields({
             style={{ maxWidth: '10rem' }}
           />
           <p className="hint">
-            Unterhalb dieses Werts übergibt der Agent an einen Menschen (sofern „Übergabe an
-            Menschen bei Unsicherheit" aktiv ist) — auch im Modus „Nur Entwürfe". Im Autopilot
-            bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.
+            {kind === 'voice'
+              ? 'Der Agent schätzt im Gespräch selbst ein, wie sicher er sich ist (0–1). Liegt er unter diesem Wert, antwortet er nicht inhaltlich, sondern übergibt an einen Menschen — bzw. nimmt das Anliegen als Rückruf auf, wenn „Übergabe an Menschen bei Unsicherheit" aus ist oder kein Live-Transfer möglich ist. Höher = vorsichtiger, 0 = übergibt nie wegen Unsicherheit.'
+              : 'Unterhalb dieses Werts übergibt der Agent an einen Menschen (sofern „Übergabe an Menschen bei Unsicherheit" aktiv ist) — auch im Modus „Nur Entwürfe". Im Autopilot bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.'}
           </p>
         </div>
       ) : null}

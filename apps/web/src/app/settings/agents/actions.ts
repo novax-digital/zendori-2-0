@@ -64,17 +64,24 @@ const agentFieldsSchema = z.object({
   name: z.string().min(2).max(80),
   identity: z.string().max(8000),
   mode: agentModeSchema,
-  confidenceThreshold: z.coerce.number().min(0).max(1),
+  /**
+   * undefined = the form did not render the field (voice + "Reine Annahme"):
+   * keep the stored value instead of resetting it to the default — same
+   * render-time-truth rule as the 0027 intake checkboxes.
+   */
+  confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
 });
 
 function parseAgentFields(formData: FormData) {
+  const thresholdRendered = formData.get('thresholdRendered') != null;
   return agentFieldsSchema.safeParse({
     org: formData.get('org'),
     name: textField(formData.get('name')),
     identity: textField(formData.get('identity')),
     mode: textField(formData.get('mode')),
-    // Voice agents post no threshold field (hidden in the UI) — default applies.
-    confidenceThreshold: textField(formData.get('confidenceThreshold')) || '0.7',
+    confidenceThreshold: thresholdRendered
+      ? textField(formData.get('confidenceThreshold')) || '0.7'
+      : undefined,
   });
 }
 
@@ -118,7 +125,8 @@ export async function createAgent(formData: FormData): Promise<void> {
       identity: identity === '' ? null : identity,
       kind,
       mode,
-      confidence_threshold: confidenceThreshold,
+      // absent (voice intake_only): let the column default (0.7) apply
+      ...(confidenceThreshold === undefined ? {} : { confidence_threshold: confidenceThreshold }),
       handoff_enabled: handoffEnabled,
       // 0027: only voice forms render the checkboxes (marker = render-time
       // truth) — text agents and stale forms keep the column default rather
@@ -206,7 +214,8 @@ export async function updateAgent(formData: FormData): Promise<void> {
       name,
       identity: identity === '' ? null : identity,
       mode,
-      confidence_threshold: confidenceThreshold,
+      // absent (voice intake_only): keep whatever is stored
+      ...(confidenceThreshold === undefined ? {} : { confidence_threshold: confidenceThreshold }),
       is_active: isActive,
       // 0018: intake_only forces the toggle on (no UI checkbox in that mode)
       handoff_enabled: mode === 'intake_only' ? true : formData.get('handoffEnabled') === 'on',

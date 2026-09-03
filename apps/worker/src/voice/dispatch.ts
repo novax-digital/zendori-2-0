@@ -21,6 +21,20 @@ const RING_SWEEP_INTERVAL_MS = 3_000;
 const RING_MISSED_AFTER_MS = 30_000;
 const DEFAULT_MAX_CONCURRENT_CALLS = 10;
 const RESUBSCRIBE_DELAY_MS = 5_000;
+/** agents.confidence_threshold column default (0011) — used when unreadable. */
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
+
+/**
+ * numeric(0..1) comes back as a string over PostgREST. Anything unparseable or
+ * out of range falls back to the column default rather than silently making the
+ * agent maximally cautious (1) or maximally chatty (0).
+ */
+function parseThreshold(value: number | string | undefined): number {
+  const n = typeof value === 'string' ? Number(value) : value;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1
+    ? n
+    : DEFAULT_CONFIDENCE_THRESHOLD;
+}
 
 const dispatchPayloadSchema = z.object({
   voice_call_id: z.uuid(),
@@ -210,6 +224,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       identity: null,
       knowledgeBaseIds: null,
       handoffEnabled: true,
+      confidenceThreshold: DEFAULT_CONFIDENCE_THRESHOLD,
       intakeFields: ['name', 'phone'],
     };
     let allowTransfer = false;
@@ -218,14 +233,14 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       // kind is 0015 — degrade select-by-select while migrations are pending.
       let agentRes = await supabase
         .from('agents')
-        .select('identity, mode, is_active, kind, handoff_enabled, intake_fields')
+        .select('identity, mode, is_active, kind, handoff_enabled, intake_fields, confidence_threshold')
         .eq('id', agentId)
         .maybeSingle();
       if (isUndefinedColumn(agentRes.error)) {
         logger.warn({ voiceCallId }, 'agents.intake_fields missing — is migration 0027 applied?');
         agentRes = (await supabase
           .from('agents')
-          .select('identity, mode, is_active, kind, handoff_enabled')
+          .select('identity, mode, is_active, kind, handoff_enabled, confidence_threshold')
           .eq('id', agentId)
           .maybeSingle()) as typeof agentRes;
       }
@@ -233,7 +248,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         logger.warn({ voiceCallId }, 'agents.handoff_enabled missing — is migration 0018 applied?');
         agentRes = (await supabase
           .from('agents')
-          .select('identity, mode, is_active, kind')
+          .select('identity, mode, is_active, kind, confidence_threshold')
           .eq('id', agentId)
           .maybeSingle()) as typeof agentRes;
       }
@@ -242,7 +257,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         logger.warn({ voiceCallId }, 'agents.kind missing — is migration 0015 applied?');
         agentRes = (await supabase
           .from('agents')
-          .select('identity, mode, is_active')
+          .select('identity, mode, is_active, confidence_threshold')
           .eq('id', agentId)
           .maybeSingle()) as typeof agentRes;
       }
@@ -264,6 +279,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         is_active: boolean;
         kind?: string;
         handoff_enabled?: boolean;
+        confidence_threshold?: number | string;
         intake_fields?: unknown;
       } | null;
       if (row && row.kind === 'text') {
@@ -299,6 +315,9 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
           knowledgeBaseIds,
           // pre-0018 rows: default ON = today's behavior
           handoffEnabled: row.handoff_enabled !== false,
+          // numeric(0..1) arrives as a string over PostgREST — coerce, and fall
+          // back to the column default if it is missing or unparseable.
+          confidenceThreshold: parseThreshold(row.confidence_threshold),
           // pre-0027 rows fall back to name+phone inside the sanitizer
           intakeFields: sanitizeIntakeFields(row.intake_fields),
         };

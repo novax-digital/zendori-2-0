@@ -30,6 +30,7 @@ function agentWith(over: Partial<VoiceAgentBehavior> = {}): VoiceAgentBehavior {
     identity: null,
     knowledgeBaseIds: null,
     handoffEnabled: true,
+    confidenceThreshold: 0.7,
     intakeFields: ['name', 'phone'],
     ...over,
   };
@@ -105,6 +106,59 @@ describe('buildSessionConfig intake fields (0027)', () => {
       const tool = session.tools.find((t) => t.name === 'create_ticket');
       expect(tool?.parameters.properties).toHaveProperty('company');
     }
+  });
+});
+
+describe('buildSessionConfig confidence threshold (voice parity)', () => {
+  it('injects the configured threshold into the low-confidence rule', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'answer', confidenceThreshold: 0.85 }),
+      CONTEXT
+    );
+    expect(session.instructions).toContain(
+      'Liegt dein Wert unter 0.85, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf.'
+    );
+    expect(session.instructions).toContain('Bewerte vor jeder inhaltlichen Antwort still für dich');
+  });
+
+  it('formats the threshold without trailing zeros', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'answer', confidenceThreshold: 0.7 }),
+      CONTEXT
+    );
+    expect(session.instructions).toContain('Liegt dein Wert unter 0.7,');
+  });
+
+  it('offers a ticket instead of a handoff when the handoff toggle is off (0018)', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'answer', handoffEnabled: false, confidenceThreshold: 0.6 }),
+      CONTEXT
+    );
+    expect(session.instructions).toContain(
+      'Liegt dein Wert unter 0.6, antworte NICHT inhaltlich und rufe auch NICHT handoff_human auf'
+    );
+  });
+
+  it('threshold 0 means "never hand off just because you are unsure"', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'answer', confidenceThreshold: 0 }),
+      CONTEXT
+    );
+    expect(session.instructions).toContain('Übergib NICHT allein wegen Unsicherheit');
+    expect(session.instructions).not.toContain('Liegt dein Wert unter');
+  });
+
+  it('intake mode has no confidence rule at all (nothing is answered)', () => {
+    const session = buildSessionConfig(
+      CONFIG,
+      agentWith({ mode: 'intake_only', confidenceThreshold: 0.9 }),
+      CONTEXT
+    );
+    expect(session.instructions).not.toContain('Liegt dein Wert unter');
   });
 });
 

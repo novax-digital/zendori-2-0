@@ -24,16 +24,44 @@ Arbeitsweise:
 - Nimm bei Bedarf ein Anliegen strukturiert auf: {intakeStep}fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
 - Wenn das Gespräch erledigt ist: bestätige zuerst vollständig und freundlich, was du getan hast, und rufe DANN end_call auf. Die Verabschiedung („Auf Wiederhören") spricht das System danach automatisch — verabschiede dich nicht selbst, sonst hört der Anrufer sie doppelt. Beende niemals mitten im Satz.`;
 
+// --- confidence threshold (agents.confidence_threshold, voice parity) --------
+// The text pipeline compares a model-reported confidence against the agent's
+// threshold in code (process-message.ts). A realtime call has no draft to gate:
+// the model speaks directly, so the only place the threshold can act is the
+// prompt — the model self-assesses with the SAME anchors the draft prompt uses
+// (packages/ai/src/prompts.ts) and compares against the injected number itself.
+// Soft by nature (a model rule, not a code gate) — the hard guarantees stay
+// where they are: the handoff toggle is enforced in handoffTool, kb_search only
+// returns what the knowledge base actually covers.
+
+/** 0.7 → "0.7", 0.85 → "0.85" (step is 0.05 — two decimals are enough). */
+function formatThreshold(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+const CONFIDENCE_SCALE =
+  'Bewerte vor jeder inhaltlichen Antwort still für dich, wie sicher du dir bist (Skala 0 bis 1): 0.9–1.0 = jede Sachaussage eindeutig durch die Wissensdatenbank gedeckt, oder reine Gesprächsführung ohne Faktenbedarf · 0.7–0.89 = die Kernfrage sicher gedeckt, höchstens Nebenaspekte offen · 0.4–0.69 = nur teilweise gedeckt oder die Quellen sind mehrdeutig · 0.0–0.39 = die eigentliche Frage ist gar nicht gedeckt.';
+
 /**
- * The low_confidence bullet depends on the agent's handoff toggle (0018):
- * enabled → escalate uncertainty to a human; disabled → admit the limit and
- * offer a ticket instead (the tool additionally refuses reason='low_confidence'
- * server-side — the prompt is UX, the tool is the guarantee).
+ * The low_confidence bullet depends on the agent's handoff toggle (0018) and
+ * its confidence threshold: enabled → escalate uncertainty below the threshold
+ * to a human; disabled → admit the limit and offer a ticket instead (the tool
+ * additionally refuses reason='low_confidence' server-side — the prompt is UX,
+ * the tool is the guarantee). Threshold 0 = "never hand off just because you
+ * are unsure": a "below 0" rule would be vacuous, so that case gets its own
+ * wording instead of an unreachable comparison.
  */
-const LOW_CONFIDENCE_HANDOFF_ON =
-  '- Wenn du unsicher bist oder das Anliegen komplex ist, rufe handoff_human mit reason="low_confidence" auf.';
-const LOW_CONFIDENCE_HANDOFF_OFF =
-  '- Wenn du unsicher bist oder das Anliegen komplex ist, rufe NICHT handoff_human auf — sage ehrlich, dass du das gerade nicht beantworten kannst, und biete an, das Anliegen aufzunehmen (create_ticket).';
+function lowConfidenceRule(handoffEnabled: boolean, threshold: number): string {
+  if (threshold <= 0) {
+    return handoffEnabled
+      ? '- Übergib NICHT allein wegen Unsicherheit an einen Menschen. Antworte so gut, wie die Wissensdatenbank es zulässt, und sage nur dann ehrlich „Das kann ich Ihnen gerade nicht sagen", wenn die Quellen wirklich nichts hergeben.'
+      : '- Übergib NICHT wegen Unsicherheit — rufe dafür niemals handoff_human auf. Antworte so gut, wie die Wissensdatenbank es zulässt, und biete sonst an, das Anliegen aufzunehmen (create_ticket).';
+  }
+  const t = formatThreshold(threshold);
+  return handoffEnabled
+    ? `- ${CONFIDENCE_SCALE} Liegt dein Wert unter ${t}, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf. Bei ${t} oder höher antwortest du selbst.`
+    : `- ${CONFIDENCE_SCALE} Liegt dein Wert unter ${t}, antworte NICHT inhaltlich und rufe auch NICHT handoff_human auf — sage ehrlich, dass du das gerade nicht sicher sagen kannst, und biete an, das Anliegen aufzunehmen (create_ticket). Bei ${t} oder höher antwortest du selbst.`;
+}
 
 /** Default escalation topics when the org has not configured its own list. */
 const DEFAULT_ESCALATION_TOPICS = ['Kündigung', 'Beschwerde', 'Anwalt', 'Datenschutz'];
@@ -198,6 +226,12 @@ export interface VoiceAgentBehavior {
   knowledgeBaseIds: string[] | null;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /**
+   * agents.confidence_threshold (0–1): the self-assessed certainty below which
+   * the agent stops answering and hands off / offers a ticket. Same column and
+   * same scale as the text pipeline — see lowConfidenceRule.
+   */
+  confidenceThreshold: number;
   /** 0027: contact fields actively asked before create_ticket (canonical order). */
   intakeFields: IntakeField[];
 }
@@ -229,7 +263,7 @@ export function buildSessionConfig(
       : ANSWER_TEMPLATE.replace('{keywords}', keywordList)
           .replace(
             '{lowConfidenceRule}',
-            agent.handoffEnabled ? LOW_CONFIDENCE_HANDOFF_ON : LOW_CONFIDENCE_HANDOFF_OFF
+            lowConfidenceRule(agent.handoffEnabled, agent.confidenceThreshold)
           )
           .replace('{intakeStep}', fieldsPhrase ? `erfrage ${fieldsPhrase}, ` : '');
   const parts = [
