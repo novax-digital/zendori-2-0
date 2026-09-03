@@ -39,7 +39,11 @@ export interface ToolContext {
    */
   callerTurns: number;
   /** Session-owned, mutable: refusal bookkeeping for the e-mail gate. */
-  emailGate: EmailGateState;
+  emailGate: ConfirmGateState;
+  /** Session-owned, mutable: refusal bookkeeping + identity memo for the callback-number gate. */
+  phoneGate: PhoneGateState;
+  /** Caller id (contacts.phone from SIP From); null = withheld. Steers callback storage. */
+  callerNumber: string | null;
   /**
    * Org business hours (defensively parsed) — the live-transfer gate is
    * evaluated HERE at tool-call time, not at call start, so the mid-call
@@ -62,17 +66,52 @@ export interface ToolContext {
 
 export type ToolResult = { ok: true; [key: string]: unknown } | { ok: false; error: string };
 
-/** E-mail gate state, one per call (created by CallSession, mutated here). */
-export interface EmailGateState {
+/**
+ * Spell-back confirmation gate state, one per call and per field (created by
+ * CallSession, mutated here). Used for the e-mail address and the callback
+ * number — both are model-transcribed from speech.
+ */
+export interface ConfirmGateState {
   refusals: number;
   /** callerTurns at the last refusal — a confirmed retry needs a later turn. */
   refusedAtTurn: number | null;
 }
-export function newEmailGateState(): EmailGateState {
+export function newConfirmGateState(): ConfirmGateState {
   return { refusals: 0, refusedAtTurn: null };
 }
-/** After this many refusals the ticket goes through WITHOUT the address (loop guard). */
-export const EMAIL_GATE_MAX_REFUSALS = 3;
+/** Phone gate additionally remembers a phone THIS call wrote as the contact identity. */
+export interface PhoneGateState extends ConfirmGateState {
+  /** contacts.phone value this call gap-filled for an anonymous caller (correctable in-call). */
+  identityPhoneWritten: string | null;
+}
+export function newPhoneGateState(): PhoneGateState {
+  return { refusals: 0, refusedAtTurn: null, identityPhoneWritten: null };
+}
+/** After this many refusals the ticket goes through WITHOUT the field (loop guard). */
+export const CONFIRM_GATE_MAX_REFUSALS = 3;
+
+/**
+ * Shared gate logic: a value counts as confirmed only with the flag AND a
+ * caller turn after the last refusal; invalid values are refused as well.
+ * Returns the refusal error, or null when the value may be used / dropped.
+ */
+function runConfirmGate(
+  gate: ConfirmGateState,
+  callerTurns: number,
+  confirmedFlag: boolean,
+  valid: boolean,
+  errors: { unconfirmed: string; invalid: string }
+): { error: string } | { drop: boolean } {
+  const callerSpokeSinceRefusal = gate.refusedAtTurn === null || callerTurns > gate.refusedAtTurn;
+  const confirmed = confirmedFlag && callerSpokeSinceRefusal;
+  if (confirmed && valid) return { drop: false };
+  gate.refusals += 1;
+  gate.refusedAtTurn = callerTurns;
+  if (gate.refusals < CONFIRM_GATE_MAX_REFUSALS) {
+    return { error: confirmed ? errors.invalid : errors.unconfirmed };
+  }
+  return { drop: true };
+}
 
 const KB_SNIPPET_MAX_CHARS = 800;
 
@@ -184,6 +223,10 @@ const createTicketArgsSchema = z.object({
   description: z.string().min(1).max(4000),
   name: z.string().max(200).optional(),
   callback_number: z.string().max(50).optional(),
+  /** Spell-back confirmation flag for callback_number (same gate as the e-mail). */
+  callback_confirmed: z.boolean().optional(),
+  /** Caller confirmed "call me on the number I am calling from" — clears a stale callback_phone. */
+  use_caller_number: z.boolean().optional(),
   email: z.string().max(200).optional(),
   /** Spell-back confirmation flag — required whenever email is set (see below). */
   email_confirmed: z.boolean().optional(),
@@ -208,6 +251,13 @@ export const EMAIL_UNCONFIRMED_ERROR =
 export const EMAIL_INVALID_ERROR =
   'Die bestätigte E-Mail-Adresse ist so nicht gültig (z. B. Umlaut, Leerzeichen, fehlendes @ oder fehlende Endung wie .de). Umlaute werden in E-Mail-Adressen meist als ae/oe/ue geschrieben. Lass die Adresse noch einmal buchstabieren, bestätige sie erneut und rufe create_ticket danach noch einmal auf — oder lege das Ticket ohne E-Mail-Adresse an.';
 
+export const PHONE_UNCONFIRMED_ERROR =
+  'Rückrufnummer noch nicht bestätigt: wiederhole sie dem Anrufer in Zifferngruppen, warte auf sein Ja und rufe create_ticket danach erneut auf (mit callback_confirmed=true). Gilt die Anrufnummer, setze stattdessen use_caller_number=true und keine callback_number.';
+export const PHONE_INVALID_ERROR =
+  'Die bestätigte Rückrufnummer ist keine gültige Telefonnummer (zu kurz oder keine Ziffern). Lass sie noch einmal nennen, wiederhole sie in Zifferngruppen, bestätige sie erneut und rufe create_ticket danach noch einmal auf — oder lege das Ticket ohne Rückrufnummer an.';
+export const PHONE_DROPPED_NOTE =
+  ' Die Rückrufnummer wurde NICHT gespeichert, weil sie nicht bestätigt werden konnte — sage dem Anrufer kurz, dass wir ihn über die anderen Angaben erreichen.';
+
 /** Appended to the success instruction when the loop guard dropped the address. */
 export const EMAIL_DROPPED_NOTE =
   ' Die E-Mail-Adresse wurde NICHT gespeichert, weil sie nicht bestätigt werden konnte — sage dem Anrufer kurz, dass wir ihn über die anderen Angaben erreichen.';
@@ -230,9 +280,61 @@ export function callbackIntakeStep(fields: IntakeField[]): string {
 }
 
 /**
+ * Spoken numbers arrive with spaces, slashes or dashes ("0170 / 123-4567");
+ * store and compare them compact. "00…" becomes "+…"; anything without at
+ * least four digits is not a number and is dropped.
+ */
+export function normalizePhone(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  // Written trunk-zero notation "+49 (0) 170 …": drop the "(0)" (an area code
+  // in parentheses like "(030)" is untouched).
+  let compact = raw.replace(/\(\s*0\s*\)/g, '').replace(/[^\d+]/g, '');
+  if (compact.startsWith('00')) compact = `+${compact.slice(2)}`;
+  compact = compact.replace(/(?!^)\+/g, '');
+  // Spoken trunk zero after the country code ("plus 49, null 170 …"): German
+  // national numbers never start with 0, so it is always stray (+49 only —
+  // e.g. Italian +39 0… landlines keep their 0).
+  compact = compact.replace(/^\+490/, '+49');
+  return /^\+?\d{4,}$/.test(compact) ? compact : undefined;
+}
+
+/**
+ * Country calling code of the org's own E.164 number ("+4930…" → "+49"), the
+ * same prefix heuristic HubSpot's stripCountryCode uses; +49 fallback.
+ */
+function countryCodeOf(channelNumber: string | undefined): string {
+  return channelNumber?.match(/^\+(1|7|\d\d)/)?.[0] ?? '+49';
+}
+
+/**
+ * National "0…" → E.164 with the channel's country code. contacts.phone is
+ * matched by the voice webhook with exact equality against the SIP From
+ * number (always "+…"), so anything stored there MUST be E.164 or the caller
+ * is never recognised again (review 2026-09-03).
+ */
+export function toE164(number: string, channelNumber: string | undefined): string {
+  if (number.startsWith('+')) return number;
+  if (number.startsWith('0')) return `${countryCodeOf(channelNumber)}${number.slice(1)}`;
+  return number;
+}
+
+/** "+491701234567" and "0170 1234567" are the same number (for the channel's country). */
+export function samePhone(a: string, b: string, channelNumber: string | undefined): boolean {
+  const na = normalizePhone(a);
+  const nb = normalizePhone(b);
+  if (!na || !nb) return false;
+  return toE164(na, channelNumber) === toE164(nb, channelNumber);
+}
+
+/**
  * The conversation IS the ticket: set subject, fill contact gaps from what the
  * caller said, and add a structured system message so agents see the intake at
  * a glance. Post-call classify/extract refines priority afterwards.
+ *
+ * Callback number (0029): contacts.phone is the caller id and stays the
+ * matching key — a stated number that differs goes to contacts.callback_phone
+ * (latest statement wins: the caller explicitly says where to reach them). An
+ * anonymous caller's stated number fills the empty phone instead.
  */
 export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Promise<ToolResult> {
   const parsed = createTicketArgsSchema.safeParse(rawArgs);
@@ -250,21 +352,43 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
   let email: string | undefined;
   let emailDropped = false;
   if (rawEmail) {
-    const gate = ctx.emailGate;
-    const callerSpokeSinceRefusal =
-      gate.refusedAtTurn === null || ctx.callerTurns > gate.refusedAtTurn;
-    const confirmed = args.email_confirmed === true && callerSpokeSinceRefusal;
-    const valid = z.email().safeParse(rawEmail).success;
-    if (!confirmed || !valid) {
-      gate.refusals += 1;
-      gate.refusedAtTurn = ctx.callerTurns;
-      if (gate.refusals < EMAIL_GATE_MAX_REFUSALS) {
-        return { ok: false, error: confirmed ? EMAIL_INVALID_ERROR : EMAIL_UNCONFIRMED_ERROR };
-      }
-      emailDropped = true;
-    } else {
-      email = rawEmail.toLowerCase();
-    }
+    const verdict = runConfirmGate(
+      ctx.emailGate,
+      ctx.callerTurns,
+      args.email_confirmed === true,
+      z.email().safeParse(rawEmail).success,
+      { unconfirmed: EMAIL_UNCONFIRMED_ERROR, invalid: EMAIL_INVALID_ERROR }
+    );
+    if ('error' in verdict) return { ok: false, error: verdict.error };
+    if (verdict.drop) emailDropped = true;
+    else email = rawEmail.toLowerCase();
+  }
+  // Same gate for a stated callback number (review 2026-09-03: for an anonymous
+  // caller a mis-heard number would become the contact identity). A number
+  // equal to the caller id needs no confirmation — it is the caller id.
+  const rawCallback = args.callback_number?.trim() || undefined;
+  const normalizedCallback = normalizePhone(rawCallback);
+  const channelNumber = ctx.channelConfig.phoneNumber;
+  let callbackNumber: string | undefined;
+  let callbackDropped = false;
+  let useCallerNumber = args.use_caller_number === true;
+  if (
+    normalizedCallback &&
+    ctx.callerNumber &&
+    samePhone(normalizedCallback, ctx.callerNumber, channelNumber)
+  ) {
+    useCallerNumber = true;
+  } else if (rawCallback) {
+    const verdict = runConfirmGate(
+      ctx.phoneGate,
+      ctx.callerTurns,
+      args.callback_confirmed === true,
+      normalizedCallback !== undefined,
+      { unconfirmed: PHONE_UNCONFIRMED_ERROR, invalid: PHONE_INVALID_ERROR }
+    );
+    if ('error' in verdict) return { ok: false, error: verdict.error };
+    if (verdict.drop) callbackDropped = true;
+    else callbackNumber = toE164(normalizedCallback!, channelNumber);
   }
 
   // status='pending' (one-queue principle, 0018): every promised callback —
@@ -286,19 +410,30 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     .maybeSingle();
   const contactId = (convRow as { contact_id: string | null } | null)?.contact_id;
   const company = args.company?.trim();
-  if (contactId && (args.name || email || company)) {
+  // What the ticket line + contact patch end up saying about the callback.
+  let callbackLine: string | null = null;
+  if (contactId && (args.name || email || company || callbackNumber || useCallerNumber)) {
+    // Column-skew chain: callback_phone is 0029, company is 0027.
     let contactRes = await ctx.supabase
       .from('contacts')
-      .select('name, email, company')
+      .select('name, email, phone, company, callback_phone')
       .eq('org_id', ctx.orgId)
       .eq('id', contactId)
       .maybeSingle();
-    const companyColumnMissing = isMissingColumnError(contactRes.error);
-    if (companyColumnMissing) {
-      // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    const callbackColumnMissing = isMissingColumnError(contactRes.error);
+    if (callbackColumnMissing) {
       contactRes = (await ctx.supabase
         .from('contacts')
-        .select('name, email')
+        .select('name, email, phone, company')
+        .eq('org_id', ctx.orgId)
+        .eq('id', contactId)
+        .maybeSingle()) as typeof contactRes;
+    }
+    const companyColumnMissing = isMissingColumnError(contactRes.error);
+    if (companyColumnMissing) {
+      contactRes = (await ctx.supabase
+        .from('contacts')
+        .select('name, email, phone')
         .eq('org_id', ctx.orgId)
         .eq('id', contactId)
         .maybeSingle()) as typeof contactRes;
@@ -306,24 +441,59 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     const contact = contactRes.data as {
       name: string | null;
       email: string | null;
+      phone: string | null;
       company?: string | null;
+      callback_phone?: string | null;
     } | null;
     // Gap-only semantics need the current values: a failed read must never be
     // treated as an empty contact (that would overwrite existing data).
     if (!contactRes.error && contact) {
-      const patch: Record<string, string> = {};
+      const patch: Record<string, string | null> = {};
       if (args.name && !contact.name) patch.name = args.name;
       if (email && !contact.email) patch.email = email;
       if (company && !companyColumnMissing && !contact.company) patch.company = company;
+      // The caller id applies → a callback_phone from an earlier call is stale
+      // (the sidebar and HubSpot would otherwise contradict the ticket line).
+      const clearStaleCallback = () => {
+        if (!callbackColumnMissing && contact.callback_phone) patch.callback_phone = null;
+      };
+      const ownIdentityWrite =
+        ctx.phoneGate.identityPhoneWritten !== null &&
+        contact.phone === ctx.phoneGate.identityPhoneWritten;
+      if (callbackNumber) {
+        if (!contact.phone || ownIdentityWrite) {
+          // anonymous caller: the stated number IS the contact's number — and a
+          // number THIS call wrote may be corrected by the same call.
+          patch.phone = callbackNumber;
+          ctx.phoneGate.identityPhoneWritten = callbackNumber;
+          callbackLine = `Rückruf: ${callbackNumber}`;
+        } else if (samePhone(callbackNumber, contact.phone, channelNumber)) {
+          clearStaleCallback();
+          callbackLine = `Rückruf unter Anrufnummer ${contact.phone}`;
+        } else {
+          if (!callbackColumnMissing && contact.callback_phone !== callbackNumber) {
+            patch.callback_phone = callbackNumber;
+          }
+          callbackLine = `Rückruf: ${callbackNumber} (abweichend von Anrufnummer ${contact.phone})`;
+        }
+      } else if (contact.phone) {
+        if (useCallerNumber) clearStaleCallback();
+        callbackLine = `Rückruf unter Anrufnummer ${contact.phone}`;
+      }
       if (Object.keys(patch).length > 0) {
         const { error: patchError } = await ctx.supabase
           .from('contacts')
           .update(patch)
           .eq('org_id', ctx.orgId)
           .eq('id', contactId);
-        if (patchError && isMissingColumnError(patchError) && patch.company) {
-          // Pre-0027 skew: drop company so name/email still land.
+        if (
+          patchError &&
+          isMissingColumnError(patchError) &&
+          ('company' in patch || 'callback_phone' in patch)
+        ) {
+          // Pre-0027/0029 skew: drop the newer columns so the rest still lands.
           delete patch.company;
+          delete patch.callback_phone;
           if (Object.keys(patch).length > 0) {
             await ctx.supabase
               .from('contacts')
@@ -335,13 +505,24 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
       }
     }
   }
+  if (!callbackLine) {
+    // No contact row to consult (or nothing stated): fall back to what the
+    // session knows about the caller id.
+    if (callbackNumber && ctx.callerNumber) {
+      callbackLine = `Rückruf: ${callbackNumber} (abweichend von Anrufnummer ${ctx.callerNumber})`;
+    } else if (callbackNumber) {
+      callbackLine = `Rückruf: ${callbackNumber}`;
+    } else if (ctx.callerNumber) {
+      callbackLine = `Rückruf unter Anrufnummer ${ctx.callerNumber}`;
+    }
+  }
 
   const lines = [
     `Ticket aufgenommen: ${args.subject}`,
     args.description,
     ...(args.name ? [`Name: ${args.name}`] : []),
     ...(company ? [`Unternehmen: ${company}`] : []),
-    ...(args.callback_number ? [`Rückruf: ${args.callback_number}`] : []),
+    ...(callbackLine ? [callbackLine] : []),
     ...(email ? [`E-Mail: ${email}`] : []),
   ];
   await ctx.supabase.from('messages').insert({
@@ -360,9 +541,10 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
   // the model never needs.
   return {
     ok: true,
-    instruction: emailDropped
-      ? TICKET_CREATED_INSTRUCTION + EMAIL_DROPPED_NOTE
-      : TICKET_CREATED_INSTRUCTION,
+    instruction:
+      TICKET_CREATED_INSTRUCTION +
+      (emailDropped ? EMAIL_DROPPED_NOTE : '') +
+      (callbackDropped ? PHONE_DROPPED_NOTE : ''),
   };
 }
 

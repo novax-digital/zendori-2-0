@@ -449,6 +449,8 @@ const contactUpdateSchema = z.object({
   name: z.string().max(200),
   email: z.string().max(200),
   phone: z.string().max(50),
+  /** 0029: stated callback number when it differs from phone. */
+  callbackPhone: z.string().max(50),
   company: z.string().max(200),
 });
 
@@ -464,12 +466,13 @@ export async function updateContact(formData: FormData): Promise<void> {
     name: textField(formData.get('name')),
     email: textField(formData.get('email')),
     phone: textField(formData.get('phone')),
+    callbackPhone: textField(formData.get('callbackPhone')),
     company: textField(formData.get('company')),
   });
   if (!parsed.success) {
     redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
   }
-  const { org, conversationId, contactId, name, phone, company } = parsed.data;
+  const { org, conversationId, contactId, name, phone, callbackPhone, company } = parsed.data;
   const base: InboxRedirect = {
     org,
     c: conversationId,
@@ -502,28 +505,40 @@ export async function updateContact(formData: FormData): Promise<void> {
   if ((convRow as { contact_id: string | null } | null)?.contact_id !== contactId) {
     redirect(inboxUrl({ ...base, error: errorText }));
   }
+  const basePatch = {
+    name: name === '' ? null : name,
+    email: email === '' ? null : email,
+    phone: phone === '' ? null : phone,
+  };
   let { data, error } = await supabase
     .from('contacts')
     .update({
-      name: name === '' ? null : name,
-      email: email === '' ? null : email,
-      phone: phone === '' ? null : phone,
+      ...basePatch,
       company: company === '' ? null : company,
+      callback_phone: callbackPhone === '' ? null : callbackPhone,
     })
     .eq('org_id', org)
     .eq('id', contactId)
     .select('id');
-  const skewCode = (error as { code?: string } | null)?.code;
-  if (error && (skewCode === '42703' || skewCode === 'PGRST204')) {
-    // contacts.company not migrated yet (web ahead of 0027) — keep the other
-    // edits working; the company value is dropped until the migration lands.
+  const isSkew = (e: unknown) => {
+    const code = (e as { code?: string } | null)?.code;
+    return code === '42703' || code === 'PGRST204';
+  };
+  if (error && isSkew(error)) {
+    // contacts.callback_phone not migrated yet (web ahead of 0029) — keep the
+    // other edits working; the callback value is dropped until it lands.
     ({ data, error } = await supabase
       .from('contacts')
-      .update({
-        name: name === '' ? null : name,
-        email: email === '' ? null : email,
-        phone: phone === '' ? null : phone,
-      })
+      .update({ ...basePatch, company: company === '' ? null : company })
+      .eq('org_id', org)
+      .eq('id', contactId)
+      .select('id'));
+  }
+  if (error && isSkew(error)) {
+    // contacts.company not migrated yet either (web ahead of 0027).
+    ({ data, error } = await supabase
+      .from('contacts')
+      .update(basePatch)
       .eq('org_id', org)
       .eq('id', contactId)
       .select('id'));

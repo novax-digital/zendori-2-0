@@ -166,6 +166,12 @@ export const contactSchema = z.object({
   wa_id: z.string().nullable(),
   /** Company/organisation of the contact (0027). */
   company: z.string().nullable(),
+  /**
+   * Callback number stated by the caller when it differs from `phone` (0029).
+   * `phone` stays the caller identity used for matching; this is where a
+   * "please call me back on …" number lives.
+   */
+  callback_phone: z.string().nullable(),
   external_ids: z.record(z.string(), z.unknown()),
   created_at: z.string(),
 });

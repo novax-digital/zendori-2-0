@@ -2,11 +2,12 @@
 //   email  → GET /contacts/{email}?idProperty=email (200 use / 404 create / 409 re-GET)
 //   phone  → search phone EQ, retry with stripCountryCode(), else create
 //   neither → error (a HubSpot ticket needs a contact association)
-// contactProperties maps email, firstname/lastname (name split), phone and
+// contactProperties maps email, firstname/lastname (name split), phone,
 // company (standard HubSpot contact property, 0027 — same mapping as the
-// legacy bridge). Properties are sent on CREATE; a matched existing HubSpot
-// contact gets exactly ONE gap-only patch: an empty company is filled from
-// Zendori, an existing HubSpot company is never overwritten (CRM data wins).
+// legacy bridge) and the stated callback number → mobilephone (0029).
+// Properties are sent on CREATE; a matched existing HubSpot contact gets
+// exactly ONE gap-only patch: empty company/mobilephone are filled from
+// Zendori, existing HubSpot values are never overwritten (CRM data wins).
 import { isSuccess, parseJson, request, requestFailed, type HubSpotResponse } from './client.js';
 import {
   objectResponseSchema,
@@ -55,34 +56,51 @@ function contactProperties(
   if (resolved.phone) props.phone = resolved.phone;
   const company = trimOrNull(contact.company);
   if (company) props.company = company;
+  const mobilephone = trimOrNull(contact.callbackPhone);
+  if (mobilephone) props.mobilephone = mobilephone;
   return props;
+}
+
+/** The gap-fillable properties read back from a matched HubSpot contact. */
+interface ExistingGaps {
+  company: string | null;
+  mobilephone: string | null;
+}
+const GAP_PROPERTIES = ['company', 'mobilephone'] as const;
+
+function nonEmpty(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
 function idFrom(response: HubSpotResponse, method: string, path: string): string {
   return parseJson(objectResponseSchema, response, method, path).id;
 }
 
-function companyFrom(response: HubSpotResponse, method: string, path: string): string | null {
+function gapsFrom(response: HubSpotResponse, method: string, path: string): ExistingGaps {
   const properties = parseJson(objectResponseSchema, response, method, path).properties;
-  const company = properties?.company;
-  return typeof company === 'string' && company.trim().length > 0 ? company : null;
+  return { company: nonEmpty(properties?.company), mobilephone: nonEmpty(properties?.mobilephone) };
 }
 
 /**
- * Gap-only company fill on a MATCHED contact (0027): only when Zendori knows a
- * company and the HubSpot contact has none. Best-effort — a failed patch never
- * fails the sync (the ticket association is the critical part).
+ * Gap-only fill on a MATCHED contact (0027 company, 0029 mobilephone): only
+ * properties Zendori knows AND HubSpot has empty are sent, in ONE patch.
+ * Best-effort — a failed patch never fails the sync (the ticket association is
+ * the critical part).
  */
-async function patchCompanyGap(
+async function patchGaps(
   config: HubSpotConfig,
   contactId: string,
   contact: ContactInput,
-  existingCompany: string | null
+  existing: ExistingGaps
 ): Promise<void> {
+  const properties: Record<string, string> = {};
   const company = trimOrNull(contact.company);
-  if (!company || existingCompany) return;
+  if (company && !existing.company) properties.company = company;
+  const mobilephone = trimOrNull(contact.callbackPhone);
+  if (mobilephone && !existing.mobilephone) properties.mobilephone = mobilephone;
+  if (Object.keys(properties).length === 0) return;
   const path = `${CONTACTS_PATH}/${encodeURIComponent(contactId)}`;
-  await request(config, 'PATCH', path, { properties: { company } });
+  await request(config, 'PATCH', path, { properties });
 }
 
 /** Upsert a HubSpot contact, matching on email first, else phone. */
@@ -103,11 +121,11 @@ async function upsertByEmail(
   email: string,
   phone?: string
 ): Promise<ContactRef> {
-  const getPath = `${CONTACTS_PATH}/${encodeURIComponent(email)}?idProperty=email&properties=company`;
+  const getPath = `${CONTACTS_PATH}/${encodeURIComponent(email)}?idProperty=email&properties=${GAP_PROPERTIES.join(',')}`;
   const getRes = await request(config, 'GET', getPath);
   if (isSuccess(getRes.status)) {
     const id = idFrom(getRes, 'GET', getPath);
-    await patchCompanyGap(config, id, contact, companyFrom(getRes, 'GET', getPath));
+    await patchGaps(config, id, contact, gapsFrom(getRes, 'GET', getPath));
     return { id };
   }
   if (getRes.status !== 404) throw requestFailed('GET', getPath, getRes);
@@ -121,7 +139,7 @@ async function upsertByEmail(
     const reGet = await request(config, 'GET', getPath);
     if (isSuccess(reGet.status)) {
       const id = idFrom(reGet, 'GET', getPath);
-      await patchCompanyGap(config, id, contact, companyFrom(reGet, 'GET', getPath));
+      await patchGaps(config, id, contact, gapsFrom(reGet, 'GET', getPath));
       return { id };
     }
     throw requestFailed('GET', getPath, reGet);
@@ -140,7 +158,7 @@ async function upsertByPhone(
     if (stripped !== phone) found = await searchContactByPhone(config, stripped);
   }
   if (found) {
-    await patchCompanyGap(config, found.id, contact, found.company);
+    await patchGaps(config, found.id, contact, found);
     return { id: found.id };
   }
 
@@ -154,19 +172,19 @@ async function upsertByPhone(
 async function searchContactByPhone(
   config: HubSpotConfig,
   phone: string
-): Promise<{ id: string; company: string | null } | null> {
+): Promise<({ id: string } & ExistingGaps) | null> {
   const res = await request(config, 'POST', CONTACTS_SEARCH_PATH, {
     filterGroups: [{ filters: [{ propertyName: 'phone', operator: 'EQ', value: phone }] }],
-    properties: ['phone', 'company'],
+    properties: ['phone', ...GAP_PROPERTIES],
     limit: 1,
   });
   if (!isSuccess(res.status)) throw requestFailed('POST', CONTACTS_SEARCH_PATH, res);
   const parsed = parseJson(searchResponseSchema, res, 'POST', CONTACTS_SEARCH_PATH);
   const first = parsed.results[0];
   if (!first) return null;
-  const company = first.properties?.company;
   return {
     id: first.id,
-    company: typeof company === 'string' && company.trim().length > 0 ? company : null,
+    company: nonEmpty(first.properties?.company),
+    mobilephone: nonEmpty(first.properties?.mobilephone),
   };
 }

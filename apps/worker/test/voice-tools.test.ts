@@ -28,9 +28,16 @@ const {
   EMAIL_UNCONFIRMED_ERROR,
   EMAIL_INVALID_ERROR,
   EMAIL_DROPPED_NOTE,
-  EMAIL_GATE_MAX_REFUSALS,
+  CONFIRM_GATE_MAX_REFUSALS,
+  PHONE_UNCONFIRMED_ERROR,
+  PHONE_INVALID_ERROR,
+  PHONE_DROPPED_NOTE,
   TICKET_CREATED_INSTRUCTION,
-  newEmailGateState,
+  newConfirmGateState,
+  newPhoneGateState,
+  normalizePhone,
+  samePhone,
+  toE164,
 } = await import('../src/voice/tools.js');
 
 // --- fake supabase ---------------------------------------------------------------
@@ -135,7 +142,10 @@ function ctxWith(
     allowTransfer: true,
     // e-mail gate: fresh per call, caller has spoken once
     callerTurns: 1,
-    emailGate: newEmailGateState(),
+    emailGate: newConfirmGateState(),
+    phoneGate: newPhoneGateState(),
+    // caller id known unless a test says otherwise
+    callerNumber: '+493022334455',
     ...over,
   };
 }
@@ -233,7 +243,7 @@ describe('createTicketTool', () => {
     const fake = makeFake({
       singles: {
         conversations: { contact_id: 'contact-1' },
-        contacts: { name: null, email: null, company: null },
+        contacts: { name: null, email: null, phone: '+493022334455', company: null, callback_phone: null },
       },
     });
     const result = await createTicketTool(ctxWith(fake), {
@@ -241,6 +251,7 @@ describe('createTicketTool', () => {
       description: 'Kunde bittet um Rückruf zur Rechnung.',
       name: 'Kai Beispiel',
       callback_number: '+49 170 1234567',
+      callback_confirmed: true,
       email: 'kai@example.com',
       email_confirmed: true,
       company: 'Beispiel GmbH',
@@ -253,20 +264,198 @@ describe('createTicketTool', () => {
     expect(
       fake.updates.find((u) => u.table === 'conversations')?.patch.subject
     ).toBe('Rückruf gewünscht');
-    // contact gaps filled (all were null)
+    // contact gaps filled (all were null); the differing callback number lands
+    // in callback_phone (0029), phone (the caller id) is untouched
     const contactPatch = fake.updates.find((u) => u.table === 'contacts')?.patch;
     expect(contactPatch).toEqual({
       name: 'Kai Beispiel',
       email: 'kai@example.com',
       company: 'Beispiel GmbH',
+      callback_phone: '+491701234567',
     });
     // structured system message with all provided lines
     const msg = fake.inserts.find((i) => i.table === 'messages');
     expect(msg?.row.sender_type).toBe('system');
     expect(String(msg?.row.content)).toContain('Ticket aufgenommen: Rückruf gewünscht');
     expect(String(msg?.row.content)).toContain('Unternehmen: Beispiel GmbH');
-    expect(String(msg?.row.content)).toContain('Rückruf: +49 170 1234567');
+    expect(String(msg?.row.content)).toContain(
+      'Rückruf: +491701234567 (abweichend von Anrufnummer +493022334455)'
+    );
     expect(String(msg?.row.content)).toContain('E-Mail: kai@example.com');
+  });
+
+  it('no stated number + known caller id → "Rückruf unter Anrufnummer", no phone patch', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: 'Kai', email: null, phone: '+493022334455', company: null, callback_phone: null },
+      },
+    });
+    await createTicketTool(ctxWith(fake), { subject: 'Frage', description: 'Text' });
+    expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
+    const msg = fake.inserts.find((i) => i.table === 'messages');
+    expect(String(msg?.row.content)).toContain('Rückruf unter Anrufnummer +493022334455');
+  });
+
+  it('a stated number equal to the caller id (national vs. +49) needs no confirmation and is not stored twice', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: 'Kai', email: null, phone: '+493022334455', company: null, callback_phone: null },
+      },
+    });
+    const result = await createTicketTool(ctxWith(fake), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '030 / 22 33 44 55',
+    });
+    expect(result.ok).toBe(true);
+    expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
+    const msg = fake.inserts.find((i) => i.table === 'messages');
+    expect(String(msg?.row.content)).toContain('Rückruf unter Anrufnummer +493022334455');
+  });
+
+  it('refuses an unconfirmed callback number BEFORE any write (same gate as the e-mail)', async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null } },
+    });
+    const result = await createTicketTool(ctxWith(fake, { callerNumber: null }), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '0170 1234567',
+    });
+    expect(result).toEqual({ ok: false, error: PHONE_UNCONFIRMED_ERROR });
+    expect(fake.updates).toHaveLength(0);
+    expect(fake.inserts).toHaveLength(0);
+  });
+
+  it('refuses a confirmed but invalid callback number', async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null } },
+    });
+    const result = await createTicketTool(ctxWith(fake, { callerNumber: null }), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: 'null eins sieben',
+      callback_confirmed: true,
+    });
+    expect(result).toEqual({ ok: false, error: PHONE_INVALID_ERROR });
+    expect(fake.updates).toHaveLength(0);
+  });
+
+  it(`after ${CONFIRM_GATE_MAX_REFUSALS} refusals the ticket goes through WITHOUT the number`, async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null } },
+    });
+    const gate = newPhoneGateState();
+    const args = { subject: 'Frage', description: 'Text', callback_number: '0170 1234567' };
+    for (let i = 1; i < CONFIRM_GATE_MAX_REFUSALS; i += 1) {
+      expect((await createTicketTool(ctxWith(fake, { callerNumber: null, phoneGate: gate }), args)).ok).toBe(false);
+    }
+    const result = await createTicketTool(ctxWith(fake, { callerNumber: null, phoneGate: gate }), args);
+    expect(result).toEqual({ ok: true, instruction: TICKET_CREATED_INSTRUCTION + PHONE_DROPPED_NOTE });
+    expect(fake.updates.some((u) => u.table === 'contacts')).toBe(false);
+  });
+
+  it('anonymous caller: the confirmed number fills the empty phone as E.164 (matches the next SIP From)', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: null, email: null, phone: null, company: null, callback_phone: null },
+      },
+    });
+    await createTicketTool(ctxWith(fake, { callerNumber: null }), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '0170 1234567',
+      callback_confirmed: true,
+    });
+    expect(fake.updates.find((u) => u.table === 'contacts')?.patch).toEqual({ phone: '+491701234567' });
+    const msg = fake.inserts.find((i) => i.table === 'messages');
+    expect(String(msg?.row.content)).toContain('Rückruf: +491701234567');
+    expect(String(msg?.row.content)).not.toContain('abweichend');
+  });
+
+  it('anonymous caller: a number THIS call wrote as identity may be corrected by the same call', async () => {
+    const gate = newPhoneGateState();
+    const first = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null, callback_phone: null } },
+    });
+    await createTicketTool(ctxWith(first, { callerNumber: null, phoneGate: gate, callerTurns: 1 }), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '0170 2345678', // mis-heard
+      callback_confirmed: true,
+    });
+    expect(gate.identityPhoneWritten).toBe('+491702345678');
+    // caller corrects → the contact now carries the mis-heard identity
+    const second = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: '+491702345678', callback_phone: null } },
+    });
+    await createTicketTool(ctxWith(second, { callerNumber: null, phoneGate: gate, callerTurns: 2 }), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '0171 2345678',
+      callback_confirmed: true,
+    });
+    // the identity is corrected, NOT parked as a "differing" callback number
+    expect(second.updates.find((u) => u.table === 'contacts')?.patch).toEqual({ phone: '+491712345678' });
+  });
+
+  it('a later different callback number overwrites callback_phone (latest statement wins)', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: {
+          name: 'Kai',
+          email: null,
+          phone: '+493022334455',
+          company: null,
+          callback_phone: '+491511111111',
+        },
+      },
+    });
+    await createTicketTool(ctxWith(fake), {
+      subject: 'Frage',
+      description: 'Text',
+      callback_number: '0160 9999999',
+      callback_confirmed: true,
+    });
+    expect(fake.updates.find((u) => u.table === 'contacts')?.patch).toEqual({
+      callback_phone: '+491609999999',
+    });
+  });
+
+  it('use_caller_number clears a stale callback_phone so sidebar/HubSpot agree with the ticket line', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: 'Kai', email: null, phone: '+493022334455', company: null, callback_phone: '+491511111111' },
+      },
+    });
+    await createTicketTool(ctxWith(fake), {
+      subject: 'Frage',
+      description: 'Text',
+      use_caller_number: true,
+    });
+    expect(fake.updates.find((u) => u.table === 'contacts')?.patch).toEqual({ callback_phone: null });
+    const msg = fake.inserts.find((i) => i.table === 'messages');
+    expect(String(msg?.row.content)).toContain('Rückruf unter Anrufnummer +493022334455');
+  });
+
+  it('without the confirmation question (phone not asked) a stale callback_phone is left alone', async () => {
+    const fake = makeFake({
+      singles: {
+        conversations: { contact_id: 'contact-1' },
+        contacts: { name: null, email: null, phone: '+493022334455', company: null, callback_phone: '+491511111111' },
+      },
+    });
+    await createTicketTool(ctxWith(fake, { intakeFields: ['name'] }), {
+      subject: 'Frage',
+      description: 'Text',
+      name: 'Kai',
+    });
+    expect(fake.updates.find((u) => u.table === 'contacts')?.patch).toEqual({ name: 'Kai' });
   });
 
   it('never overwrites an existing contact name/email/company', async () => {
@@ -312,7 +501,7 @@ describe('createTicketTool', () => {
     const fake = makeFake({
       singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null } },
     });
-    const gate = newEmailGateState();
+    const gate = newConfirmGateState();
     const args = { subject: 'Frage', description: 'Text', email: 'kai@example.com' };
     // refusal at caller turn 2
     expect(await createTicketTool(ctxWith(fake, { callerTurns: 2, emailGate: gate }), args)).toEqual({
@@ -337,13 +526,13 @@ describe('createTicketTool', () => {
     expect(fake.updates.find((u) => u.table === 'contacts')?.patch.email).toBe('kai@example.com');
   });
 
-  it(`after ${EMAIL_GATE_MAX_REFUSALS} refusals the ticket goes through WITHOUT the address (loop guard)`, async () => {
+  it(`after ${CONFIRM_GATE_MAX_REFUSALS} refusals the ticket goes through WITHOUT the address (loop guard)`, async () => {
     const fake = makeFake({
       singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null } },
     });
-    const gate = newEmailGateState();
+    const gate = newConfirmGateState();
     const args = { subject: 'Frage', description: 'Text', email: 'kai@example.com' };
-    for (let i = 1; i < EMAIL_GATE_MAX_REFUSALS; i += 1) {
+    for (let i = 1; i < CONFIRM_GATE_MAX_REFUSALS; i += 1) {
       expect((await createTicketTool(ctxWith(fake, { emailGate: gate }), args)).ok).toBe(false);
     }
     const result = await createTicketTool(ctxWith(fake, { emailGate: gate }), args);
@@ -584,5 +773,33 @@ describe('decideVoiceHandoff', () => {
     expect(decideVoiceHandoff({ ...base, transferNumber: undefined })).toBe('callback');
     expect(decideVoiceHandoff({ ...base, transferNumber: '   ' })).toBe('callback');
     expect(decideVoiceHandoff({ ...base, allowTransfer: false })).toBe('callback');
+  });
+});
+
+describe('normalizePhone / toE164 / samePhone', () => {
+  it('compacts spoken formatting and keeps the leading +', () => {
+    expect(normalizePhone('+49 170 / 123-4567')).toBe('+491701234567');
+    expect(normalizePhone('0170 1234567')).toBe('01701234567');
+    expect(normalizePhone('0049 170 1234567')).toBe('+491701234567');
+  });
+  it('drops the written/spoken trunk zero after +49', () => {
+    expect(normalizePhone('+49 (0) 170 1234567')).toBe('+491701234567');
+    expect(normalizePhone('+49 0170 1234567')).toBe('+491701234567');
+  });
+  it('toE164 uses the channel country code for national numbers', () => {
+    expect(toE164('01701234567', '+493022334455')).toBe('+491701234567');
+    expect(toE164('0791234567', '+41442223344')).toBe('+41791234567');
+    expect(toE164('+41791234567', '+493022334455')).toBe('+41791234567');
+    expect(toE164('01701234567', undefined)).toBe('+491701234567');
+  });
+  it('samePhone is country-aware', () => {
+    expect(samePhone('0791234567', '+41791234567', '+41442223344')).toBe(true);
+    expect(samePhone('0170 1234567', '+491701234567', '+493022334455')).toBe(true);
+    expect(samePhone('0170 1234567', '+491701234568', '+493022334455')).toBe(false);
+  });
+  it('rejects non-numbers', () => {
+    expect(normalizePhone('keine')).toBeUndefined();
+    expect(normalizePhone('12')).toBeUndefined();
+    expect(normalizePhone(undefined)).toBeUndefined();
   });
 });

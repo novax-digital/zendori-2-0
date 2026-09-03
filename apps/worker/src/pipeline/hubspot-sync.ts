@@ -66,6 +66,8 @@ interface LoadedContact {
   email: string | null;
   phone: string | null;
   company: string | null;
+  /** 0029: stated callback number when it differs from phone. */
+  callback_phone: string | null;
 }
 
 interface LoadedInboundMessage {
@@ -167,6 +169,7 @@ export async function syncConversation(conversationId: string): Promise<void> {
     email: contact.email,
     phone: contact.phone,
     company: contact.company,
+    callbackPhone: contact.callback_phone,
   });
 
   // --- ticket: create (new) or update (existing) ------------------------------
@@ -490,12 +493,21 @@ async function loadContact(
   // filter is explicit rather than relying on referential integrity.
   let { data, error } = await supabase
     .from('contacts')
-    .select('name, email, phone, company')
+    .select('name, email, phone, company, callback_phone')
     .eq('id', contactId)
     .eq('org_id', orgId)
     .maybeSingle();
   if (error && isMissingColumnError(error)) {
-    // contacts.company not migrated yet (worker ahead of 0027) — retry without.
+    // contacts.callback_phone not migrated yet (worker ahead of 0029) — retry without.
+    ({ data, error } = await supabase
+      .from('contacts')
+      .select('name, email, phone, company')
+      .eq('id', contactId)
+      .eq('org_id', orgId)
+      .maybeSingle());
+  }
+  if (error && isMissingColumnError(error)) {
+    // contacts.company not migrated yet either (worker ahead of 0027).
     ({ data, error } = await supabase
       .from('contacts')
       .select('name, email, phone')
@@ -504,7 +516,9 @@ async function loadContact(
       .maybeSingle());
   }
   if (error) throw error;
-  return data ? ({ company: null, ...(data as object) } as LoadedContact) : null;
+  return data
+    ? ({ company: null, callback_phone: null, ...(data as object) } as LoadedContact)
+    : null;
 }
 
 /**

@@ -131,7 +131,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       supabase.from('organizations').select('name').eq('id', call.org_id).maybeSingle(),
       supabase
         .from('conversations')
-        .select('contact_id, contacts(name)')
+        .select('contact_id, contacts(name, phone)')
         .eq('id', call.conversation_id)
         .maybeSingle(),
       // 0018: handoff needs business hours + the org keyword list. Best-effort —
@@ -192,10 +192,14 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       return;
     }
     const companyName = (orgRes.data as { name: string } | null)?.name ?? 'unserem Unternehmen';
-    const contactName =
-      ((contactRes.data as { contacts: { name: string | null } | null } | null)?.contacts?.name ??
-        null) ||
-      null;
+    const contactRow = (
+      contactRes.data as { contacts: { name: string | null; phone?: string | null } | null } | null
+    )?.contacts;
+    const contactName = (contactRow?.name ?? null) || null;
+    // Caller id (0029): the webhook stored the SIP From number as contacts.phone;
+    // null for withheld numbers. Given to the prompt so the agent can confirm
+    // "dürfen wir Sie unter … zurückrufen?" instead of asking blind.
+    const callerNumber = (contactRow?.phone ?? null) || null;
 
     // Defensive parse of the 0018 handoff inputs (best-effort — see above).
     const settingsRow = settingsRes.error
@@ -347,7 +351,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       conversationId: call.conversation_id,
       channelConfig: configResult.data,
       agent,
-      context: { companyName, contactName, escalationKeywords },
+      context: { companyName, contactName, callerNumber, escalationKeywords },
       businessHours,
       allowTransfer,
       recordingEnabled,

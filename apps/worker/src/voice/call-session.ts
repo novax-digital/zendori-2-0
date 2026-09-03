@@ -27,7 +27,8 @@ import {
   createTicketTool,
   handoffTool,
   kbSearchTool,
-  newEmailGateState,
+  newConfirmGateState,
+  newPhoneGateState,
   type ToolContext,
 } from './tools.js';
 
@@ -157,7 +158,8 @@ export class CallSession {
    */
   private callerTurns = 0;
   private seenCallerItems = new Set<string>();
-  private readonly emailGate = newEmailGateState();
+  private readonly emailGate = newConfirmGateState();
+  private readonly phoneGate = newPhoneGateState();
   /** Persisted user turns: item_id → { messageId, content } (for late corrections). */
   private readonly flushedItems = new Map<string, { messageId: string | null; content: string }>();
   /** Assistant transcript accumulator for the in-flight response. */
@@ -747,6 +749,8 @@ export class CallSession {
       allowTransfer: this.p.allowTransfer ?? false,
       callerTurns: this.callerTurns,
       emailGate: this.emailGate,
+      phoneGate: this.phoneGate,
+      callerNumber: this.p.context.callerNumber ?? null,
     };
     try {
       switch (name) {

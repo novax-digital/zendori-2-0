@@ -90,6 +90,36 @@ Intake-Regeln werden nach der Agent-Identität in beiden Modi noch einmal bekrä
 (`INTAKE_RULES_TRAILER`), damit Persona-Text wie „frag immer nach der E-Mail" die Einstellung nicht
 aushebelt.
 
+### Rückrufnummer: Anrufer-ID im Prompt + `contacts.callback_phone` (0029)
+
+Vorher wusste das System die Anrufernummer (SIP `From` → `contacts.phone`, `voice_calls.from_number`),
+der Agent aber nicht — er konnte nur generisch nach „der Rückrufnummer" fragen. Jetzt:
+
+- **Prompt:** der Dispatch lädt `contacts(name, phone)`; die Nummer steht sprechbar formatiert
+  (`formatPhoneForSpeech`: +49 → 0, Vorwahl + Dreiergruppen, z. B. `+491701234567` → „0170 123 4567",
+  `+493022334455` → „030 223 344 55") im Session-Kontext (`callbackNumberRule`). Ist `phone`
+  Abfragefeld und die Nummer bekannt: „Dürfen wir Sie unter der Nummer zurückrufen, von der Sie
+  gerade anrufen — 0170 123 4567?" — Ja ⇒ `use_caller_number=true`, keine `callback_number`; andere
+  Nummer ⇒ in Zifferngruppen wiederholen, Ja abwarten, `callback_number` + `callback_confirmed=true`.
+  Nummer unterdrückt ⇒ Rückrufnummer aktiv erfragen. `phone` kein Abfragefeld ⇒ Nummer nur als
+  Kontext („frage nicht danach"), freiwillig genannte Nummern werden trotzdem übernommen.
+- **Speichern (`create_ticket`):** dasselbe Bestätigungs-Gate wie bei der E-Mail (`callback_confirmed`,
+  Turn-Zähler, Loop-Schutz nach 3 Ablehnungen ⇒ Ticket ohne Nummer). Genannte Nummern werden als
+  **E.164** gespeichert (`toE164` mit der Ländervorwahl der Kanal-Nummer, Fallback +49) — die
+  Anrufer-Zuordnung des Webhooks vergleicht exakt gegen die SIP-From-Nummer (`+…`), ein national
+  gespeichertes „0170…" würde nie wieder gefunden. `contacts.phone` bleibt die Anrufer-ID
+  (Matching-Schlüssel); eine abweichende Nummer landet in `contacts.callback_phone` (letzte Angabe
+  gewinnt), und wenn der Anrufer die Anrufnummer bestätigt (`use_caller_number`), wird eine alte
+  `callback_phone` geleert — Ticket-Zeile, Seitenleiste und HubSpot sagen dann dasselbe. Kontakt ohne
+  Telefon (anonym) bekommt die genannte Nummer als `phone`; eine Nummer, die DIESER Anruf so
+  geschrieben hat, darf derselbe Anruf noch korrigieren (`phoneGate.identityPhoneWritten`).
+- **Inbox:** Seitenleiste zeigt „Rückrufnummer" (editierbar) unter „Telefon".
+- **HubSpot:** `callback_phone` → Standard-Property `mobilephone` (Create + Gap-Fill auf gematchten
+  Kontakten, bestehender CRM-Wert gewinnt); `phone` bleibt der Match-Schlüssel.
+- **Ticket-Nachricht:** „Rückruf unter Anrufnummer …" bzw. „Rückruf: … (abweichend von Anrufnummer …)";
+  genannte Nummern werden kompakt gespeichert (`normalizePhone`: Leerzeichen/Schrägstriche raus,
+  `00…` → `+…`), „0170…" und „+49170…" gelten als dieselbe Nummer.
+
 ## Kanal-Einstellungen (Settings → Kanäle → Voice)
 
 - **Begrüßung (Welcome Message)** — wird wörtlich per `force_message` gesprochen

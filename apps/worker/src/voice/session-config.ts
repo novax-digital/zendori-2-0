@@ -23,6 +23,7 @@ Arbeitsweise:
 {lowConfidenceRule}
 - Nimm bei Bedarf ein Anliegen strukturiert auf: {intakeStep}fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
 {intakeRules}
+{callbackRule}
 {emailRule}
 - Wenn das Gespräch erledigt ist: bestätige zuerst vollständig und freundlich, was du getan hast, und rufe DANN end_call auf. Die Verabschiedung („Auf Wiederhören") spricht das System danach automatisch — verabschiede dich nicht selbst, sonst hört der Anrufer sie doppelt. Beende niemals mitten im Satz.`;
 
@@ -155,6 +156,77 @@ export function intakeFieldRules(fields: IntakeField[]): string {
  * addresses; createTicketTool additionally refuses an email without
  * email_confirmed=true, so the spell-back is not prompt-only.
  */
+/**
+ * Caller-id for speech (0029): "+491701234567" → "0170 123 4567". German
+ * numbers lose the country code (callers know their number as 0…), other
+ * countries keep "+CC"; digits are grouped in threes after the prefix so the
+ * model reads them in natural chunks. Non-numeric input is returned as-is.
+ */
+// ITU E.164: +1/+7 are the only one-digit country codes; these are the
+// two-digit ones, everything else is three digits.
+const TWO_DIGIT_CC = /^\+(2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/;
+// German area codes with two digits (Berlin, Hamburg, Frankfurt, München) —
+// everything else is read with a four-character prefix ("0170", "0211"), which
+// is right for mobiles and three-digit area codes; a rare longer area code is
+// merely grouped differently, the digits stay correct.
+const DE_TWO_DIGIT_AREA = /^0(30|40|69|89)/;
+
+export function formatPhoneForSpeech(raw: string): string {
+  const compact = raw.replace(/[^\d+]/g, '');
+  if (!/^\+?\d{4,}$/.test(compact)) return raw.trim();
+  let prefix: string;
+  let rest: string;
+  const nationalDe = compact.startsWith('+49')
+    ? `0${compact.slice(3)}`
+    : compact.startsWith('0')
+      ? compact
+      : null;
+  if (nationalDe) {
+    const len = DE_TWO_DIGIT_AREA.test(nationalDe) ? 3 : 4;
+    prefix = nationalDe.slice(0, len);
+    rest = nationalDe.slice(len);
+  } else {
+    const cc = compact.match(/^\+[17]/)?.[0] ?? compact.match(TWO_DIGIT_CC)?.[0] ?? compact.slice(0, 4);
+    prefix = cc;
+    rest = compact.slice(cc.length);
+  }
+  const groups = rest.match(/\d{1,3}/g) ?? [];
+  // a lone trailing digit reads badly ("… 456 7") — fold it into the last group
+  if (groups.length > 1 && groups[groups.length - 1]!.length === 1) {
+    const tail = groups.pop()!;
+    groups[groups.length - 1] += tail;
+  }
+  return [prefix, ...groups].join(' ').trim();
+}
+
+/**
+ * The callback-number step (0029). The system always knew the caller id (SIP
+ * From → contacts.phone) but the model never did, so it could only ask
+ * generically for "die Rückrufnummer". Now it confirms the known number and
+ * asks for an alternative only if the caller wants one; an anonymous caller
+ * is asked outright. Without 'phone' in the intake fields the number is only
+ * context (the do-not-ask rule stays in force). Empty string = no bullet.
+ */
+export function callbackNumberRule(
+  fields: IntakeField[],
+  callerNumber: string | null | undefined
+): string {
+  const asksPhone = fields.includes('phone');
+  const spoken = callerNumber ? formatPhoneForSpeech(callerNumber) : null;
+  const confirmStep =
+    'wiederhole sie in Zifferngruppen, warte auf sein Ja und übergib sie erst dann als callback_number mit callback_confirmed=true';
+  if (asksPhone && spoken) {
+    return `- Rückrufnummer: Der Anrufer ruft von ${spoken} an. Frage: „Dürfen wir Sie unter der Nummer zurückrufen, von der Sie gerade anrufen — ${spoken}?" Sagt er ja, setzt du use_caller_number=true und KEINE callback_number (die Anrufnummer gilt). Nennt er eine andere Nummer, ${confirmStep}.`;
+  }
+  if (asksPhone) {
+    return `- Rückrufnummer: Die Anrufnummer ist unterdrückt — erfrage die Rückrufnummer, ${confirmStep}.`;
+  }
+  if (spoken) {
+    return `- Der Anrufer ruft von ${spoken} an; ein Rückruf geht an diese Nummer, frage nicht danach. Nennt er von sich aus eine andere Nummer, ${confirmStep}.`;
+  }
+  return '';
+}
+
 export const EMAIL_CAPTURE_RULE =
   '- E-Mail-Adressen (erfragt oder vom Anrufer genannt) übernimmst du nur bestätigt: wiederhole die GESAMTE Adresse Buchstabe für Buchstabe — auch den Teil nach dem @-Zeichen —, sage „at" für das @-Zeichen, „Punkt" für den Punkt, „Minus" für den Bindestrich und „Unterstrich" für den Unterstrich. Einzige Ausnahme: geläufige Domains wie gmail.com, gmx.de, web.de oder t-online.de darfst du als Wort sagen. Frage dann, ob das so richtig ist. Erst nach einem klaren Ja übergibst du die Adresse an create_ticket (email_confirmed=true). Korrigiert der Anrufer, wiederhole die Buchstabierung.';
 
@@ -169,6 +241,7 @@ Ablauf:
 5. Bestätige die Aufnahme mit einem vollständigen, freundlichen Satz („Ihr Anliegen ist aufgenommen — wir melden uns schnellstmöglich zurück.") und rufe DANN end_call auf. Die Verabschiedung spricht das System danach automatisch — verabschiede dich nicht selbst. Beende niemals mitten im Satz.
 
 {intakeRules}
+{callbackRule}
 {emailRule}
 
 Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
@@ -231,7 +304,10 @@ const KB_SEARCH_TOOL: FunctionTool = {
  * only be filled from what the caller volunteered — the schema is the second
  * place (next to the prompt) where the model learns what not to ask.
  */
-export function buildCreateTicketTool(fields: IntakeField[]): FunctionTool {
+export function buildCreateTicketTool(
+  fields: IntakeField[],
+  callerNumber?: string | null
+): FunctionTool {
   const asked = new Set(fields);
   const contactParam = (field: IntakeField, base: string) => ({
     type: 'string' as const,
@@ -250,7 +326,23 @@ export function buildCreateTicketTool(fields: IntakeField[]): FunctionTool {
         subject: { type: 'string', description: 'Kurzer Betreff des Anliegens (max. 80 Zeichen).' },
         description: { type: 'string', description: 'Zusammenfassung des Anliegens.' },
         name: contactParam('name', 'Name des Anrufers'),
-        callback_number: contactParam('phone', 'Rückrufnummer, falls abweichend von der Anrufnummer'),
+        callback_number: contactParam(
+          'phone',
+          callerNumber
+            ? `Rückrufnummer NUR, wenn sie von der Anrufnummer ${formatPhoneForSpeech(callerNumber)} abweicht — sonst weglassen`
+            : 'Rückrufnummer (die Anrufnummer ist unterdrückt)'
+        ),
+        callback_confirmed: {
+          type: 'boolean',
+          description:
+            'Pflicht, sobald callback_number gesetzt ist: true NUR, wenn du die Nummer in Zifferngruppen wiederholt hast und der Anrufer sie ausdrücklich bestätigt hat. Ohne Bestätigung wird das Ticket abgelehnt.',
+        },
+        use_caller_number: {
+          type: 'boolean',
+          description: callerNumber
+            ? `true, wenn der Anrufer bestätigt hat, dass wir ihn unter der Anrufnummer ${formatPhoneForSpeech(callerNumber)} zurückrufen dürfen (dann keine callback_number).`
+            : 'Nicht verwenden — die Anrufnummer ist unterdrückt.',
+        },
         email: contactParam('email', 'E-Mail-Adresse'),
         email_confirmed: {
           type: 'boolean',
@@ -293,6 +385,8 @@ const END_CALL_TOOL: FunctionTool = {
 export interface SessionContext {
   companyName: string;
   contactName?: string | null;
+  /** Caller id (contacts.phone from the SIP From header); null/absent = withheld. */
+  callerNumber?: string | null;
   /**
    * Org escalation keywords (/settings/ai) — injected into the prompt so the
    * SAME list governs voice and text (it used to be hardcoded here). Empty/
@@ -360,7 +454,11 @@ export function buildSessionConfig(
           .replace('{intakeStep}', fieldsPhrase ? `erfrage ${fieldsPhrase}, ` : '')
   )
     .replace('{intakeRules}', intakeFieldRules(agent.intakeFields))
-    .replace('{emailRule}', EMAIL_CAPTURE_RULE);
+    .replace('{callbackRule}', callbackNumberRule(agent.intakeFields, context.callerNumber))
+    .replace('{emailRule}', EMAIL_CAPTURE_RULE)
+    // an empty callback rule must not leave a blank bullet line behind
+    .replace(/\n\n(?=- E-Mail-Adressen)/, '\n')
+    .replace(/\n\n(?=- E-Mail-Adressen)/, '\n');
   const parts = [
     template.replaceAll('{company}', context.companyName),
     languageRules(config.languageHint),
@@ -397,7 +495,7 @@ export function buildSessionConfig(
     parts.push(`Der Anrufer ist vermutlich ${context.contactName} (bekannter Kontakt).`);
   }
 
-  const createTicketTool = buildCreateTicketTool(agent.intakeFields);
+  const createTicketTool = buildCreateTicketTool(agent.intakeFields, context.callerNumber);
   const tools: FunctionTool[] =
     agent.mode === 'intake_only'
       ? [createTicketTool, HANDOFF_TOOL, END_CALL_TOOL]

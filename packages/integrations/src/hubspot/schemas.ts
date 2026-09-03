@@ -38,6 +38,11 @@ export interface ContactInput {
   phone?: string | null;
   /** Mapped to the standard HubSpot contact property `company` (§2.7, 0027). */
   company?: string | null;
+  /**
+   * Callback number that differs from the caller id (0029) — mapped to the
+   * standard HubSpot property `mobilephone` (`phone` stays the identity/match key).
+   */
+  callbackPhone?: string | null;
 }
 
 export interface TicketDraft {

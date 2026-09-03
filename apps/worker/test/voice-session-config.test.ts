@@ -3,7 +3,9 @@ import type { VoiceChannelConfig } from '@zendori/channels';
 import {
   buildCreateTicketTool,
   buildSessionConfig,
+  callbackNumberRule,
   EMAIL_CAPTURE_RULE,
+  formatPhoneForSpeech,
   intakeFieldRules,
   intakeFieldsPhrase,
   type VoiceAgentBehavior,
@@ -282,5 +284,62 @@ describe('callbackIntakeStep', () => {
 
   it('falls back to summarising only when nothing is configured', () => {
     expect(callbackIntakeStep([])).toBe('fasse das Anliegen zusammen');
+  });
+});
+
+// The caller id (0029): the system always knew it (SIP From → contacts.phone),
+// the model never did — now it confirms the known number instead of asking blind.
+describe('formatPhoneForSpeech', () => {
+  it('turns a German E.164 number into national digit groups (mobile 4, big-city area code 3)', () => {
+    expect(formatPhoneForSpeech('+491701234567')).toBe('0170 123 4567');
+    expect(formatPhoneForSpeech('+493022334455')).toBe('030 223 344 55');
+    expect(formatPhoneForSpeech('+4989123456789')).toBe('089 123 456 789');
+    expect(formatPhoneForSpeech('+492111234567')).toBe('0211 123 4567');
+  });
+  it('splits one-, two- and three-digit country codes correctly and passes junk through', () => {
+    expect(formatPhoneForSpeech('+41791234567')).toBe('+41 791 234 567');
+    expect(formatPhoneForSpeech('+12125551234')).toBe('+1 212 555 1234');
+    expect(formatPhoneForSpeech('+3531234567')).toBe('+353 123 4567');
+    expect(formatPhoneForSpeech('anonymous')).toBe('anonymous');
+  });
+});
+
+describe('callbackNumberRule', () => {
+  it('asks to confirm the known caller id when phone is an intake field', () => {
+    const rule = callbackNumberRule(['name', 'phone'], '+491701234567');
+    expect(rule).toContain('Dürfen wir Sie unter der Nummer zurückrufen, von der Sie gerade anrufen — 0170 123 4567?');
+    expect(rule).toContain('setzt du use_caller_number=true und KEINE callback_number');
+    expect(rule).toContain('callback_confirmed=true');
+  });
+  it('asks outright for a withheld number', () => {
+    expect(callbackNumberRule(['phone'], null)).toContain('Die Anrufnummer ist unterdrückt — erfrage die Rückrufnummer');
+  });
+  it('only mentions the number when phone is not asked for', () => {
+    const rule = callbackNumberRule(['name'], '+491701234567');
+    expect(rule).toContain('frage nicht danach');
+    expect(rule).not.toContain('Dürfen wir Sie');
+  });
+  it('is empty without phone field and without caller id', () => {
+    expect(callbackNumberRule([], null)).toBe('');
+  });
+  it('lands in the session prompt in both modes and the tool description names the number', () => {
+    for (const mode of ['intake_only', 'answer'] as const) {
+      const session = buildSessionConfig(CONFIG, agentWith({ mode }), {
+        companyName: 'Testfirma',
+        callerNumber: '+491701234567',
+      });
+      expect(session.instructions).toContain('Der Anrufer ruft von 0170 123 4567 an.');
+      expect(session.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
+      const tool = session.tools.find((t) => t.name === 'create_ticket');
+      const props = tool?.parameters.properties as Record<string, { description: string }>;
+      expect(props.callback_number?.description).toContain('von der Anrufnummer 0170 123 4567 abweicht');
+      expect(props.use_caller_number?.description).toContain('Anrufnummer 0170 123 4567');
+      expect(props).toHaveProperty('callback_confirmed');
+    }
+  });
+  it('an empty rule leaves no blank bullet line behind', () => {
+    const session = buildSessionConfig(CONFIG, agentWith({ intakeFields: [] }), CONTEXT);
+    expect(session.instructions).not.toMatch(/\n\n- E-Mail-Adressen/);
+    expect(session.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 });

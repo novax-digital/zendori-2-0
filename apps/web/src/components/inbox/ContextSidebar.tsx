@@ -107,7 +107,7 @@ export default function ContextSidebar({
         {contact ? (
           // keyed so server-side contact updates re-sync the uncontrolled inputs
           <form
-            key={`${contact.id}-${contact.name ?? ''}-${contact.email ?? ''}-${contact.phone ?? ''}-${contact.company ?? ''}`}
+            key={`${contact.id}-${contact.name ?? ''}-${contact.email ?? ''}-${contact.phone ?? ''}-${contact.callback_phone ?? ''}-${contact.company ?? ''}`}
             action={updateContact}
             className="inbox-contact-form"
           >
@@ -138,6 +138,16 @@ export default function ContextSidebar({
             <label>
               Telefon
               <input type="text" name="phone" defaultValue={contact.phone ?? ''} maxLength={50} />
+            </label>
+            <label>
+              Rückrufnummer
+              <input
+                type="text"
+                name="callbackPhone"
+                defaultValue={contact.callback_phone ?? ''}
+                maxLength={50}
+                placeholder="nur wenn abweichend von Telefon"
+              />
             </label>
             <button className="ghost" type="submit">
               Kontakt speichern

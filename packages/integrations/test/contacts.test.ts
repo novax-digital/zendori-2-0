@@ -67,6 +67,38 @@ describe('upsertContact by email', () => {
     expect(createBody.properties.company).toBe('Beispiel GmbH');
   });
 
+  it('maps a stated callback number to mobilephone on create (0029)', async () => {
+    const { fetchImpl, requests } = createMockFetch([
+      { status: 404, body: { message: 'not found' } },
+      { status: 201, body: { id: 'c-new' } },
+    ]);
+    await upsertContact(mockConfig(fetchImpl), {
+      email: 'a@b.de',
+      phone: '+49301112222',
+      callbackPhone: ' +49 170 1234567 ',
+    });
+    const createBody = requests[1]?.body as { properties: Record<string, unknown> };
+    // phone stays the identity, the callback number is a separate property
+    expect(createBody.properties.phone).toBe('+49301112222');
+    expect(createBody.properties.mobilephone).toBe('+49 170 1234567');
+  });
+
+  it('gap-fills company AND mobilephone in ONE patch, skipping what HubSpot already has', async () => {
+    const { fetchImpl, requests } = createMockFetch([
+      { status: 200, body: { id: 'c-existing', properties: { mobilephone: '+49 151 000' } } },
+      { status: 200, body: { id: 'c-existing' } },
+    ]);
+    await upsertContact(mockConfig(fetchImpl), {
+      email: 'a@b.de',
+      company: 'Beispiel GmbH',
+      callbackPhone: '+49 170 1234567',
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toContain('properties=company,mobilephone');
+    // existing mobilephone wins (CRM data), only the company gap is filled
+    expect(requests[1]?.body).toEqual({ properties: { company: 'Beispiel GmbH' } });
+  });
+
   it('gap-fills an empty company on a matched contact via PATCH (never the name/phone)', async () => {
     const { fetchImpl, requests } = createMockFetch([
       { status: 200, body: { id: 'c-existing', properties: {} } },
