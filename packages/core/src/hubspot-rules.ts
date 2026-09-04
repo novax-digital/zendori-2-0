@@ -101,9 +101,10 @@ export async function requestTicketHubspotSync(
 }
 
 /**
- * A new inbound message / post-call refinement on a conversation: re-arm every
- * non-resolved ticket of it that the ticket stream covers, so follow-ups reach
- * the HubSpot ticket as notes. Best-effort.
+ * A new inbound message / post-call refinement on a conversation: re-arm the
+ * NEWEST non-resolved ticket of it (attach rule v2 allows several — every open
+ * ticket would otherwise receive the same follow-up note) when the ticket
+ * stream covers it, so follow-ups reach the HubSpot ticket as notes. Best-effort.
  */
 export async function requestConversationTicketsResync(
   supabase: SupabaseClient,
@@ -117,7 +118,9 @@ export async function requestConversationTicketsResync(
       .select('id, hubspot_ticket_id')
       .eq('org_id', input.orgId)
       .eq('conversation_id', input.conversationId)
-      .neq('status', 'resolved');
+      .neq('status', 'resolved')
+      .order('opened_at', { ascending: false })
+      .limit(1);
     if (error) {
       if (isMissingRelationError(error) || isMissingColumnError(error)) return;
       throw error;

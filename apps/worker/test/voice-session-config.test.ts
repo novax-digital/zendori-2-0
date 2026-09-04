@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { VoiceChannelConfig } from '@zendori/channels';
 import {
   buildCreateTicketTool,
+  buildHandoffTool,
   buildSessionConfig,
   callbackNumberRule,
   EMAIL_CAPTURE_RULE,
@@ -35,6 +36,7 @@ function agentWith(over: Partial<VoiceAgentBehavior> = {}): VoiceAgentBehavior {
     identity: null,
     knowledgeBaseIds: null,
     handoffEnabled: true,
+    escalationTarget: 'human',
     confidenceThreshold: 0.7,
     intakeFields: ['name', 'phone'],
     ...over,
@@ -341,5 +343,27 @@ describe('callbackNumberRule', () => {
     const session = buildSessionConfig(CONFIG, agentWith({ intakeFields: [] }), CONTEXT);
     expect(session.instructions).not.toMatch(/\n\n- E-Mail-Adressen/);
     expect(session.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
+  });
+});
+
+// Phase 12: escalation target 'ticket' — the tool never transfers and the
+// prompt must not promise a live connection.
+describe('escalation target (voice)', () => {
+  it("target 'ticket' rewrites the handoff tool description and the human-request bullets", () => {
+    expect(buildHandoffTool('ticket').description).toContain('KEINE Weiterleitung');
+    expect(buildHandoffTool('human').description).toContain('Weiterleitung oder Rückruf');
+    const answer = buildSessionConfig(CONFIG, agentWith({ mode: 'answer', escalationTarget: 'ticket' }), CONTEXT);
+    expect(answer.instructions).toContain('versprich keine sofortige Verbindung oder Weiterleitung');
+    expect(answer.instructions).toContain('das Werkzeug leitet dich danach durch die Aufnahme eines Rückrufs');
+    expect(answer.tools.find((t) => t.name === 'handoff_human')?.description).toContain('KEINE Weiterleitung');
+    const intake = buildSessionConfig(CONFIG, agentWith({ mode: 'intake_only', escalationTarget: 'ticket' }), CONTEXT);
+    expect(intake.instructions).toContain('gerade keine direkte Verbindung möglich ist');
+  });
+
+  it("target 'human' keeps today's wording", () => {
+    const answer = buildSessionConfig(CONFIG, agentWith({ mode: 'answer' }), CONTEXT);
+    expect(answer.instructions).toContain('ob weitergeleitet wird oder du einen Rückruf aufnimmst');
+    expect(answer.instructions).not.toContain('versprich keine sofortige Verbindung');
+    expect(answer.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 });

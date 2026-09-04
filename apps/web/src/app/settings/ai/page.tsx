@@ -1,6 +1,11 @@
 import Link from 'next/link';
-import { autoAckTextsSchema, businessHoursSchema } from '@zendori/channels';
-import type { AutoAckTexts, BusinessHours } from '@zendori/channels';
+import {
+  DEFAULT_TICKET_ACK_TEXT,
+  autoAckTextsSchema,
+  businessHoursSchema,
+  ticketAckTextsSchema,
+} from '@zendori/channels';
+import type { AutoAckTexts, BusinessHours, TicketAckTexts } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { saveAiSettings } from './actions';
@@ -26,6 +31,8 @@ type OrgSettingsRow = {
   auto_ack_texts?: unknown;
   escalation_keywords?: unknown;
   handoff_sla_minutes?: unknown;
+  /** 0031 — absent while the migration is pending. */
+  ticket_ack_texts?: unknown;
 };
 
 export default async function AiSettingsPage({
@@ -40,12 +47,24 @@ export default async function AiSettingsPage({
   const isOwner = isAdminRole(role);
 
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase
+  let settingsRes = await supabase
     .from('org_settings')
-    .select('business_hours, auto_ack_texts, escalation_keywords, handoff_sla_minutes')
+    .select('business_hours, auto_ack_texts, escalation_keywords, handoff_sla_minutes, ticket_ack_texts')
     .eq('org_id', orgId)
     .maybeSingle();
-  const settings = (data ?? {}) as OrgSettingsRow;
+  if (settingsRes.error && (settingsRes.error as { code?: string }).code === '42703') {
+    // ticket_ack_texts is 0031 — retry without it while the migration is pending
+    settingsRes = (await supabase
+      .from('org_settings')
+      .select('business_hours, auto_ack_texts, escalation_keywords, handoff_sla_minutes')
+      .eq('org_id', orgId)
+      .maybeSingle()) as typeof settingsRes;
+  }
+  const settings = (settingsRes.data ?? {}) as OrgSettingsRow;
+  const ticketAckParsed = ticketAckTextsSchema.safeParse(settings.ticket_ack_texts ?? {});
+  const ticketAck: TicketAckTexts = ticketAckParsed.success
+    ? ticketAckParsed.data
+    : ticketAckTextsSchema.parse({});
 
   // parse jsonb / array columns defensively (channels schemas guarantee shape)
   const businessHoursParsed = businessHoursSchema.safeParse(settings.business_hours);
@@ -74,10 +93,10 @@ export default async function AiSettingsPage({
       <div className="page-head">
         <h1>Übergabe &amp; Zeiten</h1>
         <p>
-          Org-weite Regeln von {orgName} für die Übergabe an Menschen: Eskalations-Keywords,
-          Geschäftszeiten und automatische Eingangsbestätigungen. Verhalten, Identität und
-          Autopilot der KI konfigurierst du pro Agent unter{' '}
-          <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
+          Org-weite Regeln von {orgName} für Eskalationen: Eskalations-Keywords, Geschäftszeiten
+          und die Bestätigungstexte für Übergaben und Tickets. Ob eine Eskalation an einen Menschen
+          übergibt oder ein Ticket aufnimmt, Verhalten, Identität und Autopilot konfigurierst du pro
+          Agent unter <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
         </p>
       </div>
 
@@ -105,9 +124,9 @@ export default async function AiSettingsPage({
         <div className="panel">
           <h2>Eskalations-Keywords</h2>
           <p className="help">
-            Kommagetrennte Liste. Taucht eines dieser Wörter in einer Nachricht auf, wird die
-            Konversation an einen Menschen übergeben — das gilt für Text-Kanäle UND für den
-            Voice-Agenten am Telefon.
+            Kommagetrennte Liste. Taucht eines dieser Wörter in einer Nachricht auf, wird eskaliert —
+            als Übergabe an einen Menschen oder als Ticket, je nach Einstellung des Agenten. Gilt für
+            Text-Kanäle UND für den Voice-Agenten am Telefon.
           </p>
           <input
             name="escalation_keywords"
@@ -233,6 +252,49 @@ export default async function AiSettingsPage({
               name="ack_out_of_hours"
               rows={3}
               defaultValue={autoAck.out_of_hours}
+              disabled={disabled}
+            />
+          </div>
+
+        </div>
+
+        <div className="panel">
+          <h2>Ticket-Bestätigung</h2>
+          <p className="help">
+            Wird gesendet, wenn ein Agent mit „Als Ticket aufnehmen" ein neues Ticket anlegt
+            (Text-Kanäle; am Telefon wird keine Nummer genannt). Platzhalter{' '}
+            <code>{'{ticket_id}'}</code> = die Ticketnummer. Leere Felder verwenden den Standardtext.
+          </p>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="ticket_ack_enabled"
+              defaultChecked={ticketAck.enabled}
+              disabled={disabled}
+            />
+            Ticket-Bestätigung senden
+          </label>
+          <div style={{ marginBottom: '1rem' }}>
+            <label htmlFor="ticket_ack_in_hours">Text innerhalb der Geschäftszeiten</label>
+            <textarea
+              id="ticket_ack_in_hours"
+              name="ticket_ack_in_hours"
+              rows={3}
+              maxLength={1000}
+              defaultValue={ticketAck.in_hours}
+              placeholder={DEFAULT_TICKET_ACK_TEXT}
+              disabled={disabled}
+            />
+          </div>
+          <div>
+            <label htmlFor="ticket_ack_out_of_hours">Text außerhalb der Geschäftszeiten</label>
+            <textarea
+              id="ticket_ack_out_of_hours"
+              name="ticket_ack_out_of_hours"
+              rows={3}
+              maxLength={1000}
+              defaultValue={ticketAck.out_of_hours}
+              placeholder={DEFAULT_TICKET_ACK_TEXT}
               disabled={disabled}
             />
           </div>

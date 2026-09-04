@@ -50,6 +50,27 @@ export const autoAckTextsSchema = z.object({
 });
 export type AutoAckTexts = z.infer<typeof autoAckTextsSchema>;
 
+// --- ticket confirmation (Phase 12, org_settings.ticket_ack_texts) ------------
+// Sent when an agent with escalation_target='ticket' opens a NEW ticket for the
+// customer (text channels). Unlike auto_ack_texts it is ON by default and blank
+// texts fall back to the built-in default: target 'ticket' is only honest if the
+// customer is told. Placeholder {ticket_id} = the ticket's display id.
+
+export const DEFAULT_TICKET_ACK_TEXT =
+  'Vielen Dank, wir haben Ihr Anliegen unter {ticket_id} aufgenommen und melden uns schnellstmöglich.';
+/** Fixed text for an addition to an already open ticket (not configurable in v1). */
+export const DEFAULT_TICKET_FOLLOWUP_ACK_TEXT =
+  'Vielen Dank, Ihre Ergänzung zu {ticket_id} ist aufgenommen — wir melden uns.';
+
+export const ticketAckTextsSchema = autoAckTextsSchema.extend({
+  enabled: z.boolean().default(true),
+});
+export type TicketAckTexts = z.infer<typeof ticketAckTextsSchema>;
+
+export function renderTicketAckText(template: string, ticketId: string): string {
+  return template.replaceAll('{ticket_id}', ticketId);
+}
+
 // --- helpers -----------------------------------------------------------------
 
 /** Maps the en-US short weekday (as produced by Intl) to our weekday key. */
@@ -153,4 +174,21 @@ export function selectAutoAckText(
   const within = hours ? isWithinBusinessHours(now, hours) : false;
   const text = within ? ack.in_hours : ack.out_of_hours;
   return text.trim().length > 0 ? text : null;
+}
+
+/**
+ * The ticket confirmation for a NEW ticket: business-hours pick like
+ * selectAutoAckText, blank text ⇒ DEFAULT_TICKET_ACK_TEXT, {ticket_id} rendered.
+ * null only when disabled.
+ */
+export function selectTicketAckText(
+  now: Date,
+  ack: TicketAckTexts,
+  hours: BusinessHours | null,
+  ticketId: string
+): string | null {
+  if (!ack.enabled) return null;
+  const within = hours ? isWithinBusinessHours(now, hours) : false;
+  const raw = (within ? ack.in_hours : ack.out_of_hours).trim();
+  return renderTicketAckText(raw.length > 0 ? raw : DEFAULT_TICKET_ACK_TEXT, ticketId);
 }

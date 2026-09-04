@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { retrieveRelevantChunks, EMBEDDING_MODEL } from '@zendori/ai';
-import { isKbImageFilename, type IntakeField, type SupabaseClient } from '@zendori/core';
+import {
+  isKbImageFilename,
+  type EscalationTarget,
+  type IntakeField,
+  type SupabaseClient,
+} from '@zendori/core';
 import {
   hasConfiguredHours,
   isWithinBusinessHours,
@@ -31,6 +36,8 @@ export interface ToolContext {
   handoffEnabled: boolean;
   /** agents.confidence_threshold — with handoffEnabled decides whether a miss escalates. */
   confidenceThreshold: number;
+  /** agents.escalation_target (0031): 'ticket' never transfers and never flips mode. */
+  escalationTarget: EscalationTarget;
   /** 0027: contact fields the agent asks for during ticket intake. */
   intakeFields: IntakeField[];
   /**
@@ -189,7 +196,11 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
     return {
       ok: true,
       chunks: [],
-      instruction: escalate ? KB_MISS_INSTRUCTION_HANDOFF : KB_MISS_INSTRUCTION,
+      instruction: escalate
+        ? ctx.escalationTarget === 'ticket'
+          ? KB_MISS_INSTRUCTION_TICKET
+          : KB_MISS_INSTRUCTION_HANDOFF
+        : KB_MISS_INSTRUCTION,
     };
   }
   return {
@@ -204,6 +215,9 @@ export async function kbSearchTool(ctx: ToolContext, rawArgs: unknown): Promise<
 /** Next step after a knowledge-base miss when uncertainty does NOT escalate (see kbSearchTool). */
 export const KB_MISS_INSTRUCTION =
   'Nichts Passendes gefunden. Falls du noch keine zweite Suche mit anderen Begriffen versucht hast, versuche jetzt genau eine. Sonst: sage ehrlich, dass du dazu keine Information hast, und biete im selben Satz von dir aus an, das Anliegen aufzunehmen (create_ticket), damit sich ein Mitarbeiter meldet — warte nicht, bis der Anrufer danach fragt.';
+/** Next step after a miss when uncertainty escalates under target 'ticket' (no human live). */
+export const KB_MISS_INSTRUCTION_TICKET =
+  'Nichts Passendes gefunden. Falls du noch keine zweite Suche mit anderen Begriffen versucht hast, versuche jetzt genau eine. Sonst: antworte NICHT inhaltlich, sage ehrlich, dass du das gerade nicht beantworten kannst, und rufe im selben Zug handoff_human mit reason="low_confidence" auf — das Werkzeug leitet dich danach durch die Aufnahme eines Rückrufs. Warte nicht, bis der Anrufer danach fragt.';
 /** Next step after a miss when uncertainty escalates (handoff on, threshold > 0). */
 export const KB_MISS_INSTRUCTION_HANDOFF =
   'Nichts Passendes gefunden. Falls du noch keine zweite Suche mit anderen Begriffen versucht hast, versuche jetzt genau eine. Sonst: antworte NICHT inhaltlich, sage ehrlich, dass du das gerade nicht beantworten kannst, und rufe im selben Zug handoff_human mit reason="low_confidence" auf — das Werkzeug sagt dir danach, ob weitergeleitet wird oder du einen Rückruf aufnimmst. Warte nicht, bis der Anrufer nach einem Mitarbeiter fragt.';
@@ -425,6 +439,7 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     origin: 'voice',
     subject: args.subject,
     description: args.description,
+    attach: 'always',
     attachMode: ctx.ticketState.ticketId ? 'overwrite' : 'gapfill',
   });
   if (ticket) ctx.ticketState.ticketId = ticket.id;
@@ -580,12 +595,14 @@ const handoffArgsSchema = z.object({
   reason: z.enum(['user_request', 'low_confidence', 'keyword']),
 });
 
-export type VoiceHandoffDecision = 'transfer' | 'callback' | 'suppress';
+export type VoiceHandoffDecision = 'transfer' | 'callback' | 'ticket' | 'suppress';
 
 export interface DecideVoiceHandoffInput {
   reason: 'user_request' | 'low_confidence' | 'keyword';
   /** agents.handoff_enabled (0018). */
   handoffEnabled: boolean;
+  /** agents.escalation_target (0031): 'ticket' ⇒ callback intake, never a transfer. */
+  escalationTarget?: EscalationTarget;
   /** Agent-less safe-intake fallback sets this false — never transfer. */
   allowTransfer: boolean;
   /** Voice channel transferNumber (may be absent/blank). */
@@ -608,6 +625,9 @@ export interface DecideVoiceHandoffInput {
  */
 export function decideVoiceHandoff(input: DecideVoiceHandoffInput): VoiceHandoffDecision {
   if (!input.handoffEnabled && input.reason === 'low_confidence') return 'suppress';
+  // Phase 12: no human live — take the request as a callback ticket, whatever
+  // number or hours say. The suppression above keeps its meaning.
+  if (input.escalationTarget === 'ticket') return 'ticket';
   const number = input.transferNumber?.trim();
   if (!input.allowTransfer || !number) return 'callback';
   const hoursConfigured = hasConfiguredHours(input.businessHours);
@@ -671,6 +691,7 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
   const decision = decideVoiceHandoff({
     reason,
     handoffEnabled: ctx.handoffEnabled,
+    escalationTarget: ctx.escalationTarget,
     allowTransfer: ctx.allowTransfer,
     transferNumber: ctx.channelConfig.transferNumber,
     businessHours: ctx.businessHours,
@@ -694,6 +715,41 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
       action: 'no_handoff',
       instruction:
         'Eine Übergabe ist hierfür nicht vorgesehen. Sage ehrlich, dass du das gerade nicht beantworten kannst, und biete an, das Anliegen aufzunehmen (create_ticket) — ein Kollege meldet sich dann.',
+    };
+  }
+
+  if (decision === 'ticket') {
+    // Target 'ticket' (Phase 12): NO mode/status flip, never a transfer — the
+    // request becomes a callback ticket (attach within the call) and the model
+    // takes the intake. One callback_ticket event per conversation (same
+    // once-only idiom as the suppress branch).
+    const promised = await ensureTicketForConversation(ctx.supabase, {
+      orgId: ctx.orgId,
+      conversationId: ctx.conversationId,
+      origin: 'voice',
+      attach: 'always',
+      details: { reason, outcome: 'callback_ticket', target: 'ticket' },
+    });
+    if (promised) ctx.ticketState.ticketId = promised.id;
+    const { data: existing } = await ctx.supabase
+      .from('handoff_events')
+      .select('id')
+      .eq('org_id', ctx.orgId)
+      .eq('conversation_id', ctx.conversationId)
+      .eq('outcome', 'callback_ticket')
+      .limit(1);
+    if (!existing || existing.length === 0) {
+      await insertVoiceHandoffEvent(ctx, reason, 'callback_ticket');
+    }
+    const outside =
+      hasConfiguredHours(ctx.businessHours) && !isWithinBusinessHours(new Date(), ctx.businessHours!);
+    const intakeStep = callbackIntakeStep(ctx.intakeFields);
+    return {
+      ok: true,
+      action: 'callback',
+      instruction: outside
+        ? `Sage ehrlich, dass du das Anliegen aufnimmst und sich ein Mitarbeiter am nächsten Werktag zurückmeldet — versprich keine Verbindung: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`
+        : `Sage ehrlich, dass du das Anliegen aufnimmst und sich ein Mitarbeiter schnellstmöglich zurückmeldet — versprich keine Verbindung: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`,
     };
   }
 
@@ -730,6 +786,7 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
     orgId: ctx.orgId,
     conversationId: ctx.conversationId,
     origin: 'voice',
+    attach: 'always',
     details: { reason, outcome: 'callback_ticket' },
   });
   if (promised) ctx.ticketState.ticketId = promised.id;

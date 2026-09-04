@@ -254,6 +254,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       orgId: form.orgId,
       conversationId,
       origin: 'form',
+      attach: 'never',
       subject,
       openedMessageId: messageId,
       details: { form_id: form.id },

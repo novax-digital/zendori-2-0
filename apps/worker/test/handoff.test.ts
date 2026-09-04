@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decideDraftAction, detectHandoff, matchesEscalationKeyword } from '../src/pipeline/handoff.js';
+import {
+  decideDraftAction,
+  decideEscalation,
+  detectHandoff,
+  matchesEscalationKeyword,
+} from '../src/pipeline/handoff.js';
 
 const KEYWORDS = ['kündigung', 'beschwerde', 'anwalt', 'datenschutz'];
 
@@ -110,22 +115,68 @@ describe('matchesEscalationKeyword', () => {
 
 describe('decideDraftAction', () => {
   it('always hands off when a handoff is required, even with autopilot on', () => {
-    expect(decideDraftAction(true, true)).toBe('handoff');
-    expect(decideDraftAction(true, false)).toBe('handoff');
+    expect(decideDraftAction('handoff', true)).toBe('handoff');
+    expect(decideDraftAction('handoff', false)).toBe('handoff');
   });
 
   it('auto-sends when autopilot is enabled and no handoff is required', () => {
-    expect(decideDraftAction(false, true)).toBe('auto_send');
+    expect(decideDraftAction('none', true)).toBe('auto_send');
   });
 
   it('keeps the draft as a suggestion when autopilot is off and no handoff', () => {
-    expect(decideDraftAction(false, false)).toBe('pending');
+    expect(decideDraftAction('none', false)).toBe('pending');
   });
 
   it('NEVER auto-sends a suppressed low-confidence draft (0018 trap)', () => {
     // Without this rule the toggle would ship the below-threshold answer the
     // org explicitly did not trust — the draft must stay a suggestion.
-    expect(decideDraftAction(false, true, true)).toBe('pending');
-    expect(decideDraftAction(false, false, true)).toBe('pending');
+    expect(decideDraftAction('none', true, true)).toBe('pending');
+    expect(decideDraftAction('none', false, true)).toBe('pending');
+  });
+});
+
+// Phase 12: the target decides what a fired trigger DOES; detection is unchanged.
+describe('decideEscalation', () => {
+  const base = { confidence: 0.9, threshold: 0.7, wantsHuman: false, body: 'Hallo', keywords: ['kündigung'], handoffEnabled: true };
+  it("maps every trigger to 'handoff' under target human and to 'ticket' under target ticket", () => {
+    for (const trigger of [
+      { body: 'Ich reiche meine Kündigung ein', reason: 'keyword' },
+      { wantsHuman: true, reason: 'user_request' },
+      { confidence: 0.2, reason: 'low_confidence' },
+    ] as const) {
+      const { reason, ...over } = trigger;
+      expect(decideEscalation({ ...base, ...over, escalationTarget: 'human' })).toEqual({
+        action: 'handoff',
+        reason,
+        suppressed: false,
+      });
+      expect(decideEscalation({ ...base, ...over, escalationTarget: 'ticket' })).toEqual({
+        action: 'ticket',
+        reason,
+        suppressed: false,
+      });
+    }
+  });
+  it('suppressed low confidence stays suppressed under both targets', () => {
+    for (const escalationTarget of ['human', 'ticket'] as const) {
+      expect(decideEscalation({ ...base, confidence: 0.2, handoffEnabled: false, escalationTarget })).toEqual({
+        action: 'none',
+        reason: null,
+        suppressed: true,
+      });
+    }
+  });
+  it('no trigger ⇒ none', () => {
+    expect(decideEscalation({ ...base, escalationTarget: 'ticket' })).toEqual({ action: 'none', reason: null, suppressed: false });
+  });
+});
+
+describe('decideDraftAction (Phase 12 signature)', () => {
+  it("'ticket' wins over autopilot and a suppressed draft never auto-sends", () => {
+    expect(decideDraftAction('ticket', true)).toBe('ticket');
+    expect(decideDraftAction('handoff', true)).toBe('handoff');
+    expect(decideDraftAction('none', true, true)).toBe('pending');
+    expect(decideDraftAction('none', true)).toBe('auto_send');
+    expect(decideDraftAction('none', false)).toBe('pending');
   });
 });

@@ -67,6 +67,13 @@ eines nie erfüllbaren „unter 0"); **Übergabe-Schalter aus** = derselbe Schwe
 `handoff_human` sagt der Agent ehrlich, dass er es nicht sicher weiß, und bietet
 `create_ticket` an.
 
+### Eskalationsziel (Phase 12)
+
+Steht der Agent auf „Als Ticket aufnehmen" (`agents.escalation_target='ticket'`), transferiert
+`handoff_human` **nie** und flippt die Konversation nicht in den Human-Modus: jede Übergabe wird zur
+Rückruf-Aufnahme (Ticket + `callback_ticket`-Event), Tool und Prompt versprechen keine Verbindung
+(`buildHandoffTool`, `humanRequestRules`, `userRequestRule`). Details docs/phase-12-escalation.md.
+
 ### Anliegen-Aufnahme: vier Regeln aus dem Live-Test (2026-09-03)
 
 Owner-Testanruf: Ticket-UUID vorgelesen, E-Mail verhört, kein eigenes Ticket-Angebot, E-Mail

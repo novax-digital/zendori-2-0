@@ -13,6 +13,8 @@ export type AgentRow = {
   confidence_threshold: number;
   is_active: boolean;
   handoff_enabled: boolean;
+  /** 0031: absent on pre-migration rows → 'human'. */
+  escalation_target?: string;
   /** 0027: fields a voice agent asks the caller for during ticket intake. */
   intake_fields: IntakeField[];
 };
@@ -35,7 +37,7 @@ export async function listAgents(orgId: string): Promise<AgentRow[]> {
   let res = await supabase
     .from('agents')
     .select(
-      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields'
+      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields, escalation_target'
     )
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
@@ -131,6 +133,7 @@ export function AgentFields({
         defaultMode={agent?.mode}
         defaultThreshold={agent?.confidence_threshold}
         defaultHandoffEnabled={agent?.handoff_enabled}
+        defaultEscalationTarget={agent?.escalation_target === 'ticket' ? 'ticket' : 'human'}
         defaultIntakeFields={agent?.intake_fields}
         disabled={disabled}
       />

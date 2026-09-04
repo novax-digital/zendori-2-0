@@ -230,14 +230,13 @@ export default function ContextSidebar({
           </div>
         )}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-          {!tickets.some((ticket) => ticket.status !== 'resolved') ? (
-            <form action={createTicketFromConversation}>
-              {hiddenFields}
-              <button className="ghost" type="submit">
-                Ticket anlegen
-              </button>
-            </form>
-          ) : null}
+          {/* always offered (attach rule v2): a manual ticket is always a NEW one */}
+          <form action={createTicketFromConversation}>
+            {hiddenFields}
+            <button className="ghost" type="submit">
+              Ticket anlegen
+            </button>
+          </form>
           {hubspot.connected ? (
             <form action={syncConversationTicketToHubspot}>
               {hiddenFields}

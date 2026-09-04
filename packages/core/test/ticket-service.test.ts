@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ensureTicket, findOpenTicket, refineOpenTicket } from '../src/ticket-service.js';
+import {
+  ensureTicket,
+  findOpenTicket,
+  refineOpenTicket,
+  shouldAttachToTicket,
+} from '../src/ticket-service.js';
 
 // ensureTicket is the ONE creation path (worker + web). These pin the attach
 // rule, the race fallback and the schema-skew degrade against a chainable
@@ -97,6 +102,10 @@ const OPEN = {
   priority: 'normal',
   assignee_id: null,
   contact_id: 'contact-1',
+  channel_id: 'chan-1',
+  hubspot_ticket_id: null,
+  opened_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1 h old
+  opened_message_id: 'msg-open',
 };
 
 const BASE = { orgId: 'org-1', conversationId: 'conv-1' };
@@ -236,5 +245,67 @@ describe('findOpenTicket / refineOpenTicket', () => {
     const fake = makeFake({ openTicket: null });
     await refineOpenTicket(fake.client, { ...BASE, priority: 'urgent' });
     expect(fake.updates).toHaveLength(0);
+  });
+});
+
+// Attach rule v2 (Phase 12, owner: "a conversation always continues"): a new
+// topic or a stale open ticket opens a NEW ticket even while older ones are open.
+describe('attach rule v2', () => {
+  it('a topic change opens a new ticket although one is open', async () => {
+    const fake = makeFake({ openTicket: OPEN });
+    const result = await ensureTicket(fake.client, { ...BASE, origin: 'handoff', newTopic: true });
+    expect(result.outcome).toBe('created');
+    expect(fake.inserts.some((i) => i.table === 'tickets')).toBe(true);
+  });
+
+  it('an open ticket older than the 24h window opens a new one; window null keeps attaching', async () => {
+    const stale = { ...OPEN, opened_at: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString() };
+    const created = await ensureTicket(makeFake({ openTicket: stale }).client, { ...BASE, origin: 'handoff' });
+    expect(created.outcome).toBe('created');
+    const attached = await ensureTicket(makeFake({ openTicket: stale }).client, {
+      ...BASE,
+      origin: 'handoff',
+      attachWindowHours: null,
+    });
+    expect(attached.outcome).toBe('attached');
+  });
+
+  it("attach:'never' always creates, attach:'always' attaches even on a topic change", async () => {
+    const never = await ensureTicket(makeFake({ openTicket: OPEN }).client, { ...BASE, origin: 'form', attach: 'never' });
+    expect(never.outcome).toBe('created');
+    const always = await ensureTicket(makeFake({ openTicket: OPEN }).client, {
+      ...BASE,
+      origin: 'voice',
+      attach: 'always',
+      newTopic: true,
+    });
+    expect(always.outcome).toBe('attached');
+  });
+
+  it('a retry with the same opening message attaches even if re-classified as a new topic', async () => {
+    const fake = makeFake({ openTicket: OPEN });
+    const result = await ensureTicket(fake.client, {
+      ...BASE,
+      origin: 'handoff',
+      newTopic: true,
+      openedMessageId: 'msg-open',
+    });
+    expect(result.outcome).toBe('attached');
+    expect(fake.inserts.find((i) => i.table === 'ticket_events')?.row).toMatchObject({
+      details: expect.objectContaining({ new_topic: true, message_id: 'msg-open' }),
+    });
+  });
+
+  it('shouldAttachToTicket table', () => {
+    const now = new Date('2026-09-04T12:00:00Z');
+    const fresh = { opened_at: '2026-09-04T10:00:00Z', opened_message_id: 'm1' };
+    const old = { opened_at: '2026-09-02T10:00:00Z', opened_message_id: 'm1' };
+    expect(shouldAttachToTicket(fresh, {}, now)).toBe(true);
+    expect(shouldAttachToTicket(fresh, { newTopic: true }, now)).toBe(false);
+    expect(shouldAttachToTicket(old, {}, now)).toBe(false);
+    expect(shouldAttachToTicket(old, { attachWindowHours: null }, now)).toBe(true);
+    expect(shouldAttachToTicket(old, { attachWindowHours: 72 }, now)).toBe(true);
+    expect(shouldAttachToTicket(old, { newTopic: true, openedMessageId: 'm1' }, now)).toBe(true);
+    expect(shouldAttachToTicket({ opened_at: 'garbage', opened_message_id: null }, {}, now)).toBe(true);
   });
 });

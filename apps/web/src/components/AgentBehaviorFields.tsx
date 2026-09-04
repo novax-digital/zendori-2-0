@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AgentKind, AgentMode, IntakeField } from '@zendori/core';
+import type { AgentKind, AgentMode, EscalationTarget, IntakeField } from '@zendori/core';
 
 // Kind/mode/threshold interplay for the agent forms (0015):
 //   · Voice agents offer only "Reine Annahme" and "Autopilot" — no drafts on a
@@ -49,6 +49,7 @@ export default function AgentBehaviorFields({
   defaultMode,
   defaultThreshold,
   defaultHandoffEnabled,
+  defaultEscalationTarget,
   defaultIntakeFields,
   disabled,
 }: {
@@ -57,8 +58,10 @@ export default function AgentBehaviorFields({
   kindFixed?: AgentKind;
   defaultMode?: AgentMode;
   defaultThreshold?: number;
-  /** 0018: per-agent human-handoff master switch (default on). */
+  /** 0018: "also escalate on low confidence" (default on). */
   defaultHandoffEnabled?: boolean;
+  /** 0031: what an escalation does — live handoff or ticket without a human. */
+  defaultEscalationTarget?: EscalationTarget;
   /** 0027: fields a voice agent asks the caller for during ticket intake. */
   defaultIntakeFields?: IntakeField[];
   disabled: boolean;
@@ -159,6 +162,44 @@ export default function AgentBehaviorFields({
           </p>
         </fieldset>
       ) : null}
+      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+        <label>Wenn der Agent nicht weiterkommt</label>
+        {/* render-time truth (0027 pattern): a stale form must not reset the target */}
+        <input type="hidden" name="escalationTargetRendered" value="1" />
+        <label htmlFor={`${idPrefix}-target-human`} className="check-row">
+          <input
+            id={`${idPrefix}-target-human`}
+            name="escalationTarget"
+            type="radio"
+            value="human"
+            defaultChecked={(defaultEscalationTarget ?? 'human') === 'human'}
+            disabled={disabled}
+          />
+          An einen Menschen übergeben — Live-Übernahme in der Inbox; Telefon: Weiterleitung oder
+          Rückruf
+        </label>
+        <p className="hint" style={{ marginLeft: '1.6rem' }}>
+          Die Konversation wechselt in die Warteschlange (Bot pausiert), bis ein Mitarbeiter übernimmt
+          oder an den Bot zurückgibt.
+        </p>
+        <label htmlFor={`${idPrefix}-target-ticket`} className="check-row">
+          <input
+            id={`${idPrefix}-target-ticket`}
+            name="escalationTarget"
+            type="radio"
+            value="ticket"
+            defaultChecked={defaultEscalationTarget === 'ticket'}
+            disabled={disabled}
+          />
+          Als Ticket aufnehmen — kein Mensch live verfügbar; der Bot bleibt aktiv, der Kunde bekommt
+          eine Bestätigung
+        </label>
+        <p className="hint" style={{ marginLeft: '1.6rem' }}>
+          Das Anliegen wird als Ticket angelegt und dem Kunden mit Ticketnummer bestätigt (Text
+          „Ticket-Bestätigung" unter Übergabe &amp; Zeiten); der Agent beantwortet weitere Fragen.
+          Telefon: nimmt einen Rückruf auf, leitet nie weiter.
+        </p>
+      </fieldset>
       {mode !== 'intake_only' ? (
         <div>
           <label htmlFor={`${idPrefix}-handoff`} className="check-row">
@@ -169,15 +210,20 @@ export default function AgentBehaviorFields({
               defaultChecked={defaultHandoffEnabled !== false}
               disabled={disabled}
             />
-            Übergabe an Menschen bei Unsicherheit
+            Auch bei Unsicherheit (unter dem Schwellwert) eskalieren
           </label>
           <p className="hint">
-            Aus = bei unsicheren Antworten bleibt der Entwurf ein Vorschlag (Text) bzw. bietet der
-            Assistent ein Ticket an (Telefon). Wünscht sich jemand ausdrücklich einen Menschen oder
-            fällt ein Eskalations-Begriff, wird IMMER übergeben.
+            Aus = eine unsichere Antwort bleibt ein Vorschlag im Posteingang (Text) bzw. der Assistent
+            bietet ein Ticket an (Telefon). Eskalations-Begriffe und der ausdrückliche Wunsch nach
+            einem Menschen eskalieren IMMER — je nach Auswahl oben als Übergabe oder als Ticket.
           </p>
         </div>
-      ) : null}
+      ) : (
+        <p className="hint">
+          Reine Annahme: jede Nachricht wird aufgenommen — als Übergabe in die Warteschlange oder
+          als Ticket mit Bestätigung, je nach Auswahl oben.
+        </p>
+      )}
       {showThreshold ? (
         <div>
           <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1)</label>
@@ -196,8 +242,8 @@ export default function AgentBehaviorFields({
           />
           <p className="hint">
             {kind === 'voice'
-              ? 'Der Agent schätzt im Gespräch selbst ein, wie sicher er sich ist (0–1). Liegt er unter diesem Wert, antwortet er nicht inhaltlich, sondern übergibt an einen Menschen — bzw. nimmt das Anliegen als Rückruf auf, wenn „Übergabe an Menschen bei Unsicherheit" aus ist oder kein Live-Transfer möglich ist. Höher = vorsichtiger, 0 = übergibt nie wegen Unsicherheit.'
-              : 'Unterhalb dieses Werts übergibt der Agent an einen Menschen (sofern „Übergabe an Menschen bei Unsicherheit" aktiv ist) — auch im Modus „Nur Entwürfe". Im Autopilot bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.'}
+              ? 'Der Agent schätzt im Gespräch selbst ein, wie sicher er sich ist (0–1). Liegt er unter diesem Wert, antwortet er nicht inhaltlich, sondern eskaliert (Übergabe oder Ticket, siehe oben) — sofern „Auch bei Unsicherheit eskalieren" aktiv ist; sonst bietet er ein Ticket an. Höher = vorsichtiger, 0 = eskaliert nie wegen Unsicherheit.'
+              : 'Unterhalb dieses Werts eskaliert der Agent (Übergabe oder Ticket, siehe oben — sofern „Auch bei Unsicherheit eskalieren" aktiv ist), auch im Modus „Nur Entwürfe". Im Autopilot bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.'}
           </p>
         </div>
       ) : null}

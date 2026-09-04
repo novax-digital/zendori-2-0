@@ -228,6 +228,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       identity: null,
       knowledgeBaseIds: null,
       handoffEnabled: true,
+      escalationTarget: 'human',
       confidenceThreshold: DEFAULT_CONFIDENCE_THRESHOLD,
       intakeFields: ['name', 'phone'],
     };
@@ -237,9 +238,20 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       // kind is 0015 — degrade select-by-select while migrations are pending.
       let agentRes = await supabase
         .from('agents')
-        .select('identity, mode, is_active, kind, handoff_enabled, intake_fields, confidence_threshold')
+        .select(
+          'identity, mode, is_active, kind, handoff_enabled, intake_fields, confidence_threshold, escalation_target'
+        )
         .eq('id', agentId)
         .maybeSingle();
+      if (isUndefinedColumn(agentRes.error)) {
+        // escalation_target is 0031 — retry without it first
+        logger.warn({ voiceCallId }, 'agents.escalation_target missing — is migration 0031 applied?');
+        agentRes = (await supabase
+          .from('agents')
+          .select('identity, mode, is_active, kind, handoff_enabled, intake_fields, confidence_threshold')
+          .eq('id', agentId)
+          .maybeSingle()) as typeof agentRes;
+      }
       if (isUndefinedColumn(agentRes.error)) {
         logger.warn({ voiceCallId }, 'agents.intake_fields missing — is migration 0027 applied?');
         agentRes = (await supabase
@@ -285,6 +297,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
         handoff_enabled?: boolean;
         confidence_threshold?: number | string;
         intake_fields?: unknown;
+        escalation_target?: string;
       } | null;
       if (row && row.kind === 'text') {
         // A text agent on a voice channel (pre-0015 data — the DB guard blocks
@@ -319,6 +332,8 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
           knowledgeBaseIds,
           // pre-0018 rows: default ON = today's behavior
           handoffEnabled: row.handoff_enabled !== false,
+          // pre-0031 rows: live handoff = today's behavior
+          escalationTarget: row.escalation_target === 'ticket' ? 'ticket' : 'human',
           // numeric(0..1) arrives as a string over PostgREST — coerce, and fall
           // back to the column default if it is missing or unparseable.
           confidenceThreshold: parseThreshold(row.confidence_threshold),

@@ -25,12 +25,17 @@ import {
   type KbChunkMatch,
 } from '@zendori/ai';
 import {
+  DEFAULT_TICKET_FOLLOWUP_ACK_TEXT,
   type AutoAckTexts,
   type BusinessHours,
+  type TicketAckTexts,
   autoAckTextsSchema,
   businessHoursSchema,
+  renderTicketAckText,
   selectAutoAckText,
+  selectTicketAckText,
   sendWhatsappTypingIndicator,
+  ticketAckTextsSchema,
 } from '@zendori/channels';
 import type {
   AgentMode,
@@ -48,12 +53,13 @@ import {
   hubspotRuleApplies,
   parseHubspotSyncRules,
   requestConversationTicketsResync,
+  type EscalationTarget,
 } from '@zendori/core';
 import { getServiceClient, isMissingColumnError } from '../db.js';
 import {
   decideDraftAction,
   deliverBotReply,
-  detectHandoff,
+  decideEscalation,
   matchesEscalationKeyword,
 } from './handoff.js';
 import { buildTicketSeed, ensureTicketForConversation, type TicketSeed } from './tickets.js';
@@ -108,6 +114,8 @@ interface LoadedAgent {
   isActive: boolean;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /** agents.escalation_target (0031): 'human' (live handoff) | 'ticket' (no human). */
+  escalationTarget: EscalationTarget;
 }
 
 interface LoadedMessage {
@@ -469,24 +477,25 @@ export async function processMessage(messageId: string): Promise<void> {
           ...ticketSeed,
         });
         await finishMessage(supabase, message.id, updatedMetadata);
-        await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+        await afterInbound(supabase, orgId, channel.id, conv.id);
         return;
       }
       if (activeAgent.mode === 'intake_only') {
         // "Reine Annahme": the request is ticketised (classify/extract above);
-        // hand straight to a human with the org's auto-ack — no RAG, no draft.
+        // hand straight to a human (target human) or open the ticket + confirm
+        // (target ticket) — no RAG, no draft.
         const settings = await loadHandoffSettings(supabase, orgId);
-        await applyHandoff(supabase, {
+        await escalate(supabase, {
+          target: activeAgent.escalationTarget,
           orgId,
           ticket: ticketSeed,
           conv,
           channel,
           reason: 'intake',
-          autoAckTexts: settings.autoAckTexts,
-          businessHours: settings.businessHours,
+          settings,
         });
         await finishMessage(supabase, message.id, updatedMetadata);
-        await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+        await afterInbound(supabase, orgId, channel.id, conv.id);
         return;
       }
     }
@@ -547,18 +556,19 @@ export async function processMessage(messageId: string): Promise<void> {
           ? 'user_request'
           : null;
       if (overrideReason) {
-        await applyHandoff(supabase, {
+        await escalate(supabase, {
+          // force-draft runs without an agent gate — fall back to live handoff
+          target: activeAgent?.escalationTarget ?? 'human',
           orgId,
           ticket: ticketSeed,
           conv,
           channel,
           reason: overrideReason,
-          autoAckTexts: settings.autoAckTexts,
-          businessHours: settings.businessHours,
+          settings,
         });
       }
       await finishMessage(supabase, message.id, updatedMetadata);
-      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv.id);
       return;
     }
 
@@ -619,20 +629,21 @@ export async function processMessage(messageId: string): Promise<void> {
       // Defensive: unreachable (gate above), but never auto-act without an agent.
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
       await finishMessage(supabase, message.id, updatedMetadata);
-      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv.id);
       return;
     }
     const settings = await loadHandoffSettings(supabase, orgId);
-    const detection = detectHandoff({
+    const detection = decideEscalation({
       confidence: draftResult.confidence,
       threshold: activeAgent.confidenceThreshold,
       wantsHuman: classification.wants_human,
       body: cleanBody,
       keywords: settings.escalationKeywords,
       handoffEnabled: activeAgent.handoffEnabled,
+      escalationTarget: activeAgent.escalationTarget,
     });
     const action = decideDraftAction(
-      detection.handoff,
+      detection.action,
       activeAgent.mode === 'autopilot',
       detection.suppressed
     );
@@ -685,19 +696,21 @@ export async function processMessage(messageId: string): Promise<void> {
         senderType: 'bot',
         files,
       });
-      await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv.id);
       return; // message already marked done by the claim
-    } else if (action === 'handoff' && detection.reason) {
-      // Keep the draft as a suggestion for the agent, then hand off (§6).
+    } else if ((action === 'handoff' || action === 'ticket') && detection.reason) {
+      // Keep the draft as a suggestion for the agent, then escalate (§6): live
+      // handoff, or — target 'ticket' — ticket + confirmation with the bot
+      // staying in control.
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
-      await applyHandoff(supabase, {
+      await escalate(supabase, {
+        target: action === 'ticket' ? 'ticket' : 'human',
         orgId,
         ticket: ticketSeed,
         conv,
         channel,
         reason: detection.reason,
-        autoAckTexts: settings.autoAckTexts,
-        businessHours: settings.businessHours,
+        settings,
       });
     } else {
       // No handoff: keep the draft as a suggestion (Phase-4 behavior). When the
@@ -724,11 +737,62 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 6. done -------------------------------------------------------------
     await finishMessage(supabase, message.id, updatedMetadata);
-    await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
+    await afterInbound(supabase, orgId, channel.id, conv.id);
   } catch (err) {
     if (err instanceof PipelineError) throw err;
     throw new PipelineError(currentStep, orgId, conv.id, err);
   }
+}
+
+interface EscalateArgs {
+  target: EscalationTarget;
+  orgId: string;
+  conv: LoadedConversation;
+  channel: LoadedChannel;
+  reason: HandoffReason;
+  ticket: TicketSeed;
+  settings: HandoffSettings;
+}
+
+/** The one switch between the two escalation targets (Phase 12). */
+async function escalate(supabase: SupabaseClient, args: EscalateArgs): Promise<void> {
+  if (args.target === 'ticket') {
+    await applyTicketEscalation(supabase, {
+      orgId: args.orgId,
+      conv: args.conv,
+      channel: args.channel,
+      reason: args.reason,
+      ticket: args.ticket,
+      ticketAckTexts: args.settings.ticketAckTexts,
+      businessHours: args.settings.businessHours,
+    });
+    return;
+  }
+  await applyHandoff(supabase, {
+    orgId: args.orgId,
+    ticket: args.ticket,
+    conv: args.conv,
+    channel: args.channel,
+    reason: args.reason,
+    autoAckTexts: args.settings.autoAckTexts,
+    businessHours: args.settings.businessHours,
+  });
+}
+
+/**
+ * After every processed inbound message: conversation-stream HubSpot request
+ * (rules) + re-arm the conversation's newest open ticket (ticket stream) —
+ * under target 'ticket' the conversation never leaves bot mode, so follow-ups
+ * would otherwise never reach the HubSpot ticket. Both best-effort.
+ */
+async function afterInbound(
+  supabase: SupabaseClient,
+  orgId: string,
+  channelId: string,
+  conversationId: string
+): Promise<void> {
+  await maybeRequestHubspotSync(supabase, orgId, channelId, conversationId);
+  await requestConversationTicketsResync(supabase, { orgId, channelId, conversationId });
 }
 
 /**
@@ -799,29 +863,51 @@ export async function handlePipelineFailure(messageId: string, err: unknown): Pr
       // mode='bot' so a force-draft failure on an already-human conversation
       // does not re-flip status or duplicate events. No auto-ack here: the
       // outbound send would likely fail during the same outage.
-      const { data: flipped } = await supabase
-        .from('conversations')
-        .update({ mode: 'human', status: 'pending' })
-        .eq('id', err.conversationId)
-        .eq('org_id', err.orgId)
-        .eq('mode', 'bot')
-        .select('id');
-      if ((flipped?.length ?? 0) > 0) {
-        await insertHandoffEvent(supabase, {
-          org_id: err.orgId,
-          conversation_id: err.conversationId,
-          reason: 'manual',
-          outcome: 'pending_human',
-          details: { cause: 'pipeline_failure', step: err.step },
-        });
-        // Phase 11: the stranded request is a ticket too (subject falls back
-        // to whatever the ticket already has / the conversation shows).
-        await ensureTicketForConversation(supabase, {
+      // Phase 12: under escalation target 'ticket' the conversation must not be
+      // silenced — ticket + event, no mode flip. Any lookup failure ⇒ 'human'
+      // (today's behavior; during an outage that is the safe default).
+      const target = await loadEscalationTargetForMessage(supabase, messageId);
+      if (target === 'ticket') {
+        const ticket = await ensureTicketForConversation(supabase, {
           orgId: err.orgId,
           conversationId: err.conversationId,
           origin: 'pipeline_failure',
-          details: { step: err.step },
+          details: { step: err.step, target: 'ticket' },
         });
+        if (ticket?.outcome === 'created') {
+          await insertHandoffEvent(supabase, {
+            org_id: err.orgId,
+            conversation_id: err.conversationId,
+            reason: 'manual',
+            outcome: 'callback_ticket',
+            details: { cause: 'pipeline_failure', step: err.step, target: 'ticket', ticket_id: ticket.id },
+          });
+        }
+      } else {
+        const { data: flipped } = await supabase
+          .from('conversations')
+          .update({ mode: 'human', status: 'pending' })
+          .eq('id', err.conversationId)
+          .eq('org_id', err.orgId)
+          .eq('mode', 'bot')
+          .select('id');
+        if ((flipped?.length ?? 0) > 0) {
+          await insertHandoffEvent(supabase, {
+            org_id: err.orgId,
+            conversation_id: err.conversationId,
+            reason: 'manual',
+            outcome: 'pending_human',
+            details: { cause: 'pipeline_failure', step: err.step },
+          });
+          // Phase 11: the stranded request is a ticket too (subject falls back
+          // to whatever the ticket already has / the conversation shows).
+          await ensureTicketForConversation(supabase, {
+            orgId: err.orgId,
+            conversationId: err.conversationId,
+            origin: 'pipeline_failure',
+            details: { step: err.step },
+          });
+        }
       }
       await supabase.from('notes').insert({
         org_id: err.orgId,
@@ -994,6 +1080,8 @@ interface HandoffSettings {
   escalationKeywords: string[];
   /** org_settings.auto_ack_texts jsonb; parsed via autoAckTextsSchema when used. */
   autoAckTexts: unknown;
+  /** org_settings.ticket_ack_texts jsonb (0031); parsed via ticketAckTextsSchema when used. */
+  ticketAckTexts: unknown;
   /** org_settings.business_hours jsonb (nullable); parsed via businessHoursSchema. */
   businessHours: unknown;
 }
@@ -1006,24 +1094,57 @@ async function loadHandoffSettings(
   supabase: SupabaseClient,
   orgId: string
 ): Promise<HandoffSettings> {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('org_settings')
-    .select('escalation_keywords, auto_ack_texts, business_hours')
+    .select('escalation_keywords, auto_ack_texts, business_hours, ticket_ack_texts')
     .eq('org_id', orgId)
     .maybeSingle();
+  if (error && (error as { code?: string }).code === '42703') {
+    // ticket_ack_texts is 0031 — retry without it while the migration is pending
+    ({ data, error } = await supabase
+      .from('org_settings')
+      .select('escalation_keywords, auto_ack_texts, business_hours')
+      .eq('org_id', orgId)
+      .maybeSingle());
+  }
   if (error) throw error;
   const row = data as {
     escalation_keywords: unknown;
     auto_ack_texts: unknown;
     business_hours: unknown;
+    ticket_ack_texts?: unknown;
   } | null;
   return {
     escalationKeywords: Array.isArray(row?.escalation_keywords)
       ? row.escalation_keywords.filter((k): k is string => typeof k === 'string')
       : [],
     autoAckTexts: row?.auto_ack_texts ?? {},
+    ticketAckTexts: row?.ticket_ack_texts ?? {},
     businessHours: row?.business_hours ?? null,
   };
+}
+
+/**
+ * The escalation target of the agent on the message's channel (one indexed
+ * lookup messages → channels → agents). Anything missing or failing ⇒ 'human'.
+ */
+async function loadEscalationTargetForMessage(
+  supabase: SupabaseClient,
+  messageId: string
+): Promise<EscalationTarget> {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('channel:channels!inner(agent:agents(escalation_target, is_active))')
+      .eq('id', messageId)
+      .maybeSingle();
+    if (error || !data) return 'human';
+    const agent = (data as { channel?: { agent?: { escalation_target?: string; is_active?: boolean } | null } })
+      .channel?.agent;
+    return agent?.is_active && agent.escalation_target === 'ticket' ? 'ticket' : 'human';
+  } catch {
+    return 'human';
+  }
 }
 
 /** Clamp a numeric confidence threshold (number|string from PG) to [0,1]; default 0.7. */
@@ -1056,11 +1177,19 @@ async function loadAgentKbIds(
 async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<LoadedAgent | null> {
   // handoff_enabled is 0018: retry without it while the migration is pending
   // (same schema-skew pattern as the 42703 guards elsewhere).
+  // column-skew chain: escalation_target is 0031, handoff_enabled is 0018
   let { data, error } = await supabase
     .from('agents')
-    .select('id, name, identity, mode, confidence_threshold, is_active, handoff_enabled')
+    .select('id, name, identity, mode, confidence_threshold, is_active, handoff_enabled, escalation_target')
     .eq('id', agentId)
     .maybeSingle();
+  if (error && (error as { code?: string }).code === '42703') {
+    ({ data, error } = await supabase
+      .from('agents')
+      .select('id, name, identity, mode, confidence_threshold, is_active, handoff_enabled')
+      .eq('id', agentId)
+      .maybeSingle());
+  }
   if (error && (error as { code?: string }).code === '42703') {
     ({ data, error } = await supabase
       .from('agents')
@@ -1078,6 +1207,7 @@ async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<Loa
     confidence_threshold: number | string | null;
     is_active: boolean;
     handoff_enabled?: boolean;
+    escalation_target?: string;
   };
   const mode: AgentMode =
     row.mode === 'autopilot' || row.mode === 'intake_only' ? row.mode : 'draft_only';
@@ -1090,6 +1220,8 @@ async function loadAgent(supabase: SupabaseClient, agentId: string): Promise<Loa
     isActive: row.is_active === true,
     // pre-0018 rows: default ON = today's behavior
     handoffEnabled: row.handoff_enabled !== false,
+    // pre-0031 rows: live handoff = today's behavior
+    escalationTarget: row.escalation_target === 'ticket' ? 'ticket' : 'human',
   };
 }
 
@@ -1148,6 +1280,71 @@ async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): P
     content: text,
     senderType: 'system',
   });
+}
+
+interface ApplyTicketEscalationArgs {
+  orgId: string;
+  conv: LoadedConversation;
+  channel: LoadedChannel;
+  /** keyword | user_request | low_confidence | intake */
+  reason: HandoffReason;
+  ticket: TicketSeed;
+  ticketAckTexts: unknown;
+  businessHours: unknown;
+}
+
+/**
+ * Escalation target 'ticket' (Phase 12, 0031): the request becomes — or attaches
+ * to — a ticket, the customer gets a confirmation, and the bot STAYS in control:
+ * no mode/status flip, later messages are answered normally. A new ticket gets
+ * the org's ticket confirmation (with its number) plus ONE callback_ticket
+ * event (= one SLA promise per ticket); an addition to an open ticket gets the
+ * short follow-up confirmation (except intake — every message there is an
+ * addition, a reply per message would read like an auto-responder loop).
+ * Best-effort after the ticket exists.
+ */
+async function applyTicketEscalation(
+  supabase: SupabaseClient,
+  args: ApplyTicketEscalationArgs
+): Promise<void> {
+  const ticket = await ensureTicketForConversation(supabase, {
+    orgId: args.orgId,
+    conversationId: args.conv.id,
+    origin: args.reason === 'intake' ? 'intake' : 'handoff',
+    ...args.ticket,
+    details: { reason: args.reason, target: 'ticket' },
+  });
+  if (!ticket) return;
+  let text: string | null;
+  if (ticket.outcome === 'created') {
+    await insertHandoffEvent(supabase, {
+      org_id: args.orgId,
+      conversation_id: args.conv.id,
+      reason: args.reason,
+      outcome: 'callback_ticket',
+      details: { target: 'ticket', ticket_id: ticket.id },
+    });
+    const ack = parseTicketAckTexts(args.ticketAckTexts);
+    text = selectTicketAckText(new Date(), ack, parseBusinessHours(args.businessHours), ticket.displayId);
+  } else {
+    if (args.reason === 'intake') return;
+    const ack = parseTicketAckTexts(args.ticketAckTexts);
+    if (!ack.enabled) return;
+    text = renderTicketAckText(DEFAULT_TICKET_FOLLOWUP_ACK_TEXT, ticket.displayId);
+  }
+  if (!text) return;
+  await deliverBotReply(supabase, {
+    conv: args.conv,
+    channel: args.channel,
+    content: text,
+    senderType: 'system',
+  });
+}
+
+/** Tolerant jsonb → TicketAckTexts ('{}' = enabled with the default text). */
+function parseTicketAckTexts(value: unknown): TicketAckTexts {
+  const parsed = ticketAckTextsSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data : ticketAckTextsSchema.parse({});
 }
 
 /**

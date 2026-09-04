@@ -47,6 +47,16 @@ export const agentModeSchema = z.enum(['draft_only', 'autopilot', 'intake_only']
 export type AgentMode = z.infer<typeof agentModeSchema>;
 
 /**
+ * What an escalation (escalation keyword, customer wants a human, intake,
+ * low confidence with handoff_enabled) DOES (Phase 12, 0031):
+ * 'human' = live handoff (mode='human', status='pending'; voice transfer/
+ * callback) — 'ticket' = open a ticket, confirm it to the customer, the bot
+ * stays in control (no mode/status flip, voice never transfers).
+ */
+export const escalationTargetSchema = z.enum(['human', 'ticket']);
+export type EscalationTarget = z.infer<typeof escalationTargetSchema>;
+
+/**
  * Agent kind (0015): a voice agent serves ONLY voice channels, a text agent
  * everything else. Voice agents allow only intake_only|autopilot modes.
  */

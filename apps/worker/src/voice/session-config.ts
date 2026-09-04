@@ -1,5 +1,5 @@
 import type { VoiceChannelConfig } from '@zendori/channels';
-import type { IntakeField } from '@zendori/core';
+import type { EscalationTarget, IntakeField } from '@zendori/core';
 import type { FunctionTool, SessionConfig } from './xai-realtime.js';
 
 // Builds the per-call session.update config from the org's voice channel config
@@ -18,8 +18,7 @@ Arbeitsweise:
 - Wenn die Antwort schon aus dem bisherigen Gespräch bekannt ist (z. B. bereits nachgeschlagen oder eben besprochen), antworte direkt — ohne erneutes Nachschlagen und ohne Ankündigung.
 - Kündige das Nachschlagen NICHT rituell an: rufe kb_search in der Regel einfach direkt auf, eine kurze natürliche Pause ist völlig in Ordnung. Wenn du vor einem Nachschlagen doch etwas sagst, halte es sehr kurz und variiere die Formulierung — nie zweimal dieselbe Floskel im selben Gespräch, und versprich niemals routinemäßig „einen kleinen Augenblick".
 - Formuliere die Suchanfrage präzise und nutze Produkt- und Eigennamen, wenn der Anrufer welche genannt hat. Liefert die Suche nichts Passendes, versuche genau EINE zweite Suche mit anderen Begriffen (Synonym, Produktname, Oberbegriff), bevor du sagst, dass du es nicht weißt.
-- Wenn der Anrufer ausdrücklich einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
-- Bei den Themen {keywords} rufe handoff_human mit reason="keyword" auf.
+{humanRules}
 {lowConfidenceRule}
 - Nimm bei Bedarf ein Anliegen strukturiert auf: {intakeStep}fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
 {intakeRules}
@@ -61,6 +60,31 @@ export function escalatesLowConfidence(handoffEnabled: boolean, threshold: numbe
 }
 
 /**
+ * Keyword / "I want a human" bullets of the answer template, per target
+ * (Phase 12): under 'ticket' the same tool call happens, but the model must
+ * never promise a live connection — the tool takes a callback intake.
+ */
+function humanRequestRules(target: EscalationTarget, keywordList: string): string {
+  const base = [
+    '- Wenn der Anrufer ausdrücklich einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.',
+    `- Bei den Themen ${keywordList} rufe handoff_human mit reason="keyword" auf.`,
+  ];
+  if (target === 'ticket') {
+    base.push(
+      '- Sage dabei ehrlich, dass du das Anliegen aufnimmst und sich ein Mitarbeiter zurückmeldet — versprich keine sofortige Verbindung oder Weiterleitung.'
+    );
+  }
+  return base.join('\n');
+}
+
+/** The intake template's "wants a human" sentence, per target. */
+function userRequestRule(target: EscalationTarget): string {
+  return target === 'ticket'
+    ? 'Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, erkläre ehrlich, dass gerade keine direkte Verbindung möglich ist, und rufe handoff_human mit reason="user_request" auf — das Anliegen wird als Rückruf aufgenommen.'
+    : 'Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.';
+}
+
+/**
  * The low_confidence bullet depends on the agent's handoff toggle (0018) and
  * its confidence threshold: escalating → hand uncertainty below the threshold
  * to handoff_human (the tool then decides live transfer vs. callback ticket
@@ -71,13 +95,21 @@ export function escalatesLowConfidence(handoffEnabled: boolean, threshold: numbe
  * you don't know" rule — in the owner's test the agent stopped at "kann ich
  * nicht sagen" and the caller had to ask for a ticket himself.
  */
-function lowConfidenceRule(handoffEnabled: boolean, threshold: number): string {
+function lowConfidenceRule(
+  handoffEnabled: boolean,
+  threshold: number,
+  target: EscalationTarget = 'human'
+): string {
   if (threshold <= 0) {
     return `- Übergib NICHT allein wegen Unsicherheit an einen Menschen (rufe dafür nicht handoff_human auf). Antworte so gut, wie die Wissensdatenbank es zulässt. Liefert sie wirklich nichts, sage NIEMALS nur, dass du es nicht weißt — sage das ehrlich und ${OFFER_TICKET_YOURSELF}`;
   }
   const t = formatThreshold(threshold);
   return escalatesLowConfidence(handoffEnabled, threshold)
-    ? `- ${CONFIDENCE_SCALE} Liegt dein Wert unter ${t}, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf — das gilt auch, wenn die Wissensdatenbank gar nichts liefert. Sage dabei ehrlich, dass du das gerade nicht beantworten kannst, NIEMALS nur „das weiß ich nicht"; das Werkzeug sagt dir danach, ob weitergeleitet wird oder du einen Rückruf aufnimmst. Warte nicht, bis der Anrufer nach einem Mitarbeiter fragt. Bei ${t} oder höher antwortest du selbst.`
+    ? `- ${CONFIDENCE_SCALE} Liegt dein Wert unter ${t}, antworte NICHT inhaltlich, sondern rufe handoff_human mit reason="low_confidence" auf — das gilt auch, wenn die Wissensdatenbank gar nichts liefert. Sage dabei ehrlich, dass du das gerade nicht beantworten kannst, NIEMALS nur „das weiß ich nicht"; ${
+        target === 'ticket'
+          ? 'das Werkzeug leitet dich danach durch die Aufnahme eines Rückrufs'
+          : 'das Werkzeug sagt dir danach, ob weitergeleitet wird oder du einen Rückruf aufnimmst'
+      }. Warte nicht, bis der Anrufer nach einem Mitarbeiter fragt. Bei ${t} oder höher antwortest du selbst.`
     : `- ${CONFIDENCE_SCALE} Liegt dein Wert unter ${t}, antworte NICHT inhaltlich und rufe auch NICHT handoff_human auf — das gilt auch, wenn die Wissensdatenbank gar nichts liefert. Sage NIEMALS nur, dass du es nicht weißt: sage ehrlich, dass du das gerade nicht sicher sagen kannst, und ${OFFER_TICKET_YOURSELF} Bei ${t} oder höher antwortest du selbst.`;
 }
 
@@ -244,7 +276,7 @@ Ablauf:
 {callbackRule}
 {emailRule}
 
-Wenn der Anrufer ausdrücklich sofort einen Menschen sprechen möchte, rufe handoff_human mit reason="user_request" auf.
+{userRequestRule}
 Inhaltliche Fragen beantwortest du nicht — nimm sie stattdessen als Anliegen auf.`;
 
 // Shared style rules for both modes — live-gate feedback (2026-07-15/21): the
@@ -356,23 +388,28 @@ export function buildCreateTicketTool(
   };
 }
 
-const HANDOFF_TOOL: FunctionTool = {
-  type: 'function',
-  name: 'handoff_human',
-  description:
-    'Übergibt das Gespräch an einen menschlichen Mitarbeiter (Weiterleitung oder Rückruf).',
-  parameters: {
-    type: 'object',
-    properties: {
-      reason: {
-        type: 'string',
-        enum: ['user_request', 'low_confidence', 'keyword'],
-        description: 'Grund der Übergabe.',
+/** handoff_human per target (Phase 12): under 'ticket' there is no transfer — ever. */
+export function buildHandoffTool(target: EscalationTarget): FunctionTool {
+  return {
+    type: 'function',
+    name: 'handoff_human',
+    description:
+      target === 'ticket'
+        ? 'Nimmt das Anliegen für einen Rückruf durch einen Mitarbeiter auf, wenn du nicht weiterkommst oder der Anrufer einen Menschen wünscht. Es gibt KEINE Weiterleitung — versprich niemals, jetzt zu verbinden.'
+        : 'Übergibt das Gespräch an einen menschlichen Mitarbeiter (Weiterleitung oder Rückruf).',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          enum: ['user_request', 'low_confidence', 'keyword'],
+          description: 'Grund der Übergabe.',
+        },
       },
+      required: ['reason'],
     },
-    required: ['reason'],
-  },
-};
+  };
+}
 
 const END_CALL_TOOL: FunctionTool = {
   type: 'function',
@@ -412,6 +449,8 @@ export interface VoiceAgentBehavior {
   knowledgeBaseIds: string[] | null;
   /** 0018: OFF suppresses only the low_confidence handoff trigger. */
   handoffEnabled: boolean;
+  /** 0031: 'ticket' = no human live — callback intake instead of transfer/handoff. */
+  escalationTarget: EscalationTarget;
   /**
    * agents.confidence_threshold (0–1): the self-assessed certainty below which
    * the agent stops answering and hands off / offers a ticket. Same column and
@@ -446,13 +485,14 @@ export function buildSessionConfig(
             ? `Erfrage nacheinander: ${fieldsPhrase} — und dann das Anliegen.`
             : 'Erfrage das Anliegen.'
         )
-      : ANSWER_TEMPLATE.replace('{keywords}', keywordList)
+      : ANSWER_TEMPLATE.replace('{humanRules}', humanRequestRules(agent.escalationTarget, keywordList))
           .replace(
             '{lowConfidenceRule}',
-            lowConfidenceRule(agent.handoffEnabled, agent.confidenceThreshold)
+            lowConfidenceRule(agent.handoffEnabled, agent.confidenceThreshold, agent.escalationTarget)
           )
           .replace('{intakeStep}', fieldsPhrase ? `erfrage ${fieldsPhrase}, ` : '')
   )
+    .replace('{userRequestRule}', userRequestRule(agent.escalationTarget))
     .replace('{intakeRules}', intakeFieldRules(agent.intakeFields))
     .replace('{callbackRule}', callbackNumberRule(agent.intakeFields, context.callerNumber))
     .replace('{emailRule}', EMAIL_CAPTURE_RULE)
@@ -496,10 +536,11 @@ export function buildSessionConfig(
   }
 
   const createTicketTool = buildCreateTicketTool(agent.intakeFields, context.callerNumber);
+  const handoffTool = buildHandoffTool(agent.escalationTarget);
   const tools: FunctionTool[] =
     agent.mode === 'intake_only'
-      ? [createTicketTool, HANDOFF_TOOL, END_CALL_TOOL]
-      : [KB_SEARCH_TOOL, createTicketTool, HANDOFF_TOOL, END_CALL_TOOL];
+      ? [createTicketTool, handoffTool, END_CALL_TOOL]
+      : [KB_SEARCH_TOOL, createTicketTool, handoffTool, END_CALL_TOOL];
 
   return {
     instructions: parts.join('\n\n'),

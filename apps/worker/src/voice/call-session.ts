@@ -623,6 +623,7 @@ export class CallSession {
             orgId: this.p.orgId,
             conversationId: this.p.conversationId,
             origin: 'voice',
+            attach: 'always',
             details: { outcome: 'transfer_failed' },
           });
           if (promised) this.ticketState.ticketId = promised.id;
@@ -754,6 +755,7 @@ export class CallSession {
       agentMode: this.p.agent.mode,
       knowledgeBaseIds: this.p.agent.knowledgeBaseIds,
       handoffEnabled: this.p.agent.handoffEnabled,
+      escalationTarget: this.p.agent.escalationTarget,
       confidenceThreshold: this.p.agent.confidenceThreshold,
       intakeFields: this.p.agent.intakeFields,
       businessHours: this.p.businessHours ?? null,

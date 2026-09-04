@@ -116,12 +116,27 @@ export async function remindOverdueHandoffs(
         .maybeSingle();
       let stillWaiting = Boolean(conv);
       if (!stillWaiting) {
-        const open = await findOpenTicket(supabase, orgRow.org_id, event.conversation_id).catch(
-          () => null
-        );
-        if (open && open !== 'unavailable') {
-          stillWaiting = open.status === 'open' && open.assignee_id === null;
+        // Phase 12: prefer THE ticket this promise created (details.ticket_id) —
+        // with several open tickets per conversation, a newer assigned one
+        // must not mask an older one still waiting.
+        const promisedTicketId =
+          typeof event.details?.ticket_id === 'string' ? event.details.ticket_id : null;
+        let ticket: { status: string; assignee_id: string | null } | null = null;
+        if (promisedTicketId) {
+          const { data } = await supabase
+            .from('tickets')
+            .select('status, assignee_id')
+            .eq('org_id', orgRow.org_id)
+            .eq('id', promisedTicketId)
+            .maybeSingle();
+          ticket = (data as { status: string; assignee_id: string | null } | null) ?? null;
+        } else {
+          const open = await findOpenTicket(supabase, orgRow.org_id, event.conversation_id).catch(
+            () => null
+          );
+          if (open && open !== 'unavailable') ticket = open;
         }
+        if (ticket) stillWaiting = ticket.status === 'open' && ticket.assignee_id === null;
       }
       if (!stillWaiting) {
         await markReminded(); // resolved / handled meanwhile — never re-check

@@ -18,10 +18,12 @@ const logger = createLogger('tickets');
 
 let skewWarned = false;
 
+export type EnsuredTicket = TicketRef & { outcome: 'created' | 'attached' };
+
 export async function ensureTicketForConversation(
   supabase: SupabaseClient,
   input: EnsureTicketInput
-): Promise<TicketRef | null> {
+): Promise<EnsuredTicket | null> {
   try {
     const result = await ensureTicket(supabase, input);
     if (result.outcome === 'unavailable') {
@@ -31,7 +33,7 @@ export async function ensureTicketForConversation(
       }
       return null;
     }
-    return result.ticket;
+    return { ...result.ticket, outcome: result.outcome };
   } catch (err) {
     logger.warn(
       {
@@ -52,6 +54,8 @@ export interface TicketSeed {
   category: string | null;
   priority: ConversationPriority | null;
   openedMessageId: string | null;
+  /** classification.is_new_topic — attach rule v2 opens a new ticket on a topic change. */
+  newTopic: boolean;
 }
 
 /**
@@ -76,5 +80,6 @@ export function buildTicketSeed(args: {
     category: extraction?.category?.trim() || null,
     priority: classification?.priority ?? null,
     openedMessageId: args.messageId,
+    newTopic: classification?.is_new_topic === true,
   };
 }

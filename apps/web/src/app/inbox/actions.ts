@@ -1068,6 +1068,7 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
       orgId: org,
       conversationId,
       origin: 'takeover',
+      attach: 'always',
       assigneeId: user.id,
       createdBy: user.id,
       details: { reason: 'manual' },
@@ -1136,6 +1137,7 @@ export async function syncConversationTicketToHubspot(formData: FormData): Promi
       orgId: org,
       conversationId,
       origin: 'manual',
+      attach: 'always',
       createdBy: user.id,
     });
     if (result.outcome === 'unavailable') {
@@ -1194,6 +1196,8 @@ export async function createTicketFromConversation(formData: FormData): Promise<
       orgId: org,
       conversationId,
       origin: 'manual',
+      // the button always opens a NEW ticket (attach rule v2)
+      attach: 'never',
       createdBy: user.id,
     });
     outcome = result.outcome;

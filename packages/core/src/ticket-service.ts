@@ -6,11 +6,11 @@ import { PRIORITY_RANK, isPlaceholderSubject, type TicketOrigin, type TicketStat
 
 // The ONE way tickets come into existence (Phase 11, docs/phase-11-tickets.md).
 // Works with the worker's service-role client and with a user-scoped client
-// under RLS (the inbox button, takeover). Implements the attach rule: while a
-// conversation has a non-resolved ticket, a new qualifying event attaches to
-// it instead of creating a second one. The partial unique index
-// tickets_open_per_conversation_idx (0030) enforces that for every writer; a
-// lost race surfaces as 23505 and is resolved by re-reading + attaching.
+// under RLS (the inbox button, takeover). Attach rule v2 (Phase 12, owner
+// 2026-09-04 — "a conversation always continues"): a qualifying event attaches
+// to the NEWEST non-resolved ticket of the conversation only when the message
+// is not a topic change and that ticket is younger than the attach window;
+// otherwise it opens a new ticket even while older ones are still open.
 // Number and display id are assigned by the 0030 insert trigger.
 
 export interface EnsureTicketInput {
@@ -34,7 +34,21 @@ export interface EnsureTicketInput {
    * within the same call).
    */
   attachMode?: 'gapfill' | 'overwrite';
+  /**
+   * Attach policy (Phase 12): 'auto' (default) attaches to the newest
+   * non-resolved ticket unless newTopic or that ticket is older than
+   * attachWindowHours; 'always' attaches to the newest open one regardless
+   * (voice within a call, takeover, HubSpot button); 'never' always opens a
+   * new ticket (forms, the manual inbox button).
+   */
+  attach?: 'auto' | 'always' | 'never';
+  /** classification.is_new_topic — a topic change opens a new ticket. */
+  newTopic?: boolean;
+  /** Hours a ticket stays attachable after opened_at; null = unlimited. Default 24. */
+  attachWindowHours?: number | null;
 }
+
+export const DEFAULT_ATTACH_WINDOW_HOURS = 24;
 
 export interface TicketRef {
   id: string;
@@ -61,10 +75,33 @@ interface OpenTicketRow {
   contact_id: string | null;
   channel_id: string;
   hubspot_ticket_id: string | null;
+  opened_at: string;
+  opened_message_id: string | null;
 }
 
 const OPEN_TICKET_SELECT =
-  'id, number, display_id, status, subject, description, category, priority, assignee_id, contact_id, channel_id, hubspot_ticket_id';
+  'id, number, display_id, status, subject, description, category, priority, assignee_id, contact_id, channel_id, hubspot_ticket_id, opened_at, opened_message_id';
+
+/**
+ * Attach rule v2, pure: does this event belong to the given open ticket?
+ * - same opening message ⇒ yes (a pg-boss retry must never open a second ticket
+ *   even if Haiku re-classifies the topic differently)
+ * - topic change ⇒ no
+ * - no window ⇒ yes; else only while the ticket is younger than the window
+ */
+export function shouldAttachToTicket(
+  open: { opened_at: string; opened_message_id: string | null },
+  input: { openedMessageId?: string | null; newTopic?: boolean; attachWindowHours?: number | null },
+  now: Date = new Date()
+): boolean {
+  if (input.openedMessageId && open.opened_message_id === input.openedMessageId) return true;
+  if (input.newTopic === true) return false;
+  const window = input.attachWindowHours === undefined ? DEFAULT_ATTACH_WINDOW_HOURS : input.attachWindowHours;
+  if (window === null) return true;
+  const openedMs = Date.parse(open.opened_at);
+  if (Number.isNaN(openedMs)) return true;
+  return now.getTime() - openedMs <= window * 60 * 60 * 1000;
+}
 
 function toRef(row: {
   id: string;
@@ -88,8 +125,9 @@ function nonEmpty(value: string | null | undefined): string | null {
 }
 
 /**
- * The conversation's current non-resolved ticket, null when there is none, or
- * 'unavailable' while migration 0030 is not applied yet.
+ * The conversation's NEWEST non-resolved ticket, null when there is none, or
+ * 'unavailable' while migration 0030 is not applied yet. Several open tickets
+ * per conversation are normal since attach rule v2 — the newest is "current".
  */
 export async function findOpenTicket(
   supabase: SupabaseClient,
@@ -102,6 +140,7 @@ export async function findOpenTicket(
     .eq('org_id', orgId)
     .eq('conversation_id', conversationId)
     .neq('status', 'resolved')
+    .order('opened_at', { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) {
@@ -158,6 +197,8 @@ async function attachToTicket(
     actor_id: input.createdBy ?? null,
     details: {
       origin: input.origin,
+      // content-free tuning signal for the attach rule (docs/phase-12-escalation.md)
+      new_topic: input.newTopic === true,
       ...(input.openedMessageId ? { message_id: input.openedMessageId } : {}),
       ...(input.details ?? {}),
     },
@@ -177,14 +218,17 @@ async function attachToTicket(
   return { outcome: 'attached', ticket: toRef({ ...open, status, subject: subjectNow }) };
 }
 
-/** Create a ticket for the conversation or attach to its open one (attach rule). */
+/** Create a ticket for the conversation or attach to its newest open one (attach rule v2). */
 export async function ensureTicket(
   supabase: SupabaseClient,
   input: EnsureTicketInput
 ): Promise<EnsureTicketResult> {
   const open = await findOpenTicket(supabase, input.orgId, input.conversationId);
   if (open === 'unavailable') return { outcome: 'unavailable', reason: 'schema_skew' };
-  if (open) return attachToTicket(supabase, open, input);
+  const policy = input.attach ?? 'auto';
+  if (open && policy !== 'never' && (policy === 'always' || shouldAttachToTicket(open, input))) {
+    return attachToTicket(supabase, open, input);
+  }
 
   const { data, error } = await supabase
     .from('tickets')
@@ -205,8 +249,9 @@ export async function ensureTicket(
     .single();
   if (error) {
     if ((error as { code?: string }).code === '23505') {
-      // Lost the race on tickets_open_per_conversation_idx: someone created the
-      // open ticket a moment ago — attach to it.
+      // Only reachable while the 0030 partial index still exists (worker ahead
+      // of 0031) or on a number/display-id collision: attach to the newest open
+      // ticket instead of failing — today's behavior.
       const raced = await findOpenTicket(supabase, input.orgId, input.conversationId);
       if (raced && raced !== 'unavailable') return attachToTicket(supabase, raced, input);
     }

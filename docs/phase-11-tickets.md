@@ -9,9 +9,9 @@ Die **Konversation** ist das Gespräch (Inbox, `status open|pending|resolved`, `
 Ein **Ticket** ist ein Arbeitsobjekt **aus** einer Konversation: eigene ID (`display_id`, Format pro
 Org), Status `open | in_progress | waiting | resolved`, Priorität, Zuständiger, HubSpot-Zustand,
 Verlaufsausschnitt (Nachrichten ab `opened_at`). Eine Konversation kann über die Zeit mehrere
-Tickets haben; solange eines nicht erledigt ist, hängen neue Anlässe daran (**Attach-Regel**,
-erzwungen durch `tickets_open_per_conversation_idx`). Nach „Erledigt" öffnet der nächste Anlass ein
-neues Ticket.
+Tickets haben — auch mehrere offene (**Attach-Regel v2**, Phase 12): ein neuer Anlass hängt nur dann
+ans neueste offene Ticket, wenn er kein Themenwechsel ist und dieses Ticket jünger als 24 h ist; sonst
+entsteht ein neues. Details docs/phase-12-escalation.md.
 
 ## Wann entsteht ein Ticket? (Owner: nur, wenn der Bot nicht selbst abschließt)
 
@@ -33,10 +33,11 @@ ohne Aufnahme, explizite Entwurfsanforderung (`force_draft`).
 
 Der **einzige** Erzeugungsweg ist `ensureTicket()` in `packages/core/src/ticket-service.ts`
 (Worker: Wrapper `apps/worker/src/pipeline/tickets.ts`, fängt alles; Web: direkt mit User-Client).
-Attach: Gap-Fill Betreff (Platzhalter „Anruf von …" zählt als leer)/Beschreibung/Kategorie,
-Priorität nur aufwärts, Zuständiger wenn leer (→ In Bearbeitung), Kontakt-Snapshot aus der
-Konversation, `ticket_events{kind:'attached'}`. Verlorenes Rennen (23505) → erneut lesen, anhängen.
-Migration 0030 nicht angewendet → `unavailable` → Hooks schweigen.
+Attach (`attach:'auto'|'always'|'never'`, `newTopic`, 24-h-Fenster): Gap-Fill Betreff (Platzhalter
+„Anruf von …" zählt als leer)/Beschreibung/Kategorie, Priorität nur aufwärts, Zuständiger wenn leer
+(→ In Bearbeitung), Kontakt-Snapshot aus der Konversation, `ticket_events{kind:'attached',
+details.new_topic}`. Migration 0030 nicht angewendet → `unavailable` → Hooks schweigen.
+Unter Eskalationsziel `ticket` (Phase 12) entstehen `handoff`/`intake`-Tickets ohne Moduswechsel.
 
 ## Datenmodell (Migration 0030)
 

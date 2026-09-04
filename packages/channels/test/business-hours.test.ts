@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_TICKET_ACK_TEXT,
+  DEFAULT_TICKET_FOLLOWUP_ACK_TEXT,
   autoAckTextsSchema,
   businessHoursSchema,
   hasConfiguredHours,
   isWithinBusinessHours,
+  renderTicketAckText,
   selectAutoAckText,
+  selectTicketAckText,
+  ticketAckTextsSchema,
   type BusinessHours,
 } from '../src/business-hours.js';
 
@@ -195,5 +200,40 @@ describe('selectAutoAckText', () => {
         berlinMonNineToFive
       )
     ).toBeNull();
+  });
+});
+
+describe('ticket confirmation (Phase 12)', () => {
+  const hours = {
+    timezone: 'Europe/Berlin',
+    hours: { mon: { open: '09:00', close: '17:00' }, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null },
+  };
+  const monday10 = new Date('2026-09-07T08:00:00Z'); // 10:00 Berlin, Monday
+  const monday20 = new Date('2026-09-07T18:00:00Z'); // 20:00 Berlin, Monday
+
+  it('is enabled by default and falls back to the default text with the id rendered', () => {
+    const ack = ticketAckTextsSchema.parse({});
+    expect(ack.enabled).toBe(true);
+    expect(selectTicketAckText(monday10, ack, hours, 'ZD-2026-0007')).toBe(
+      'Vielen Dank, wir haben Ihr Anliegen unter ZD-2026-0007 aufgenommen und melden uns schnellstmöglich.'
+    );
+    expect(DEFAULT_TICKET_ACK_TEXT).toContain('{ticket_id}');
+    expect(renderTicketAckText(DEFAULT_TICKET_FOLLOWUP_ACK_TEXT, '#3')).toContain('#3');
+  });
+
+  it('picks the in/out-of-hours text and renders every {ticket_id}', () => {
+    const ack = ticketAckTextsSchema.parse({
+      in_hours: 'Tag {ticket_id} / {ticket_id}',
+      out_of_hours: 'Nacht {ticket_id}',
+    });
+    expect(selectTicketAckText(monday10, ack, hours, '#5')).toBe('Tag #5 / #5');
+    expect(selectTicketAckText(monday20, ack, hours, '#5')).toBe('Nacht #5');
+    // no hours configured ⇒ out-of-hours text (same convention as selectAutoAckText)
+    expect(selectTicketAckText(monday10, ack, null, '#5')).toBe('Nacht #5');
+  });
+
+  it('returns null only when disabled', () => {
+    const ack = ticketAckTextsSchema.parse({ enabled: false, in_hours: 'x', out_of_hours: 'y' });
+    expect(selectTicketAckText(monday10, ack, hours, '#1')).toBeNull();
   });
 });

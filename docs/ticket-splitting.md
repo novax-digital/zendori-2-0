@@ -68,6 +68,9 @@ nach Inaktivität" (Aus / 24 h / 3 Tage / 7 Tage). **Owner-only** (Action
 
 ## KI-Themenwechsel: nur Messwert
 
+**Seit Phase 12 steuert `is_new_topic` den Ticket-Attach** (neues Thema ⇒ neues Ticket, siehe
+docs/phase-12-escalation.md) — die Konversations-Trennung bleibt davon unberührt.
+
 `is_new_topic` ist Teil des Klassifikations-Schemas (Haiku sieht dafür einen
 kompakten Verlaufs-Block: letzte 6 Turns à 200 Zeichen — gefenced und
 fence-neutralisiert wie der Nachrichtentext; die Prompt-Regeln stellen klar,

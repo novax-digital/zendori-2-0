@@ -3,7 +3,7 @@
 // isAutopilotEnabled are pure and unit-tested; deliverBotReply performs the
 // outbound persist + channel delivery. Message content is never logged (§7).
 import { deliverOutboundEmail, deliverOutboundWhatsApp } from '@zendori/channels';
-import type { ChannelType, HandoffReason, SupabaseClient } from '@zendori/core';
+import type { ChannelType, EscalationTarget, HandoffReason, SupabaseClient } from '@zendori/core';
 import {
   loadReleasedFiles,
   persistOutboundAttachments,
@@ -77,22 +77,56 @@ export function matchesEscalationKeyword(body: string, keywords: string[]): bool
   return false;
 }
 
-/** What to do with a freshly drafted reply in bot mode. */
-export type DraftAction = 'handoff' | 'auto_send' | 'pending';
+// --- escalation target (Phase 12, 0031) ---------------------------------------
+
+export type EscalationAction = 'none' | 'handoff' | 'ticket';
+
+export interface DecideEscalationInput extends DetectHandoffInput {
+  /** agents.escalation_target: what a fired trigger DOES. */
+  escalationTarget: EscalationTarget;
+}
+
+export interface EscalationDecision {
+  action: EscalationAction;
+  reason: HandoffReason | null;
+  /** low_confidence swallowed by handoff_enabled=false — identical under both targets. */
+  suppressed: boolean;
+}
 
 /**
- * Gate the drafted reply (§4 message-flow): a required handoff always wins; a
- * SUPPRESSED low-confidence detection (0018 toggle off) must never auto-send —
- * the draft below threshold stays a suggestion (the agent effectively behaves
- * like draft_only for that message); otherwise auto-send only when the
- * channel's assigned agent runs in autopilot mode (0011). Pure.
+ * Trigger detection (detectHandoff, unchanged) mapped onto the agent's target:
+ * 'human' = live handoff (today), 'ticket' = ticket + confirmation, bot stays
+ * in control. Keyword and user_request escalate under BOTH targets — for an
+ * org without a team that means an honest "we'll get back to you" ticket
+ * instead of a silenced conversation. Pure.
+ */
+export function decideEscalation(input: DecideEscalationInput): EscalationDecision {
+  const detected = detectHandoff(input);
+  if (!detected.handoff) return { action: 'none', reason: null, suppressed: detected.suppressed };
+  return {
+    action: input.escalationTarget === 'ticket' ? 'ticket' : 'handoff',
+    reason: detected.reason,
+    suppressed: false,
+  };
+}
+
+/** What to do with a freshly drafted reply in bot mode. */
+export type DraftAction = 'handoff' | 'ticket' | 'auto_send' | 'pending';
+
+/**
+ * Gate the drafted reply (§4 message-flow): a required escalation always wins
+ * (handoff OR ticket — a below-threshold draft is never sent); a SUPPRESSED
+ * low-confidence detection (0018 toggle off) must never auto-send either —
+ * the draft stays a suggestion; otherwise auto-send only when the channel's
+ * assigned agent runs in autopilot mode (0011). Pure.
  */
 export function decideDraftAction(
-  handoff: boolean,
+  escalation: EscalationAction,
   autopilotEnabled: boolean,
   suppressed = false
 ): DraftAction {
-  if (handoff) return 'handoff';
+  if (escalation === 'handoff') return 'handoff';
+  if (escalation === 'ticket') return 'ticket';
   if (suppressed) return 'pending';
   if (autopilotEnabled) return 'auto_send';
   return 'pending';

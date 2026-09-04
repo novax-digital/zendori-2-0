@@ -6,6 +6,8 @@ import { z } from 'zod';
 import {
   agentKindSchema,
   agentModeSchema,
+  escalationTargetSchema,
+  isMissingColumnError,
   sanitizeIntakeFields,
   type AgentKind,
   type AgentMode,
@@ -70,11 +72,15 @@ const agentFieldsSchema = z.object({
    * render-time-truth rule as the 0027 intake checkboxes.
    */
   confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
+  /** 0031: only when the radios were rendered (render-time truth). */
+  escalationTarget: escalationTargetSchema.optional(),
 });
 
 function parseAgentFields(formData: FormData) {
   const thresholdRendered = formData.get('thresholdRendered') != null;
+  const targetRendered = formData.get('escalationTargetRendered') != null;
   return agentFieldsSchema.safeParse({
+    escalationTarget: targetRendered ? textField(formData.get('escalationTarget')) || 'human' : undefined,
     org: formData.get('org'),
     name: textField(formData.get('name')),
     identity: textField(formData.get('identity')),
@@ -102,7 +108,7 @@ export async function createAgent(formData: FormData): Promise<void> {
       })
     );
   }
-  const { org, name, identity, mode, confidenceThreshold } = parsed.data;
+  const { org, name, identity, mode, confidenceThreshold, escalationTarget } = parsed.data;
   const kind = kindParsed.data;
   if (!modeAllowedForKind(kind, mode)) {
     redirect(
@@ -127,6 +133,7 @@ export async function createAgent(formData: FormData): Promise<void> {
       mode,
       // absent (voice intake_only): let the column default (0.7) apply
       ...(confidenceThreshold === undefined ? {} : { confidence_threshold: confidenceThreshold }),
+      ...(escalationTarget === undefined ? {} : { escalation_target: escalationTarget }),
       handoff_enabled: handoffEnabled,
       // 0027: only voice forms render the checkboxes (marker = render-time
       // truth) — text agents and stale forms keep the column default rather
@@ -137,7 +144,30 @@ export async function createAgent(formData: FormData): Promise<void> {
     })
     .select('id')
     .single();
-  if (error || !created) {
+  let createdRow = created;
+  if (error && isMissingColumnError(error) && escalationTarget !== undefined) {
+    // pre-0031 skew: retry without escalation_target (column default applies)
+    const retry = await supabase
+      .from('agents')
+      .insert({
+        org_id: org,
+        name,
+        identity: identity === '' ? null : identity,
+        kind,
+        mode,
+        ...(confidenceThreshold === undefined ? {} : { confidence_threshold: confidenceThreshold }),
+        handoff_enabled: handoffEnabled,
+        ...(kind === 'voice' && formData.get('intakeFieldsRendered') != null
+          ? { intake_fields: sanitizeIntakeFields(formData.getAll('intakeFields')) }
+          : {}),
+      })
+      .select('id')
+      .single();
+    createdRow = retry.data;
+    if (retry.error || !createdRow) {
+      redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }));
+    }
+  } else if (error || !created) {
     redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }));
   }
 
@@ -153,7 +183,7 @@ export async function createAgent(formData: FormData): Promise<void> {
     const { error } = await supabase.from('agent_knowledge_bases').insert(
       kbIds.map((kbId) => ({
         org_id: org,
-        agent_id: (created as { id: string }).id,
+        agent_id: (createdRow as { id: string }).id,
         knowledge_base_id: kbId,
       }))
     );
@@ -163,7 +193,7 @@ export async function createAgent(formData: FormData): Promise<void> {
     // The agent exists but has no knowledge — say so instead of faking success
     // (per []-semantics it would silently answer nothing).
     redirect(
-      agentDetailUrl(org, (created as { id: string }).id, {
+      agentDetailUrl(org, (createdRow as { id: string }).id, {
         error: `Agent „${name}" angelegt, aber Wissensdatenbanken konnten nicht verknüpft werden — bitte im Tab „Wissen" manuell anhaken.`,
       })
     );
@@ -171,7 +201,7 @@ export async function createAgent(formData: FormData): Promise<void> {
 
   revalidatePath('/settings/agents');
   redirect(
-    agentDetailUrl(org, (created as { id: string }).id, { notice: `Agent „${name}" angelegt.` })
+    agentDetailUrl(org, (createdRow as { id: string }).id, { notice: `Agent „${name}" angelegt.` })
   );
 }
 
@@ -188,7 +218,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     );
   }
   const agentId = idParsed.data;
-  const { org, name, identity, mode, confidenceThreshold } = parsed.data;
+  const { org, name, identity, mode, confidenceThreshold, escalationTarget } = parsed.data;
   const isActive = formData.get('isActive') != null;
   await requireOwner(org);
 
@@ -208,9 +238,7 @@ export async function updateAgent(formData: FormData): Promise<void> {
     );
   }
 
-  const { data: updated, error: updateError } = await supabase
-    .from('agents')
-    .update({
+  const updatePatch = {
       name,
       identity: identity === '' ? null : identity,
       mode,
@@ -224,10 +252,25 @@ export async function updateAgent(formData: FormData): Promise<void> {
       ...(kind === 'voice' && formData.get('intakeFieldsRendered') != null
         ? { intake_fields: sanitizeIntakeFields(formData.getAll('intakeFields')) }
         : {}),
+  };
+  let { data: updated, error: updateError } = await supabase
+    .from('agents')
+    .update({
+      ...updatePatch,
+      ...(escalationTarget === undefined ? {} : { escalation_target: escalationTarget }),
     })
     .eq('org_id', org)
     .eq('id', agentId)
     .select('id');
+  if (updateError && isMissingColumnError(updateError) && escalationTarget !== undefined) {
+    // pre-0031 skew: keep the other fields working; the target is dropped until the migration lands
+    ({ data: updated, error: updateError } = await supabase
+      .from('agents')
+      .update(updatePatch)
+      .eq('org_id', org)
+      .eq('id', agentId)
+      .select('id'));
+  }
   if (updateError || !updated || updated.length === 0) {
     redirect(agentDetailUrl(org, agentId, { error: 'Agent konnte nicht gespeichert werden.' }));
   }

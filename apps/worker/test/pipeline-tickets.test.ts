@@ -36,6 +36,7 @@ describe('buildTicketSeed', () => {
       category: 'Frage',
       priority: 'high',
       openedMessageId: 'm1',
+      newTopic: false,
     });
   });
 
@@ -54,6 +55,7 @@ describe('buildTicketSeed', () => {
       category: null,
       priority: null,
       openedMessageId: 'm4',
+      newTopic: false,
     });
   });
 
@@ -61,5 +63,15 @@ describe('buildTicketSeed', () => {
     expect(
       buildTicketSeed({ conv: { subject: null }, classification, extraction: null, messageId: 'm5' }).description
     ).toBe('Kunde fragt nach seiner Rechnung.');
+  });
+});
+
+describe('buildTicketSeed newTopic (attach rule v2)', () => {
+  it('carries classification.is_new_topic', () => {
+    expect(
+      buildTicketSeed({ conv: { subject: null }, classification: { ...classification, is_new_topic: true }, extraction: null, messageId: 'm6' })
+        .newTopic
+    ).toBe(true);
+    expect(buildTicketSeed({ conv: { subject: null }, classification, extraction: null, messageId: 'm7' }).newTopic).toBe(false);
   });
 });

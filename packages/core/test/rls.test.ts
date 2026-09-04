@@ -1762,11 +1762,30 @@ describe.skipIf(!enabled)('RLS: tickets (0030)', () => {
     expect(events!.map((e) => e.kind)).toEqual(['created']);
   });
 
-  it('a second OPEN ticket for the same conversation is refused (attach invariant)', async () => {
-    const { error } = await owner
+  it('a second OPEN ticket for the same conversation is allowed (attach rule v2, 0031) and numbered 2', async () => {
+    const { data, error } = await owner
       .from('tickets')
-      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'handoff' });
-    expect(error?.code).toBe('23505');
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'handoff' })
+      .select('number')
+      .single();
+    expect(error).toBeNull();
+    expect(Number(data!.number)).toBe(2);
+    // resolve it again so the remaining cases see a single open ticket
+    await admin.from('tickets').update({ status: 'resolved' }).eq('org_id', orgId).eq('number', 2);
+  });
+
+  it('agents.escalation_target only accepts human|ticket (0031)', async () => {
+    const { data: agent } = await admin
+      .from('agents')
+      .insert({ org_id: orgId, name: 'A', mode: 'autopilot', kind: 'text', escalation_target: 'ticket' })
+      .select('id, escalation_target')
+      .single();
+    expect(agent!.escalation_target).toBe('ticket');
+    const { error } = await admin
+      .from('agents')
+      .update({ escalation_target: 'nowhere' })
+      .eq('id', agent!.id);
+    expect(error?.code).toBe('23514');
   });
 
   it('members cannot supply a number, change identity columns, or touch hubspot state', async () => {
@@ -1820,8 +1839,8 @@ describe.skipIf(!enabled)('RLS: tickets (0030)', () => {
       .select('number, display_id, opened_at')
       .single();
     expect(error).toBeNull();
-    expect(Number(data!.number)).toBe(2);
-    expect(data!.display_id).toBe(formatTicketId('ZD-{YYYY}-{NNNN}', 2, new Date(data!.opened_at)));
+    expect(Number(data!.number)).toBe(3);
+    expect(data!.display_id).toBe(formatTicketId('ZD-{YYYY}-{NNNN}', 3, new Date(data!.opened_at)));
   });
 
   it('strangers see nothing, cannot insert, and cannot allocate numbers for the org', async () => {
@@ -1837,7 +1856,7 @@ describe.skipIf(!enabled)('RLS: tickets (0030)', () => {
 
   it('the counter is readable but not writable by members', async () => {
     const { data } = await owner.from('ticket_counters').select('last_number').eq('org_id', orgId).single();
-    expect(Number(data!.last_number)).toBe(2);
+    expect(Number(data!.last_number)).toBe(3);
     const { data: updated } = await owner
       .from('ticket_counters')
       .update({ last_number: 100 })

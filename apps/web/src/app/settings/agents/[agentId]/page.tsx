@@ -42,7 +42,7 @@ export default async function AgentDetailPage({
   let agentRes = await supabase
     .from('agents')
     .select(
-      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields'
+      'id, name, identity, kind, mode, confidence_threshold, is_active, handoff_enabled, intake_fields, escalation_target'
     )
     .eq('org_id', orgId)
     .eq('id', agentId)
@@ -113,6 +113,7 @@ export default async function AgentDetailPage({
         defaultMode={agent.mode}
         defaultThreshold={agent.confidence_threshold}
         defaultHandoffEnabled={agent.handoff_enabled}
+        defaultEscalationTarget={agent.escalation_target === 'ticket' ? 'ticket' : 'human'}
         defaultIntakeFields={agent.intake_fields}
         disabled={disabled}
       />

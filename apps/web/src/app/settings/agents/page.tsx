@@ -88,6 +88,11 @@ export default async function AgentsPage({
                     <td style={{ color: 'var(--text-muted)' }}>
                       {agent.kind === 'voice' ? 'Voice · ' : ''}
                       {MODE_LABELS[agent.mode]}
+                  {agent.escalation_target === 'ticket' ? (
+                    <span className="badge badge--muted" style={{ marginLeft: '0.4rem' }} title="Eskalation als Ticket — kein Mensch live">
+                      Ticket-Eskalation
+                    </span>
+                  ) : null}
                     </td>
                     <td>
                       <span className="badge">{channelCount.get(agent.id) ?? 0}</span>

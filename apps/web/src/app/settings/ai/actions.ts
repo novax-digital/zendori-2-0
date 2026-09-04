@@ -3,7 +3,8 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { autoAckTextsSchema, businessHoursSchema } from '@zendori/channels';
+import { autoAckTextsSchema, businessHoursSchema, ticketAckTextsSchema } from '@zendori/channels';
+import { isMissingColumnError } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 // Weekday keys as expected by businessHoursSchema.hours (missing day = closed).
@@ -98,6 +99,17 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
     );
   }
 
+  // Phase 12: ticket confirmation (blank texts fall back to the default; no both-required rule)
+  const ticketAckParsed = ticketAckTextsSchema.safeParse({
+    enabled: isChecked(formData, 'ticket_ack_enabled'),
+    in_hours: textField(formData.get('ticket_ack_in_hours')).slice(0, 1000),
+    out_of_hours: textField(formData.get('ticket_ack_out_of_hours')).slice(0, 1000),
+  });
+  if (!ticketAckParsed.success) {
+    redirect(aiSettingsUrl(org, { error: 'Die Texte der Ticket-Bestätigung sind ungültig.' }));
+  }
+  const ticketAck = ticketAckParsed.data;
+
   // 0018 v1.5: handoff SLA in minutes — empty = reminder off.
   const slaRaw = textField(formData.get('handoff_sla_minutes'));
   let handoffSlaMinutes: number | null = null;
@@ -114,16 +126,27 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase
+  const basePatch = {
+    escalation_keywords: keywordsParsed.data,
+    business_hours: businessHoursParsed.data,
+    auto_ack_texts: autoAck,
+    handoff_sla_minutes: handoffSlaMinutes,
+  };
+  let { data, error } = await supabase
     .from('org_settings')
-    .update({
-      escalation_keywords: keywordsParsed.data,
-      business_hours: businessHoursParsed.data,
-      auto_ack_texts: autoAck,
-      handoff_sla_minutes: handoffSlaMinutes,
-    })
+    .update({ ...basePatch, ticket_ack_texts: ticketAck })
     .eq('org_id', org)
     .select('org_id');
+  let ticketAckDropped = false;
+  if (error && isMissingColumnError(error)) {
+    // ticket_ack_texts is 0031 — keep the other settings working meanwhile
+    ticketAckDropped = true;
+    ({ data, error } = await supabase
+      .from('org_settings')
+      .update(basePatch)
+      .eq('org_id', org)
+      .select('org_id'));
+  }
 
   if (error) {
     redirect(aiSettingsUrl(org, { error: 'Einstellungen konnten nicht gespeichert werden.' }));
@@ -134,5 +157,11 @@ export async function saveAiSettings(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/ai');
-  redirect(aiSettingsUrl(org, { notice: 'Einstellungen gespeichert.' }));
+  redirect(
+    aiSettingsUrl(org, {
+      notice: ticketAckDropped
+        ? 'Einstellungen gespeichert — die Ticket-Bestätigung wird erst nach Migration 0031 gespeichert.'
+        : 'Einstellungen gespeichert.',
+    })
+  );
 }

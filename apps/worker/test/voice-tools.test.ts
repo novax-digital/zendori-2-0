@@ -142,6 +142,8 @@ function ctxWith(
     knowledgeBaseIds: null,
     // 0018 defaults: real active agent, toggle on, hours unconfigured.
     handoffEnabled: true,
+    // Phase 12 default: live handoff (today's behavior)
+    escalationTarget: 'human',
     confidenceThreshold: 0.7,
     // 0027 default: the pre-migration hardcoded behavior
     intakeFields: ['name', 'phone'],
@@ -669,6 +671,43 @@ describe('handoffTool', () => {
     expect(ensureTicketMock).not.toHaveBeenCalled();
   });
 
+  it("target 'ticket': never transfers, never flips mode — callback intake + one callback_ticket event", async () => {
+    const fake = makeFake();
+    const ticketState = newTicketState();
+    const result = await handoffTool(
+      ctxWith(fake, {
+        escalationTarget: 'ticket',
+        ticketState,
+        channelConfig: { ...CONFIG, transferNumber: '+491701112233' },
+      }),
+      { reason: 'user_request' }
+    );
+    expect(result.ok).toBe(true);
+    expect((result as { action: string }).action).toBe('callback');
+    const instruction = (result as { instruction: string }).instruction;
+    expect(instruction).toContain('versprich keine Verbindung');
+    expect(instruction).not.toContain('Live-Transfer');
+    // no mode/status flip
+    expect(fake.updates.some((u) => u.table === 'conversations')).toBe(false);
+    // ticket at the promise, attached within the call
+    expect(ensureTicketMock).toHaveBeenCalledWith(
+      fake.client,
+      expect.objectContaining({ origin: 'voice', attach: 'always', details: expect.objectContaining({ target: 'ticket' }) })
+    );
+    expect(ticketState.ticketId).toBe('ticket-1');
+    const event = fake.inserts.find((i) => i.table === 'handoff_events');
+    expect(event?.row).toMatchObject({ reason: 'user_request', outcome: 'callback_ticket' });
+  });
+
+  it("target 'ticket' + low confidence with the toggle off is still suppressed", async () => {
+    const fake = makeFake();
+    const result = await handoffTool(ctxWith(fake, { escalationTarget: 'ticket', handoffEnabled: false }), {
+      reason: 'low_confidence',
+    });
+    expect((result as { action: string }).action).toBe('no_handoff');
+    expect(ensureTicketMock).not.toHaveBeenCalled();
+  });
+
   it('offers a callback when no transferNumber is set — and opens the ticket at the promise', async () => {
     const fake = makeFake();
     const ticketState = newTicketState();
@@ -780,6 +819,22 @@ describe('handoffTool', () => {
 // --- decideVoiceHandoff (pure matrix) ---------------------------------------------
 
 describe('decideVoiceHandoff', () => {
+  it("target 'ticket' returns 'ticket' even with a number within hours; suppression still wins", () => {
+    const base = {
+      handoffEnabled: true,
+      allowTransfer: true,
+      transferNumber: '+491701112233',
+      businessHours: null,
+      now: new Date('2026-09-07T10:00:00+02:00'),
+    };
+    expect(decideVoiceHandoff({ ...base, reason: 'keyword', escalationTarget: 'ticket' })).toBe('ticket');
+    expect(decideVoiceHandoff({ ...base, reason: 'user_request', escalationTarget: 'ticket' })).toBe('ticket');
+    expect(
+      decideVoiceHandoff({ ...base, reason: 'low_confidence', handoffEnabled: false, escalationTarget: 'ticket' })
+    ).toBe('suppress');
+    expect(decideVoiceHandoff({ ...base, reason: 'keyword', escalationTarget: 'human' })).toBe('transfer');
+  });
+
   const HOURS = {
     timezone: 'Europe/Berlin',
     hours: {
