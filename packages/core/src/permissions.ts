@@ -29,6 +29,7 @@ export type AreaLevel = 'view' | 'edit';
 /** Feature areas a Mitarbeiter can be granted access to (the chips). */
 export const AREA_KEYS = [
   'inbox',
+  'tickets',
   'knowledge',
   'canned',
   'agents',
@@ -51,6 +52,8 @@ export interface AreaDef {
 
 export const AREA_DEFS: AreaDef[] = [
   { key: 'inbox', label: 'Posteingang', maxLevel: 'edit' },
+  /** Phase 11 (0030): the ticket area — backfilled to the inbox level for existing Mitarbeiter. */
+  { key: 'tickets', label: 'Tickets', maxLevel: 'edit' },
   { key: 'knowledge', label: 'Wissensdatenbank', maxLevel: 'edit' },
   { key: 'canned', label: 'Textbausteine', maxLevel: 'edit' },
   { key: 'agents', label: 'KI-Agenten', maxLevel: 'view' },
@@ -67,6 +70,7 @@ export const memberPermissionsSchema = z.object({
   areas: z
     .object({
       inbox: areaLevelSchema.optional().catch(undefined),
+      tickets: areaLevelSchema.optional().catch(undefined),
       knowledge: areaLevelSchema.optional().catch(undefined),
       canned: areaLevelSchema.optional().catch(undefined),
       agents: areaLevelSchema.optional().catch(undefined),
@@ -97,6 +101,7 @@ export const EMPTY_PERMISSIONS: MemberPermissions = { areas: {}, channelIds: nul
 export const LEGACY_AGENT_PERMISSIONS: MemberPermissions = {
   areas: {
     inbox: 'edit',
+    tickets: 'edit',
     knowledge: 'edit',
     canned: 'edit',
     agents: 'view',

@@ -16,6 +16,12 @@ vi.mock('@zendori/ai', () => ({
   retrieveRelevantChunks: retrieveMock,
   EMBEDDING_MODEL: 'text-embedding-3-small',
 }));
+// Phase 11: the ticket service is exercised in packages/core; here we only pin
+// WHEN the voice tools call it and with what.
+const ensureTicketMock = vi.fn();
+vi.mock('../src/pipeline/tickets.js', () => ({
+  ensureTicketForConversation: ensureTicketMock,
+}));
 
 // Imported AFTER the mock is registered.
 const {
@@ -35,6 +41,7 @@ const {
   TICKET_CREATED_INSTRUCTION,
   newConfirmGateState,
   newPhoneGateState,
+  newTicketState,
   normalizePhone,
   samePhone,
   toE164,
@@ -146,12 +153,21 @@ function ctxWith(
     phoneGate: newPhoneGateState(),
     // caller id known unless a test says otherwise
     callerNumber: '+493022334455',
+    ticketState: newTicketState(),
     ...over,
   };
 }
 
 beforeEach(() => {
   retrieveMock.mockReset();
+  ensureTicketMock.mockReset();
+  ensureTicketMock.mockResolvedValue({
+    id: 'ticket-1',
+    number: 1,
+    displayId: '#1',
+    status: 'open',
+    subject: null,
+  });
 });
 
 // --- kb_search -------------------------------------------------------------------
@@ -276,7 +292,19 @@ describe('createTicketTool', () => {
     // structured system message with all provided lines
     const msg = fake.inserts.find((i) => i.table === 'messages');
     expect(msg?.row.sender_type).toBe('system');
-    expect(String(msg?.row.content)).toContain('Ticket aufgenommen: Rückruf gewünscht');
+    expect(String(msg?.row.content)).toContain('Ticket #1 aufgenommen: Rückruf gewünscht');
+    // Phase 11: the ticket row is ensured with the spoken subject/description
+    expect(ensureTicketMock).toHaveBeenCalledWith(
+      fake.client,
+      expect.objectContaining({
+        orgId: 'org-1',
+        conversationId: 'conv-1',
+        origin: 'voice',
+        subject: 'Rückruf gewünscht',
+        description: 'Kunde bittet um Rückruf zur Rechnung.',
+        attachMode: 'gapfill',
+      })
+    );
     expect(String(msg?.row.content)).toContain('Unternehmen: Beispiel GmbH');
     expect(String(msg?.row.content)).toContain(
       'Rückruf: +491701234567 (abweichend von Anrufnummer +493022334455)'
@@ -576,6 +604,31 @@ describe('createTicketTool', () => {
     }
   });
 
+  it('a second create_ticket in the same call OVERWRITES (caller corrected the intake)', async () => {
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null } },
+    });
+    const ticketState = newTicketState();
+    await createTicketTool(ctxWith(fake, { ticketState }), { subject: 'Erst', description: 'a' });
+    expect(ticketState.ticketId).toBe('ticket-1');
+    await createTicketTool(ctxWith(fake, { ticketState }), { subject: 'Korrigiert', description: 'b' });
+    expect(ensureTicketMock).toHaveBeenLastCalledWith(
+      fake.client,
+      expect.objectContaining({ subject: 'Korrigiert', attachMode: 'overwrite' })
+    );
+  });
+
+  it('a failed ticket service never fails the tool (system message without id)', async () => {
+    ensureTicketMock.mockResolvedValue(null);
+    const fake = makeFake({
+      singles: { conversations: { contact_id: 'contact-1' }, contacts: { name: null, email: null, phone: null } },
+    });
+    const result = await createTicketTool(ctxWith(fake), { subject: 'Frage', description: 'Text' });
+    expect(result.ok).toBe(true);
+    const msg = fake.inserts.find((i) => i.table === 'messages');
+    expect(String(msg?.row.content)).toContain('Ticket aufgenommen: Frage');
+  });
+
   it('returns ok:false when the subject update fails', async () => {
     const fake = makeFake({ updateError: new Set(['conversations']) });
     const result = await createTicketTool(ctxWith(fake), {
@@ -612,15 +665,28 @@ describe('handoffTool', () => {
     ).toBe(true);
     const event = fake.inserts.find((i) => i.table === 'handoff_events');
     expect(event?.row.reason).toBe('user_request');
+    // Phase 11: a live transfer is no callback promise → no ticket
+    expect(ensureTicketMock).not.toHaveBeenCalled();
   });
 
-  it('offers a callback when no transferNumber is set', async () => {
+  it('offers a callback when no transferNumber is set — and opens the ticket at the promise', async () => {
     const fake = makeFake();
-    const result = await handoffTool(ctxWith(fake), { reason: 'low_confidence' });
+    const ticketState = newTicketState();
+    const result = await handoffTool(ctxWith(fake, { ticketState }), { reason: 'low_confidence' });
     expect(result.ok).toBe(true);
     expect((result as { action: string }).action).toBe('callback');
     // still flips to human and records the event
     expect(fake.inserts.some((i) => i.table === 'handoff_events')).toBe(true);
+    // Phase 11 (owner 2026-09-04): the promise itself is the ticket; a caller
+    // hanging up mid-intake must not lose it
+    expect(ensureTicketMock).toHaveBeenCalledWith(
+      fake.client,
+      expect.objectContaining({
+        origin: 'voice',
+        details: { reason: 'low_confidence', outcome: 'callback_ticket' },
+      })
+    );
+    expect(ticketState.ticketId).toBe('ticket-1');
   });
 
   it('treats a blank transferNumber as no transfer', async () => {

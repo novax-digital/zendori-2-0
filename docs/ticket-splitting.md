@@ -96,3 +96,11 @@ echte Daten zur Präzision vorliegen, kann daraus ein Opt-in
    Fensterablauf ⇒ dedupe, kein Split, keine leere Conversation.
 7. **Signal:** `select output_summary from ai_runs where step='classify' order by created_at desc limit 5;`
    ⇒ enthält `new_topic=true|false`.
+
+## Phase 11: Attach-Regel schlägt Ticket-Trennung
+
+Seit Migration 0030 gilt: Hat die gefundene Konversation ein **offenes Ticket**
+(`status <> 'resolved'`), wird nie getrennt — die Nachricht gehört zu diesem Ticket
+(`SplitCandidate.hasOpenTicket`, lazy per `findOpenTicket` an beiden Ingest-Stellen; 0030 nicht
+angewendet ⇒ altes Verhalten). Jeder Split kann damit weiterhin ein neues Ticket eröffnen, aber
+kein Split kann ein offenes Ticket zerreißen.

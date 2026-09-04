@@ -21,6 +21,7 @@ import {
   transcribeAudio,
   type AiRunStep,
   type ClassificationResult,
+  type ExtractionResult,
   type KbChunkMatch,
 } from '@zendori/ai';
 import {
@@ -52,6 +53,7 @@ import {
   detectHandoff,
   matchesEscalationKeyword,
 } from './handoff.js';
+import { buildTicketSeed, ensureTicketForConversation, type TicketSeed } from './tickets.js';
 import { resolveReleasedFiles } from './outbound-files.js';
 
 /**
@@ -397,10 +399,12 @@ export async function processMessage(messageId: string): Promise<void> {
     // and its guesses must never overwrite exact user input — skip entirely.
     const isBuilderFormSubmission =
       message.metadata.form !== undefined && message.metadata.form !== null;
+    // Kept beyond the block: the ticket seed (Phase 11) uses subject/description.
+    let extraction: ExtractionResult | null = null;
     if (!isBuilderFormSubmission && (channel.type === 'email' || looksLikeForm(cleanBody))) {
       currentStep = 'extract';
       const extractStart = Date.now();
-      const { result: extraction, costUsd: extractCost } = await extract({
+      const { result: extracted, costUsd: extractCost } = await extract({
         companyName: orgName,
         categories: DEFAULT_CATEGORIES,
         agentIdentity,
@@ -409,26 +413,36 @@ export async function processMessage(messageId: string): Promise<void> {
         body: cleanBody,
       });
       const extractLatency = Date.now() - extractStart;
+      extraction = extracted;
       updatedMetadata.extract = {
-        subject: extraction.subject,
-        category: extraction.category,
-        missing_fields: extraction.missing_fields,
-        questions: extraction.questions,
-        confidence: extraction.confidence,
+        subject: extracted.subject,
+        category: extracted.category,
+        missing_fields: extracted.missing_fields,
+        questions: extracted.questions,
+        confidence: extracted.confidence,
       };
-      await correctContact(supabase, orgId, conv, currentContact, extraction.contact);
+      await correctContact(supabase, orgId, conv, currentContact, extracted.contact);
       await logAiRun(supabase, {
         orgId,
         conversationId: conv.id,
         step: 'extract',
         model: AI_MODELS.classify,
-        confidence: extraction.confidence,
+        confidence: extracted.confidence,
         latencyMs: extractLatency,
         costUsd: extractCost,
         inputSummary,
-        outputSummary: `category=${extraction.category} missing=${extraction.missing_fields.length} questions=${extraction.questions.length}`,
+        outputSummary: `category=${extracted.category} missing=${extracted.missing_fields.length} questions=${extracted.questions.length}`,
       });
     }
+
+    // Phase 11: what a ticket would say about this request, if one is needed
+    // (only the branches where the bot does NOT close the request create one).
+    const ticketSeed: TicketSeed = buildTicketSeed({
+      conv,
+      classification,
+      extraction,
+      messageId: message.id,
+    });
 
     // --- 3. agent gate (0011) --------------------------------------------------
     // Classification + extraction above are inbox hygiene and always run. What
@@ -437,6 +451,13 @@ export async function processMessage(messageId: string): Promise<void> {
     if (!forceDraft) {
       if (!activeAgent) {
         // No agent on this channel: no drafts, no auto-sends, no handoff logic.
+        // Phase 11: a human handles everything here → ticket (attach rule).
+        await ensureTicketForConversation(supabase, {
+          orgId,
+          conversationId: conv.id,
+          origin: 'no_agent',
+          ...ticketSeed,
+        });
         await finishMessage(supabase, message.id, updatedMetadata);
         await maybeRequestHubspotSync(supabase, orgId, channel.id, conv.id);
         return;
@@ -447,6 +468,7 @@ export async function processMessage(messageId: string): Promise<void> {
         const settings = await loadHandoffSettings(supabase, orgId);
         await applyHandoff(supabase, {
           orgId,
+          ticket: ticketSeed,
           conv,
           channel,
           reason: 'intake',
@@ -517,6 +539,7 @@ export async function processMessage(messageId: string): Promise<void> {
       if (overrideReason) {
         await applyHandoff(supabase, {
           orgId,
+          ticket: ticketSeed,
           conv,
           channel,
           reason: overrideReason,
@@ -659,6 +682,7 @@ export async function processMessage(messageId: string): Promise<void> {
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
       await applyHandoff(supabase, {
         orgId,
+        ticket: ticketSeed,
         conv,
         channel,
         reason: detection.reason,
@@ -673,6 +697,18 @@ export async function processMessage(messageId: string): Promise<void> {
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
       if (detection.suppressed) {
         await recordSuppressedHandoff(supabase, orgId, conv.id);
+      }
+      // Phase 11: a human must act on this draft (draft_only agent, or the
+      // suppressed low-confidence case) → ticket. Not for an explicit
+      // force-draft request — that conversation is already human-owned.
+      if (!forceDraft) {
+        await ensureTicketForConversation(supabase, {
+          orgId,
+          conversationId: conv.id,
+          origin: detection.suppressed ? 'suppressed' : 'draft_only',
+          ...ticketSeed,
+          ...(detection.suppressed ? { details: { reason: 'low_confidence' } } : {}),
+        });
       }
     }
 
@@ -784,6 +820,14 @@ export async function handlePipelineFailure(messageId: string, err: unknown): Pr
           reason: 'manual',
           outcome: 'pending_human',
           details: { cause: 'pipeline_failure', step: err.step },
+        });
+        // Phase 11: the stranded request is a ticket too (subject falls back
+        // to whatever the ticket already has / the conversation shows).
+        await ensureTicketForConversation(supabase, {
+          orgId: err.orgId,
+          conversationId: err.conversationId,
+          origin: 'pipeline_failure',
+          details: { step: err.step },
         });
       }
       await supabase.from('notes').insert({
@@ -1063,6 +1107,8 @@ interface ApplyHandoffArgs {
   reason: HandoffReason;
   autoAckTexts: unknown;
   businessHours: unknown;
+  /** Phase 11: the request handed to a human becomes (or attaches to) a ticket. */
+  ticket: TicketSeed;
 }
 
 /**
@@ -1088,6 +1134,16 @@ async function applyHandoff(supabase: SupabaseClient, args: ApplyHandoffArgs): P
     outcome: 'pending_human',
   });
   if (eventInsert.error) throw eventInsert.error;
+
+  // Phase 11: the human now owns the request — that IS a ticket (attach rule
+  // keeps one open ticket per conversation). Best-effort, never throws.
+  await ensureTicketForConversation(supabase, {
+    orgId: args.orgId,
+    conversationId: args.conv.id,
+    origin: args.reason === 'intake' ? 'intake' : 'handoff',
+    ...args.ticket,
+    details: { reason: args.reason },
+  });
 
   const ack = parseAutoAckTexts(args.autoAckTexts);
   if (!ack) return; // no auto-ack configured

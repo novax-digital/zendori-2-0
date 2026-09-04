@@ -9,6 +9,7 @@ export type SettingsTabKey =
   | 'organization'
   | 'phone-numbers'
   | 'ai'
+  | 'tickets'
   | 'canned-responses'
   | 'integrations'
   | 'billing';
@@ -17,6 +18,7 @@ const TABS: { key: SettingsTabKey; href: string; label: string }[] = [
   { key: 'organization', href: '/settings/organization', label: 'Organisation' },
   { key: 'phone-numbers', href: '/settings/phone-numbers', label: 'Telefonnummern' },
   { key: 'ai', href: '/settings/ai', label: 'Übergabe & Zeiten' },
+  { key: 'tickets', href: '/settings/tickets', label: 'Tickets' },
   { key: 'canned-responses', href: '/settings/canned-responses', label: 'Textbausteine' },
   { key: 'integrations', href: '/settings/integrations', label: 'Integrationen' },
   { key: 'billing', href: '/settings/billing', label: 'Abrechnung' },
@@ -31,6 +33,9 @@ export function settingsTabVisible(access: MemberAccess, key: SettingsTabKey): b
       return canViewArea(access, 'channels');
     case 'ai':
       return canViewArea(access, 'handoff');
+    case 'tickets':
+      // numbering is org config (owner/admin write); members with the area may read it
+      return isAdminRole(access.role) || canViewArea(access, 'tickets');
     case 'canned-responses':
       return canViewArea(access, 'canned');
     case 'billing':

@@ -14,7 +14,7 @@ Kunden verwalten ihr Team selbst (Vorbild: App-Control). Drei Rollen pro Org:
 { "areas": { "inbox": "edit", "knowledge": "view" }, "channelIds": null }
 ```
 
-- **Bereiche (Chips):** Posteingang, Wissensdatenbank, Textbausteine (je bis
+- **Bereiche (Chips):** Posteingang, Tickets (Phase 11; Backfill 0030 = gleiche Stufe wie Posteingang), Wissensdatenbank, Textbausteine (je bis
   „Bearbeiten"); KI-Agenten, Kanäle & Formulare, Übergabe & Zeiten, Abrechnung
   (nur „Ansehen" — Bearbeiten ist dort per RLS/Trigger owner/admin-gated).
   Integrationen + Team sind komplett Admin-Bereiche. Fehlender Bereich = kein

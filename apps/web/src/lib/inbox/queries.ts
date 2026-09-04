@@ -34,7 +34,7 @@ export function truncatePreview(
 }
 
 /** Resolves auth user emails via the service role client (server-only, never sent to the client). */
-async function resolveUserEmails(userIds: string[]): Promise<Map<string, string>> {
+export async function resolveUserEmails(userIds: string[]): Promise<Map<string, string>> {
   const emailByUserId = new Map<string, string>();
   const admin = createSupabaseAdminClient();
   if (!admin || userIds.length === 0) return emailByUserId;
@@ -221,7 +221,7 @@ function attachmentFilename(storagePath: string): string {
  * signed download URL (service role, server-only). Messages without attachments
  * get an empty list — Phase-1 rendering is unaffected.
  */
-async function attachMessageAttachments(
+export async function attachMessageAttachments(
   orgId: string,
   messages: Message[]
 ): Promise<MessageWithAttachments[]> {

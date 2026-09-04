@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AREA_DEFS,
+  LEGACY_AGENT_PERMISSIONS,
   allowedChannelIds,
   canAccessChannel,
   canEditArea,
@@ -81,5 +82,21 @@ describe('role + area helpers', () => {
     expect(byKey.get('handoff')).toBe('view');
     expect(byKey.get('inbox')).toBe('edit');
     expect(byKey.get('knowledge')).toBe('edit');
+  });
+});
+
+describe('tickets area (0030)', () => {
+  it('is grantable up to edit and part of the legacy Mitarbeiter defaults', () => {
+    expect(AREA_DEFS.find((a) => a.key === 'tickets')).toEqual({
+      key: 'tickets',
+      label: 'Tickets',
+      maxLevel: 'edit',
+    });
+    expect(LEGACY_AGENT_PERMISSIONS.areas.tickets).toBe('edit');
+  });
+
+  it('survives parsing and stays absent (no access) when not granted', () => {
+    expect(parseMemberPermissions({ areas: { tickets: 'view' } }).areas.tickets).toBe('view');
+    expect(parseMemberPermissions({ areas: { inbox: 'edit' } }).areas.tickets).toBeUndefined();
   });
 });

@@ -29,8 +29,10 @@ import {
   kbSearchTool,
   newConfirmGateState,
   newPhoneGateState,
+  newTicketState,
   type ToolContext,
 } from './tools.js';
+import { ensureTicketForConversation } from '../pipeline/tickets.js';
 
 // One CallSession per live call: holds the outbound WebSocket to xAI for the
 // duration of the conversation, persists transcript turns as normal `messages`
@@ -160,6 +162,7 @@ export class CallSession {
   private seenCallerItems = new Set<string>();
   private readonly emailGate = newConfirmGateState();
   private readonly phoneGate = newPhoneGateState();
+  private readonly ticketState = newTicketState();
   /** Persisted user turns: item_id → { messageId, content } (for late corrections). */
   private readonly flushedItems = new Map<string, { messageId: string | null; content: string }>();
   /** Assistant transcript accumulator for the in-flight response. */
@@ -615,6 +618,14 @@ export class CallSession {
               .eq('org_id', this.p.orgId)
               .eq('id', transferEventId);
           }
+          // Phase 11: the failed transfer turns into a callback promise → ticket.
+          const promised = await ensureTicketForConversation(this.p.supabase, {
+            orgId: this.p.orgId,
+            conversationId: this.p.conversationId,
+            origin: 'voice',
+            details: { outcome: 'transfer_failed' },
+          });
+          if (promised) this.ticketState.ticketId = promised.id;
           for (const r of results) {
             const output =
               r.callId === transferCallId
@@ -751,6 +762,7 @@ export class CallSession {
       emailGate: this.emailGate,
       phoneGate: this.phoneGate,
       callerNumber: this.p.context.callerNumber ?? null,
+      ticketState: this.ticketState,
     };
     try {
       switch (name) {

@@ -1,6 +1,6 @@
 import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
-import { createLogger, loadWorkerEnv, voiceMinutesCostUsd } from '@zendori/core';
+import { createLogger, loadWorkerEnv, refineOpenTicket, voiceMinutesCostUsd } from '@zendori/core';
 import { getServiceClient, isMissingColumnError, toErrorInfo } from '../db.js';
 import { maybeRequestHubspotSync } from './process-message.js';
 import { recordUsage } from './usage.js';
@@ -324,6 +324,21 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
       .update(updates)
       .eq('org_id', call.org_id)
       .eq('id', call.conversation_id);
+
+    // Phase 11: refine the call's open ticket the same way (priority always,
+    // subject only over the placeholder). No ticket → nothing (a call without
+    // an intake gets none here). Best-effort.
+    try {
+      await refineOpenTicket(supabase, {
+        orgId: call.org_id,
+        conversationId: call.conversation_id,
+        priority: classification.priority,
+        subject: extraction.subject,
+        mode: 'gapfill',
+      });
+    } catch (err) {
+      log.warn({ voiceCallId: call.id, err: toErrorInfo(err) }, 'post-call ticket refinement failed');
+    }
 
     // Fill contact gaps from the extraction (never overwrite existing values).
     if (conv?.contact_id) {

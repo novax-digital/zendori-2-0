@@ -3,7 +3,9 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { conversationStatusSchema } from '@zendori/core';
+import { conversationStatusSchema,
+  ensureTicket,
+} from '@zendori/core';
 import type { SupabaseClient } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -1059,8 +1061,86 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
     triggered_by: user.id,
   });
 
+  // Phase 11: taking over IS working the request → ticket (attach rule),
+  // assigned to the taker. Best-effort — the takeover itself already happened.
+  try {
+    await ensureTicket(supabase, {
+      orgId: org,
+      conversationId,
+      origin: 'takeover',
+      assigneeId: user.id,
+      createdBy: user.id,
+      details: { reason: 'manual' },
+    });
+  } catch {
+    // ticket creation must never undo a takeover
+  }
+
   revalidatePath('/inbox');
+  revalidatePath('/tickets');
   redirect(inboxUrl({ ...base, notice: 'Konversation übernommen — der Bot pausiert.' }));
+}
+
+/** „Ticket anlegen" in the inbox sidebar (Phase 11): manual ticket for the conversation. */
+export async function createTicketFromConversation(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
+  const errorText = 'Ticket konnte nicht angelegt werden.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
+  };
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  // redirect() throws — keep it OUTSIDE the try so it is never swallowed
+  let outcome: 'created' | 'attached' | 'unavailable' | 'failed' = 'failed';
+  let displayId = '';
+  try {
+    const result = await ensureTicket(supabase, {
+      orgId: org,
+      conversationId,
+      origin: 'manual',
+      createdBy: user.id,
+    });
+    outcome = result.outcome;
+    if (result.outcome !== 'unavailable') displayId = result.ticket.displayId;
+  } catch {
+    outcome = 'failed';
+  }
+  if (outcome === 'unavailable') {
+    redirect(inboxUrl({ ...base, error: 'Tickets sind noch nicht verfügbar (Migration 0030 ausstehend).' }));
+  }
+  if (outcome === 'failed') {
+    redirect(inboxUrl({ ...base, error: errorText }));
+  }
+  revalidatePath('/inbox');
+  revalidatePath('/tickets');
+  redirect(
+    inboxUrl({
+      ...base,
+      notice:
+        outcome === 'created'
+          ? `Ticket ${displayId} angelegt.`
+          : `Konversation gehört bereits zu Ticket ${displayId}.`,
+    })
+  );
 }
 
 /** „An Bot zurückgeben": hands control back to the bot (mode='bot'); status stays. */

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createLogger, decryptSecret } from '@zendori/core';
+import { createLogger, decryptSecret, findOpenTicket } from '@zendori/core';
 import type { SupabaseClient } from '@zendori/core';
 import {
   normalizeWhatsAppTwilio,
@@ -423,13 +423,25 @@ export async function POST(request: Request): Promise<NextResponse> {
     status: string;
     last_message_at: string | null;
   }[];
-  const appendTarget = candidates.find(
+  let appendTarget = candidates.find(
     (c) =>
       !shouldStartNewConversation(
         { status: c.status, lastMessageAt: c.last_message_at },
         configResult.data.conversationSplitHours
       )
   );
+  if (!appendTarget) {
+    // Phase 11 attach rule: a candidate with an OPEN ticket is never split
+    // away from (lazy lookup — only when the window says "split"; 0030 not
+    // applied ⇒ 'unavailable' ⇒ today's behavior).
+    for (const c of candidates) {
+      const open = await findOpenTicket(admin, orgId, c.id).catch(() => null);
+      if (open && open !== 'unavailable') {
+        appendTarget = c;
+        break;
+      }
+    }
+  }
   let conversationId = appendTarget?.id ?? null;
   let createdConversationId: string | null = null;
   if (!conversationId) {

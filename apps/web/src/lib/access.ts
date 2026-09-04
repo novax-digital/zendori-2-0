@@ -84,6 +84,32 @@ export async function hasConversationEdit(
   return typeof channelId === 'string' && canAccessChannel(access, channelId);
 }
 
+/**
+ * Ticket-scoped guard (Phase 11): tickets edit AND access to the ticket's
+ * channel — the same shape as hasConversationEdit (tickets carry channel_id
+ * as a denormalised snapshot of their conversation's channel).
+ */
+export async function hasTicketEdit(
+  orgRaw: FormDataEntryValue | null | string,
+  ticketIdRaw: FormDataEntryValue | null | string
+): Promise<boolean> {
+  const org = typeof orgRaw === 'string' ? orgRaw.trim() : '';
+  const ticketId = typeof ticketIdRaw === 'string' ? ticketIdRaw.trim() : '';
+  if (!org || !ticketId) return false;
+  const access = await getMemberAccess(org);
+  if (!access || !canEditArea(access, 'tickets')) return false;
+  if (allowedChannelIds(access) === null) return true;
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('tickets')
+    .select('channel_id')
+    .eq('org_id', org)
+    .eq('id', ticketId)
+    .maybeSingle();
+  const channelId = (data as { channel_id?: string } | null)?.channel_id;
+  return typeof channelId === 'string' && canAccessChannel(access, channelId);
+}
+
 /** Non-redirecting variant for actions that return errors instead. */
 export async function hasAreaEdit(
   orgRaw: FormDataEntryValue | null | string,

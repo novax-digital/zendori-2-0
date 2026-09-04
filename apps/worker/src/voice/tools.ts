@@ -8,6 +8,7 @@ import {
   type VoiceChannelConfig,
 } from '@zendori/channels';
 import { isMissingColumnError } from '../db.js';
+import { ensureTicketForConversation } from '../pipeline/tickets.js';
 import { escalatesLowConfidence, intakeFieldsPhrase } from './session-config.js';
 
 // Voice function-tool handlers. All run in the worker with the org_id bound
@@ -44,6 +45,12 @@ export interface ToolContext {
   phoneGate: PhoneGateState;
   /** Caller id (contacts.phone from SIP From); null = withheld. Steers callback storage. */
   callerNumber: string | null;
+  /**
+   * Session-owned (Phase 11): the ticket this call already created/attached.
+   * A second create_ticket in the same call is a correction and OVERWRITES
+   * subject/description instead of gap-filling.
+   */
+  ticketState: TicketState;
   /**
    * Org business hours (defensively parsed) — the live-transfer gate is
    * evaluated HERE at tool-call time, not at call start, so the mid-call
@@ -89,6 +96,14 @@ export function newPhoneGateState(): PhoneGateState {
 }
 /** After this many refusals the ticket goes through WITHOUT the field (loop guard). */
 export const CONFIRM_GATE_MAX_REFUSALS = 3;
+
+/** Phase 11: per-call memo of the ticket touched by this call (see ToolContext). */
+export interface TicketState {
+  ticketId: string | null;
+}
+export function newTicketState(): TicketState {
+  return { ticketId: null };
+}
 
 /**
  * Shared gate logic: a value counts as confirmed only with the flag AND a
@@ -401,6 +416,19 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     .eq('id', ctx.conversationId);
   if (convError) return { ok: false, error: 'Ticket konnte nicht gespeichert werden' };
 
+  // Phase 11: the ticket row (attach rule — a handoff callback may already have
+  // opened it with the placeholder subject; a repeated create_ticket in this
+  // call is a correction and overwrites). Best-effort: never fails the tool.
+  const ticket = await ensureTicketForConversation(ctx.supabase, {
+    orgId: ctx.orgId,
+    conversationId: ctx.conversationId,
+    origin: 'voice',
+    subject: args.subject,
+    description: args.description,
+    attachMode: ctx.ticketState.ticketId ? 'overwrite' : 'gapfill',
+  });
+  if (ticket) ctx.ticketState.ticketId = ticket.id;
+
   // Fill contact gaps (never overwrite existing values — mirrors fillContactGaps).
   const { data: convRow } = await ctx.supabase
     .from('conversations')
@@ -518,7 +546,7 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
   }
 
   const lines = [
-    `Ticket aufgenommen: ${args.subject}`,
+    ticket ? `Ticket ${ticket.displayId} aufgenommen: ${args.subject}` : `Ticket aufgenommen: ${args.subject}`,
     args.description,
     ...(args.name ? [`Name: ${args.name}`] : []),
     ...(company ? [`Unternehmen: ${company}`] : []),
@@ -695,6 +723,16 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
   }
 
   if (isFirstHandoff) await insertVoiceHandoffEvent(ctx, reason, 'callback_ticket');
+  // Phase 11 (owner 2026-09-04): the callback promise itself opens the ticket —
+  // a caller hanging up mid-intake must not lose it. create_ticket fills the
+  // subject/description in afterwards (attach rule).
+  const promised = await ensureTicketForConversation(ctx.supabase, {
+    orgId: ctx.orgId,
+    conversationId: ctx.conversationId,
+    origin: 'voice',
+    details: { reason, outcome: 'callback_ticket' },
+  });
+  if (promised) ctx.ticketState.ticketId = promised.id;
   const hoursConfigured = hasConfiguredHours(ctx.businessHours);
   const outsideHours =
     hoursConfigured && !isWithinBusinessHours(new Date(), ctx.businessHours!);

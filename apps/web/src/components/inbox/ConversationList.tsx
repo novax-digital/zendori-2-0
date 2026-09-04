@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ConversationStatus } from '@zendori/core';
 import { channelBadgeClass } from '@/lib/inbox/channel-badge';
+import { formatRelativeTime } from '@/lib/inbox/format';
 import type { ConversationListItem, InboxFilters } from '@/lib/inbox/types';
 
 const STATUS_BADGE: Record<string, string> = {
@@ -16,19 +17,6 @@ const statusLabels: Record<ConversationStatus, string> = {
   resolved: 'Gelöst',
   hubspot_sent: 'An HubSpot gesendet',
 };
-
-/** German relative time without a date library: gerade eben / vor X Min. / vor X Std. / date. */
-function formatRelativeTime(iso: string | null): string {
-  if (!iso) return '';
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return '';
-  const minutes = Math.floor((Date.now() - then) / 60_000);
-  if (minutes < 1) return 'gerade eben';
-  if (minutes < 60) return `vor ${minutes} Min.`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `vor ${hours} Std.`;
-  return new Date(iso).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin' });
-}
 
 type ConversationListProps = {
   items: ConversationListItem[];

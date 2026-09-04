@@ -116,7 +116,8 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `handoff_events` (conversation_id, reason: low_confidence|user_request|keyword|manual|intake, outcome: pending_human|transferred|transfer_failed|callback_ticket|suppressed [0018, nullable — Alt-Zeilen bleiben NULL], details jsonb content-frei, triggered_by)
 - `forms` (org_id, channel_id 1:1 → email/inbound-Channel mit config.builderForm, name, public_token unique, definition jsonb [zod: formDefinitionSchema], version, notification_emails jsonb ≤10, daily_submission_limit, is_active) — Formular-Builder (0019); Inhalte member-verwaltet, Löschen + Empfänger/Limits owner-only (RLS + Guard-Trigger), public_token/channel_id immutable
 - `form_notifications` (org_id, form_id, message_id unique, recipients-Snapshot jsonb, state: pending|sent|failed, attempts, last_error, sent_at) — Weiterleitungs-Queue, Writes nur Service Role, Worker-Job `form.notify`
-- `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts, handoff_sla_minutes [0018, null = aus]) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
+- `tickets` (org_id, conversation_id [composite-FK], channel_id, contact_id, number, display_id [eingefroren, aus org_settings.ticket_id_format], subject, description, category, status: open|in_progress|waiting|resolved, priority, assignee_id, origin: handoff|intake|suppressed|no_agent|draft_only|pipeline_failure|voice|form|manual|takeover, opened_message_id, opened_at, resolved_at, hubspot_* [Spiegel von 0007 für 11b], created_by) — Phase 11 (0030): das **Arbeitsobjekt** aus einer Konversation; partieller Unique-Index `(conversation_id) where status <> 'resolved'` = Attach-Regel; Nummer/ID per Insert-Trigger (`allocate_ticket_number`, `ticket_counters`); einziger Erzeugungsweg `ensureTicket()` (packages/core). `ticket_events` = inhaltsfreie Zeitleiste. Details docs/phase-11-tickets.md
+- `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts, handoff_sla_minutes [0018, null = aus], ticket_id_format + ticket_number_start [0030]) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
 
 ## 6. Human-Handoff-Logik (verbindlich)
 
@@ -135,6 +136,8 @@ Bei Handoff: `mode = 'human'`, `status = 'pending'`, `handoff_events`-Eintrag (0
 
 Agent kann per Klick an den Bot zurückgeben (`mode = 'bot'`).
 Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, außer Agent fordert explizit einen Draft an.
+
+**Tickets (Phase 11):** `status='pending'` bleibt die EINE Inbox-Warteschlange (wartet auf einen Menschen). Das daraus entstehende **Ticket** ist das Arbeitsobjekt mit eigenem Lebenszyklus (open|in_progress|waiting|resolved) — es entsteht genau dann, wenn der Bot ein Anliegen nicht selbst abschließt (Übergabe, Reine Annahme, unterdrückte Übergabe, Pipeline-Fehler, Kanal ohne Agent, Nur-Entwürfe-Agent, Übernahme) sowie bei Voice-Rückruf/`create_ticket`, Formular-Einsendungen und manuell. Autopilot-Antworten erzeugen kein Ticket.
 
 ## 7. Sicherheit & DSGVO (nicht verhandelbar)
 
@@ -221,6 +224,8 @@ Erstelle `docs/legacy-analysis.md`:
 **Phase 8 — IMAP/SMTP: ENTFÄLLT.** Bestehende Kundenpostfächer werden per **E-Mail-Weiterleitung auf eine Resend-Inbound-Adresse** angebunden (Phase-3-Mechanik, serverless, kein IMAP). Zwei Use-Cases, je eigene Intake-Adresse = eigener Kanal: Formular-Weiterleitung und E-Mail-Weiterleitung. Einziger Zusatz: `channels.config.purpose: 'form' | 'forwarded_email'`, damit die Phase-4-Extraktion bei weitergeleiteten Mails den echten Absender aus dem Weiterleitungs-Header (statt aus einem Formular-Block) zieht. (Klein, kann an Phase 3/4 angehängt werden.)
 
 **Phase 9 — Voice (xAI + Twilio-SIP):** erst deutscher Testanruf mit mir (Latenz, Aussprache, Custom Voice, Preis, DSGVO/DPA), dann Umsetzung gemäß §9 (Worker-WebSocket-Session, Supabase-Realtime-Trigger statt Poll, Tools im Worker mit org_id/RLS, `refer`-Handoff, Twilio-SIP-Trunk-Provisionierung, `voice_calls`-Tabelle). **STOP.**
+
+**Phase 11 — Tickets (Konversation ≠ Ticket):** 11a (0030 `tickets`/`ticket_events`/`ticket_counters`, `org_settings.ticket_id_format`, Rechte-Bereich `tickets`, Service `ensureTicket` mit Attach-Regel, alle Erzeugungs-Hooks, Bereich `/tickets`, Inbox-Sektion, Einstellungs-Tab) **STOP** → 11b (HubSpot als zwei konfigurierbare Ströme Konversationen/Tickets, Ticket-Sync `zendori_ref = ticket.id`, Betreff-Präfix konfigurierbar, Status-Cutover für Voice-`create_ticket`/SLA) **STOP**. Details docs/phase-11-tickets.md.
 
 **Phase 10 — Formular-Builder:** Migration 0019 (`forms` + `form_notifications`), Builder-UI unter Einstellungen→Formulare (Feldliste mit ↑/↓, Design-Tab mit Kontrast-Check, Live-Vorschau über den EINEN geteilten Renderer, Einbetten-Tab), Embed `form.js` + gehostete Seite `/f/{token}` + iframe-Doku, Submission-Endpoint mit Honeypot/HMAC-Render-Token/Rate-Limits/Tages-Cap, Kontakt aus role-Feldern (`contact_authoritative`, Extract-Skip), Weiterleitungs-Mail (HTML-Template, Reply-To = Einsender) aus dem Worker, Consent-Feldtyp als DSGVO-Nachweis. Kontingent: gemeinsames Kind `form` mit den Intake-Adressen. Details docs/concept-form-builder.md + docs/phase-10-forms.md. **STOP.**
 

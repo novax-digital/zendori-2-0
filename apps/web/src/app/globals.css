@@ -1889,3 +1889,18 @@ code.invite-link {
   margin-bottom: 0.5rem;
   color: var(--text);
 }
+
+/* --- Tickets (Phase 11) ----------------------------------------------------- */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.ticket-transcript {
+  max-height: 60vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.ticket-transcript .inbox-messages {
+  flex: 1;
+}

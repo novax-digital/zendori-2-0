@@ -7,6 +7,8 @@
 //  - `pending` conversations are the §6 waiting queue (pending handoff or a
 //    promised callback) and are NEVER split — a split would cut the queue and
 //    orphan the SLA reminder (0018).
+//  - Conversations with an OPEN ticket (Phase 11) are never split either: the
+//    attach rule says the message belongs to that ticket.
 //  - Absent/invalid window ⇒ never split (the pre-feature behavior).
 //  - The basis is conversations.last_message_at (touched by trigger 0002 on
 //    every in- AND outbound message): "inactivity" means NOBODY wrote.
@@ -16,6 +18,12 @@ export interface SplitCandidate {
   status: string;
   /** conversations.last_message_at (ISO timestamp) — null on empty conversations. */
   lastMessageAt: string | null;
+  /**
+   * Phase 11: the conversation has a non-resolved ticket. The attach rule wins
+   * over the inactivity window — a message on a conversation with an open
+   * ticket belongs to that ticket, a split would open a second one.
+   */
+  hasOpenTicket?: boolean;
 }
 
 /**
@@ -29,6 +37,7 @@ export function shouldStartNewConversation(
 ): boolean {
   if (!splitHours || !Number.isFinite(splitHours) || splitHours <= 0) return false;
   if (candidate.status === 'pending') return false;
+  if (candidate.hasOpenTicket) return false;
   if (!candidate.lastMessageAt) return false;
   const last = Date.parse(candidate.lastMessageAt);
   if (Number.isNaN(last)) return false;

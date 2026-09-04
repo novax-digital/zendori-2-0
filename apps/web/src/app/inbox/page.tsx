@@ -10,6 +10,7 @@ import {
   listConversations,
   listMembers,
 } from '@/lib/inbox/queries';
+import { listTicketsForConversation } from '@/lib/tickets/queries';
 import type { InboxFilters } from '@/lib/inbox/types';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import AiWorkingHint from '@/components/inbox/AiWorkingHint';
@@ -105,14 +106,19 @@ export default async function InboxPage({
   const filters = parseFilters(params.status, params.channel, params.q);
   const selectedId = params.c;
 
-  const [conversations, channels, members, cannedResponses, detail, hubspot] = await Promise.all([
-    listConversations(orgId, filters, scopedChannelIds),
-    listChannels(orgId, scopedChannelIds),
-    listMembers(orgId),
-    listCannedResponses(orgId),
-    selectedId ? getConversationDetail(orgId, selectedId, scopedChannelIds) : Promise.resolve(null),
-    getHubspotSidebarInfo(orgId),
-  ]);
+  const [conversations, channels, members, cannedResponses, detail, hubspot, tickets] =
+    await Promise.all([
+      listConversations(orgId, filters, scopedChannelIds),
+      listChannels(orgId, scopedChannelIds),
+      listMembers(orgId),
+      listCannedResponses(orgId),
+      selectedId ? getConversationDetail(orgId, selectedId, scopedChannelIds) : Promise.resolve(null),
+      getHubspotSidebarInfo(orgId),
+      // Phase 11: the conversation's tickets (chips + "Ticket anlegen")
+      selectedId ? listTicketsForConversation(orgId, selectedId) : Promise.resolve([]),
+    ]);
+  const openTicket = tickets.find((t) => t.status !== 'resolved') ?? null;
+  const canOpenTickets = canViewArea(access, 'tickets');
 
   // Why the bot stopped answering (C29) — only loaded for handed-off conversations.
   const handoffHint =
@@ -162,7 +168,12 @@ export default async function InboxPage({
         <section className="inbox-col" aria-label="Konversation">
           {detail ? (
             <>
-              <ConversationView detail={detail} />
+              <ConversationView
+                detail={detail}
+                orgId={orgId}
+                openTicket={openTicket}
+                canOpenTickets={canOpenTickets}
+              />
               {detail.draft ? (
                 <SuggestedReply
                   key={detail.draft.id}
@@ -203,6 +214,8 @@ export default async function InboxPage({
         <aside className="inbox-col" aria-label="Kontext">
           {detail ? (
             <ContextSidebar
+              tickets={tickets}
+              canOpenTickets={canOpenTickets}
               key={detail.conversation.id}
               orgId={orgId}
               detail={detail}

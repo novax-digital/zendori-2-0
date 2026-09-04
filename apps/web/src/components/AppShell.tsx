@@ -34,6 +34,7 @@ const BARE_PREFIXES = [
 
 type IconName =
   | 'inbox'
+  | 'ticket'
   | 'book'
   | 'form'
   | 'channels'
@@ -69,6 +70,13 @@ function Icon({ name }: { name: IconName }) {
         <svg {...common}>
           <path d="M4 13h4l1.5 3h5L16 13h4" />
           <path d="M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7l-1.5 5a2 2 0 0 1-2 1.5H7.5a2 2 0 0 1-2-1.5L4 13Z" />
+        </svg>
+      );
+    case 'ticket':
+      return (
+        <svg {...common}>
+          <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4V7Z" />
+          <path d="M14 5v14" strokeDasharray="2 2" />
         </svg>
       );
     case 'book':
@@ -196,7 +204,12 @@ type NavSection = { title?: string; items: NavItem[] };
 // "Einstellungen" entry leads to the tabbed hub (Organisation, Telefonnummern,
 // Übergabe & Zeiten, Textbausteine, Integrationen, Abrechnung — SettingsTabs).
 const NAV: NavSection[] = [
-  { items: [{ href: '/inbox', label: 'Inbox', icon: 'inbox' }] },
+  {
+    items: [
+      { href: '/inbox', label: 'Inbox', icon: 'inbox' },
+      { href: '/tickets', label: 'Tickets', icon: 'ticket' },
+    ],
+  },
   {
     items: [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
@@ -224,6 +237,7 @@ const NAV: NavSection[] = [
  */
 const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'admin' | 'settings-hub'> = {
   '/inbox': { area: 'inbox', level: 'view' },
+  '/tickets': { area: 'tickets', level: 'view' },
   '/settings/agents': { area: 'agents', level: 'view' },
   '/settings/knowledge': { area: 'knowledge', level: 'view' },
   '/settings/channels': { area: 'channels', level: 'view' },
@@ -240,6 +254,7 @@ const SETTINGS_TAB_ROUTES = [
   '/settings/organization',
   '/settings/phone-numbers',
   '/settings/ai',
+  '/settings/tickets',
   '/settings/canned-responses',
   '/settings/integrations',
   '/settings/billing',
@@ -252,7 +267,7 @@ function navItemVisible(access: MemberAccess | null, href: string): boolean {
   if (need === 'admin') return access.role === 'owner' || access.role === 'admin';
   if (need === 'settings-hub') {
     if (access.role === 'owner' || access.role === 'admin') return true;
-    return (['channels', 'handoff', 'canned', 'billing'] as AreaKey[]).some((area) =>
+    return (['channels', 'handoff', 'tickets', 'canned', 'billing'] as AreaKey[]).some((area) =>
       canViewArea(access, area)
     );
   }

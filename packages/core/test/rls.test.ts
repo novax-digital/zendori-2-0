@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { formatTicketId } from '../src/tickets.js';
 
 // Integration test against a (local) Supabase instance with the migrations applied.
 // Run `supabase start`, then set the ZENDORI_TEST_SUPABASE_* vars (see .env.example).
@@ -1690,6 +1691,165 @@ describe.skipIf(!enabled)('RLS: knowledge-source release flag (0025)', () => {
       .select('id, is_shareable')
       .eq('id', fileSourceId);
     expect((data ?? []).length).toBe(1);
+  });
+});
+
+describe.skipIf(!enabled)('RLS: tickets (0030)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let stranger: SupabaseClient;
+  let ownerId: string;
+  let strangerId: string;
+  let orgId: string;
+  let channelId: string;
+  let conversationId: string;
+  const ownerEmail = `ticket-owner-${randomUUID()}@test.zendori.dev`;
+  const strangerEmail = `ticket-stranger-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      [ownerEmail, strangerEmail].map((email) =>
+        admin.auth.admin.createUser({ email, password, email_confirm: true })
+      )
+    );
+    ownerId = created[0]!.data.user!.id;
+    strangerId = created[1]!.data.user!.id;
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    stranger = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    await owner.auth.signInWithPassword({ email: ownerEmail, password });
+    await stranger.auth.signInWithPassword({ email: strangerEmail, password });
+
+    const slug = `tickets-${randomUUID().slice(0, 8)}`;
+    await owner.from('organizations').insert({ name: 'Tickets Org', slug });
+    const { data: org } = await owner.from('organizations').select('id').eq('slug', slug).single();
+    orgId = org!.id;
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Chat', config: {} })
+      .select('id')
+      .single();
+    channelId = channel!.id;
+    const { data: conv } = await admin
+      .from('conversations')
+      .insert({ org_id: orgId, channel_id: channelId, subject: 'Anruf von +49', status: 'open', mode: 'bot' })
+      .select('id')
+      .single();
+    conversationId = conv!.id;
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+    if (strangerId) await admin.auth.admin.deleteUser(strangerId);
+  });
+
+  it('a member insert gets number 1 and the default display id from the trigger', async () => {
+    const { data, error } = await owner
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'manual', subject: 'Erstes' })
+      .select('id, number, display_id, channel_id, status, created_by')
+      .single();
+    expect(error).toBeNull();
+    expect(Number(data!.number)).toBe(1);
+    expect(data!.display_id).toBe('#1');
+    // channel snapshot came from the conversation
+    expect(data!.channel_id).toBe(channelId);
+    expect(data!.status).toBe('open');
+    // the created event is trigger-written
+    const { data: events } = await owner.from('ticket_events').select('kind').eq('ticket_id', data!.id);
+    expect(events!.map((e) => e.kind)).toEqual(['created']);
+  });
+
+  it('a second OPEN ticket for the same conversation is refused (attach invariant)', async () => {
+    const { error } = await owner
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'handoff' });
+    expect(error?.code).toBe('23505');
+  });
+
+  it('members cannot supply a number, change identity columns, or touch hubspot state', async () => {
+    const { error: numberError } = await owner
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'manual', number: 999 });
+    expect(numberError).not.toBeNull();
+    const { data: first } = await owner.from('tickets').select('id').eq('org_id', orgId).single();
+    const { error: idError } = await owner
+      .from('tickets')
+      .update({ display_id: 'X-1' })
+      .eq('id', first!.id);
+    expect(idError).not.toBeNull();
+    const { error: hubspotError } = await owner
+      .from('tickets')
+      .update({ hubspot_ticket_id: '42' })
+      .eq('id', first!.id);
+    expect(hubspotError).not.toBeNull();
+  });
+
+  it('status/assignee are member-writable; resolved_at and events follow', async () => {
+    const { data: first } = await owner.from('tickets').select('id').eq('org_id', orgId).single();
+    const { error } = await owner
+      .from('tickets')
+      .update({ status: 'resolved', assignee_id: ownerId })
+      .eq('id', first!.id);
+    expect(error).toBeNull();
+    const { data: row } = await owner
+      .from('tickets')
+      .select('resolved_at')
+      .eq('id', first!.id)
+      .single();
+    expect(row!.resolved_at).not.toBeNull();
+    const { data: events } = await owner
+      .from('ticket_events')
+      .select('kind')
+      .eq('ticket_id', first!.id)
+      .order('created_at');
+    expect(events!.map((e) => e.kind)).toEqual(['created', 'status_changed', 'assigned']);
+  });
+
+  it('after resolve a new ticket opens with number 2 and the configured format (SQL = TS render)', async () => {
+    const { error: settingsError } = await owner
+      .from('org_settings')
+      .update({ ticket_id_format: 'ZD-{YYYY}-{NNNN}' })
+      .eq('org_id', orgId);
+    expect(settingsError).toBeNull();
+    const { data, error } = await owner
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'form' })
+      .select('number, display_id, opened_at')
+      .single();
+    expect(error).toBeNull();
+    expect(Number(data!.number)).toBe(2);
+    expect(data!.display_id).toBe(formatTicketId('ZD-{YYYY}-{NNNN}', 2, new Date(data!.opened_at)));
+  });
+
+  it('strangers see nothing, cannot insert, and cannot allocate numbers for the org', async () => {
+    const { data } = await stranger.from('tickets').select('id').eq('org_id', orgId);
+    expect(data).toEqual([]);
+    const { error } = await stranger
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'manual' });
+    expect(error).not.toBeNull();
+    const { error: rpcError } = await stranger.rpc('allocate_ticket_number', { p_org_id: orgId });
+    expect(rpcError).not.toBeNull();
+  });
+
+  it('the counter is readable but not writable by members', async () => {
+    const { data } = await owner.from('ticket_counters').select('last_number').eq('org_id', orgId).single();
+    expect(Number(data!.last_number)).toBe(2);
+    const { data: updated } = await owner
+      .from('ticket_counters')
+      .update({ last_number: 100 })
+      .eq('org_id', orgId)
+      .select('org_id');
+    expect(updated ?? []).toHaveLength(0);
+  });
+
+  it('deleting the conversation cascades to its tickets and events', async () => {
+    await admin.from('conversations').delete().eq('id', conversationId);
+    const { data } = await admin.from('tickets').select('id').eq('org_id', orgId);
+    expect(data).toEqual([]);
   });
 });
 

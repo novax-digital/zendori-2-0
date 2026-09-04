@@ -1,8 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import type { ConversationPriority, ConversationStatus } from '@zendori/core';
+import { TICKET_ORIGIN_LABELS, TICKET_STATUS_LABELS } from '@/lib/tickets/labels';
+import type { TicketSummary } from '@/lib/tickets/types';
 import {
   addNote,
+  createTicketFromConversation,
   requestDraft,
   returnToBot,
   setConversationAssignee,
@@ -63,6 +67,10 @@ type ContextSidebarProps = {
   detail: ConversationDetail;
   members: MemberOption[];
   hubspot: HubspotSidebarInfo;
+  /** Phase 11: the conversation's tickets, newest first. */
+  tickets: TicketSummary[];
+  /** May this member open the Tickets area (chips become links)? */
+  canOpenTickets: boolean;
   filterStatus: string;
   filterChannel: string;
   filterQ: string;
@@ -73,6 +81,8 @@ export default function ContextSidebar({
   detail,
   members,
   hubspot,
+  tickets,
+  canOpenTickets,
   filterStatus,
   filterChannel,
   filterQ,
@@ -185,6 +195,47 @@ export default function ContextSidebar({
             );
           })}
         </form>
+      </section>
+
+      <section>
+        <h3>Tickets</h3>
+        {tickets.length === 0 ? (
+          <p className="inbox-sidebar-empty">Kein Ticket zu dieser Konversation.</p>
+        ) : (
+          <div className="inbox-badges-row" style={{ flexWrap: 'wrap' }}>
+            {tickets.map((ticket) => {
+              const label = `${ticket.display_id} · ${TICKET_STATUS_LABELS[ticket.status]}`;
+              const title = [ticket.subject, TICKET_ORIGIN_LABELS[ticket.origin]]
+                .filter(Boolean)
+                .join(' — ');
+              const className =
+                ticket.status === 'resolved' ? 'badge badge--muted' : 'badge badge--info';
+              return canOpenTickets ? (
+                <Link
+                  key={ticket.id}
+                  className={className}
+                  href={`/tickets/${ticket.id}?org=${orgId}`}
+                  title={title}
+                  style={{ textDecoration: 'none' }}
+                >
+                  {label}
+                </Link>
+              ) : (
+                <span key={ticket.id} className={className} title={title}>
+                  {label}
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {!tickets.some((ticket) => ticket.status !== 'resolved') ? (
+          <form action={createTicketFromConversation} style={{ marginTop: '0.5rem' }}>
+            {hiddenFields}
+            <button className="ghost" type="submit">
+              Ticket anlegen
+            </button>
+          </form>
+        ) : null}
       </section>
 
       <section>

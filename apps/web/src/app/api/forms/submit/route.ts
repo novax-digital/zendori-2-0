@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createLogger } from '@zendori/core';
+import { createLogger, ensureTicket } from '@zendori/core';
 import type { SupabaseClient } from '@zendori/core';
 import {
   formSubmissionValuesSchema,
@@ -245,6 +245,25 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'Einsendung konnte nicht gespeichert werden.' }, 500);
   }
   const messageId = (inserted as { id: string }).id;
+
+  // Phase 11: every submission is a ticket (one conversation per submission ⇒
+  // always a fresh one). Best-effort — the submission is already persisted;
+  // 0030 not applied ⇒ 'unavailable' ⇒ silent.
+  try {
+    const ticket = await ensureTicket(admin, {
+      orgId: form.orgId,
+      conversationId,
+      origin: 'form',
+      subject,
+      openedMessageId: messageId,
+      details: { form_id: form.id },
+    });
+    if (ticket.outcome === 'unavailable') {
+      log.warn({ formId: form.id }, 'tickets table missing — is migration 0030 applied?');
+    }
+  } catch (err) {
+    log.error({ formId: form.id, err: { message: (err as Error)?.message } }, 'ticket creation failed');
+  }
 
   // Forwarding queue (best-effort: a failed queue row must not fail the
   // submission — the worker sweep only sees persisted rows).

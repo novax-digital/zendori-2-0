@@ -10,8 +10,21 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/client';
  * re-render with fresh data — this is how a new AI draft appears live above the
  * composer. Renders nothing.
  */
-export default function RealtimeRefresher({ orgId }: { orgId: string }): null {
+const INBOX_TABLES = ['messages', 'conversations', 'ai_drafts', 'tickets'];
+
+export default function RealtimeRefresher({
+  orgId,
+  tables = INBOX_TABLES,
+  channelKey = 'inbox',
+}: {
+  orgId: string;
+  /** Tables to watch (all must be in the realtime publication and carry org_id). */
+  tables?: string[];
+  /** Distinct channel name per page family so two refreshers never collide. */
+  channelKey?: string;
+}): null {
   const router = useRouter();
+  const tablesKey = tables.join(',');
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -25,30 +38,21 @@ export default function RealtimeRefresher({ orgId }: { orgId: string }): null {
       }, 300);
     };
 
-    const channel = supabase
-      .channel(`inbox-${orgId}`)
-      .on(
+    let channel = supabase.channel(`${channelKey}-${orgId}`);
+    for (const table of tablesKey.split(',')) {
+      channel = channel.on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'messages', filter: `org_id=eq.${orgId}` },
+        { event: '*', schema: 'public', table, filter: `org_id=eq.${orgId}` },
         scheduleRefresh
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'conversations', filter: `org_id=eq.${orgId}` },
-        scheduleRefresh
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'ai_drafts', filter: `org_id=eq.${orgId}` },
-        scheduleRefresh
-      )
-      .subscribe();
+      );
+    }
+    channel.subscribe();
 
     return () => {
       if (timer) clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-  }, [orgId, router]);
+  }, [orgId, router, tablesKey, channelKey]);
 
   return null;
 }

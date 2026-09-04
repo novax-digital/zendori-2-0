@@ -39,6 +39,24 @@ describe('shouldStartNewConversation', () => {
     ).toBe(false);
   });
 
+  it('NEVER splits a conversation with an open ticket (Phase 11 attach rule)', () => {
+    expect(
+      shouldStartNewConversation(
+        { status: 'open', lastMessageAt: '2026-01-01T00:00:00Z', hasOpenTicket: true },
+        24,
+        new Date('2026-03-01T00:00:00Z')
+      )
+    ).toBe(false);
+    // without the flag the same candidate splits
+    expect(
+      shouldStartNewConversation(
+        { status: 'open', lastMessageAt: '2026-01-01T00:00:00Z', hasOpenTicket: false },
+        24,
+        new Date('2026-03-01T00:00:00Z')
+      )
+    ).toBe(true);
+  });
+
   it('splits a resolved conversation past the window (widget resume path)', () => {
     expect(
       shouldStartNewConversation({ status: 'resolved', lastMessageAt: hoursAgo(25) }, 24, NOW)

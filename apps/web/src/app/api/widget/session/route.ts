@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
+import { findOpenTicket } from '@zendori/core';
 import { shouldStartNewConversation } from '@zendori/channels';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -217,10 +218,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     // stores it). `pending` never splits; an empty conversation (no inbound
     // message yet) is reused so returning visitors don't pile up empty tickets.
     // Best-effort: any failure falls back to resuming the old conversation.
-    const splitDue = shouldStartNewConversation(
+    let splitDue = shouldStartNewConversation(
       verified.conversation,
       channel.config.conversation_split_hours
     );
+    if (splitDue) {
+      // Phase 11 attach rule: an OPEN ticket pins the visitor to that
+      // conversation (lazy lookup only when the window says "split";
+      // 0030 not applied ⇒ 'unavailable' ⇒ today's behavior).
+      const open = await findOpenTicket(
+        admin,
+        channel.org_id,
+        verified.session.conversation_id
+      ).catch(() => null);
+      if (open && open !== 'unavailable') splitDue = false;
+    }
     if (splitDue) {
       const rotatedId = await rotateConversation(admin, {
         orgId: channel.org_id,
