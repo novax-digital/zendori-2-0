@@ -9,7 +9,8 @@ import {
   ticketStatusSchema,
 } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { hasTicketEdit } from '@/lib/access';
+import { getMemberAccess, hasTicketEdit } from '@/lib/access';
+import { isAdminRole } from '@zendori/core';
 
 // Server actions of the ticket detail page (Phase 11). Every mutation is
 // guarded by hasTicketEdit (tickets edit + channel scope) and scoped by
@@ -220,4 +221,38 @@ export async function addTicketNote(formData: FormData): Promise<void> {
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath('/inbox');
   redirect(ticketUrl(org, ticketId, { notice: 'Notiz gespeichert.' }));
+}
+
+/**
+ * Delete a ticket (owner/admin — the tickets_delete RLS policy is the hard
+ * gate, the role check here only produces the right German message). The
+ * conversation and its messages stay; ticket_events cascade; a HubSpot ticket
+ * created from it stays in HubSpot (same convention as channels/agents).
+ */
+export async function deleteTicket(formData: FormData): Promise<void> {
+  const parsed = baseSchema.safeParse({
+    org: formData.get('org'),
+    ticketId: formData.get('ticketId'),
+  });
+  if (!parsed.success) redirect(ticketsUrl(textField(formData.get('org')), 'Ticket wurde nicht gefunden.'));
+  const { org, ticketId } = parsed.data;
+  const access = await getMemberAccess(org);
+  if (!access || !isAdminRole(access.role)) {
+    redirect(ticketUrl(org, ticketId, { error: 'Nur Inhaber und Admins können Tickets löschen.' }));
+  }
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('tickets')
+    .delete()
+    .eq('org_id', org)
+    .eq('id', ticketId)
+    .select('id, display_id');
+  if (error || !data || data.length === 0) {
+    redirect(ticketUrl(org, ticketId, { error: 'Ticket konnte nicht gelöscht werden.' }));
+  }
+  const displayId = (data[0] as { display_id?: string }).display_id ?? '';
+  revalidatePath('/tickets');
+  revalidatePath('/inbox');
+  const params = new URLSearchParams({ org, notice: `Ticket ${displayId} gelöscht.` });
+  redirect(`/tickets?${params.toString()}`);
 }

@@ -64,6 +64,12 @@ Priorität/Zuständig/Kanal/Suche) → `/tickets/[id]` (Bearbeitung, Anliegen, K
 Inbox: Sektion „Tickets" in der Seitenleiste (Chips, „Ticket anlegen"), Chip im Konversationskopf.
 Einstellungen → Tab „Tickets": Format mit Live-Vorschau + Startnummer (owner/admin).
 
+## Löschen
+
+Ticket-Detail → „Ticket löschen" (zweistufig, nur Inhaber/Admins — RLS `tickets_delete`). Die
+Konversation bleibt, `ticket_events` kaskadieren, die Nummer wird nicht neu vergeben (Lücken sind
+erlaubt), ein HubSpot-Ticket bleibt in HubSpot.
+
 ## Konversations-Split
 
 `shouldStartNewConversation` bekommt `hasOpenTicket`: ein offenes Ticket verhindert die

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { allowedChannelIds, canEditArea, canViewArea } from '@zendori/core';
+import { allowedChannelIds, canEditArea, canViewArea, isAdminRole } from '@zendori/core';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import MessageThread from '@/components/inbox/MessageThread';
@@ -18,7 +19,7 @@ import {
   TICKET_STATUS_LABELS,
 } from '@/lib/tickets/labels';
 import { getTicketDetail } from '@/lib/tickets/queries';
-import { addTicketNote, syncTicketToHubspot, updateTicketFields } from '../actions';
+import { addTicketNote, deleteTicket, syncTicketToHubspot, updateTicketFields } from '../actions';
 
 // Ticket detail (Phase 11): the work item plus its transcript slice.
 
@@ -53,13 +54,14 @@ export default async function TicketDetailPage({
 }) {
   const { ticketId } = await params;
   const { org, error, notice } = await searchParams;
-  const { orgId, access } = await requireActiveOrg(org);
+  const { orgId, access, role } = await requireActiveOrg(org);
   if (!canViewArea(access, 'tickets')) return <NoAccessPanel title="Tickets" />;
   const scope = allowedChannelIds(access);
   const detail = await getTicketDetail(orgId, ticketId, scope);
   if (!detail) notFound();
   const { ticket, channel, contact, conversation, messages, earlierMessageCount, notes, events } = detail;
   const canEdit = canEditArea(access, 'tickets');
+  const isOwner = isAdminRole(role);
   const [members, hubspot] = await Promise.all([listMembers(orgId), getHubspotSidebarInfo(orgId)]);
   const hubspotTicketUrl =
     ticket.hubspot_ticket_id && hubspot.ui_domain && hubspot.portal_id
@@ -248,6 +250,20 @@ export default async function TicketDetailPage({
           {ticket.resolved_at ? <li>{formatDateTime(ticket.resolved_at)} — Erledigt</li> : null}
         </ul>
       </div>
+
+      {isOwner ? (
+        <div className="panel">
+          <h2>Ticket löschen</h2>
+          <form action={deleteTicket}>
+            {hidden}
+            <ConfirmDeleteButton label="Ticket löschen" confirmLabel="Endgültig löschen" />
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.4rem' }}>
+              Die Konversation und ihre Nachrichten bleiben erhalten; die Ticketnummer wird nicht neu
+              vergeben. Ein bereits angelegtes HubSpot-Ticket bleibt in HubSpot bestehen.
+            </p>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
