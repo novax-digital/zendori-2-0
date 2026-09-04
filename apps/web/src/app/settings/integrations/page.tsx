@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { z } from 'zod';
-import { decryptSecret, syncRulesSchema } from '@zendori/core';
+import { decryptSecret, parseHubspotSyncRules } from '@zendori/core';
 import type { Channel, SyncRules } from '@zendori/core';
 import { listTicketPipelines } from '@zendori/integrations';
 import { requireActiveOrg } from '@/lib/org';
@@ -45,11 +45,19 @@ type HubspotConfigView = {
   resolved_stage_id: string;
   ui_domain: string;
   portal_id: string;
+  /** Ticket stream (Phase 11b) — empty ids = not configured. */
+  tickets: {
+    pipeline_id: string;
+    default_stage_id: string;
+    resolved_stage_id: string;
+    subject_prefix: boolean;
+  };
 };
 
 function readConfig(raw: unknown): HubspotConfigView {
   const config = (raw ?? {}) as Record<string, unknown>;
   const str = (value: unknown): string => (typeof value === 'string' ? value : '');
+  const tickets = (config.tickets ?? {}) as Record<string, unknown>;
   return {
     token_encrypted: typeof config.token_encrypted === 'string' ? config.token_encrypted : null,
     pipeline_id: str(config.pipeline_id),
@@ -57,6 +65,12 @@ function readConfig(raw: unknown): HubspotConfigView {
     resolved_stage_id: str(config.resolved_stage_id),
     ui_domain: str(config.ui_domain),
     portal_id: str(config.portal_id),
+    tickets: {
+      pipeline_id: str(tickets.pipeline_id),
+      default_stage_id: str(tickets.default_stage_id),
+      resolved_stage_id: str(tickets.resolved_stage_id),
+      subject_prefix: tickets.subject_prefix !== false,
+    },
   };
 }
 
@@ -97,9 +111,11 @@ export default async function IntegrationsPage({
   const connected = Boolean(integrationRow);
   const config = readConfig(integrationRow?.config);
   const isActive = integrationRow?.is_active === true;
-  const rulesParsed = syncRulesSchema.safeParse(integrationRow?.rules);
-  const rules: SyncRules = rulesParsed.success ? rulesParsed.data : { mode: 'manual' };
+  const streams = parseHubspotSyncRules(integrationRow?.rules);
+  const rules: SyncRules = streams.conversations;
   const selectedChannelIds = new Set(rules.mode === 'channels' ? rules.channel_ids : []);
+  const ticketRules: SyncRules = streams.tickets;
+  const ticketChannelIds = new Set(ticketRules.mode === 'channels' ? ticketRules.channel_ids : []);
 
   const channels: Channel[] = connected ? await listChannels(orgId) : [];
   const { pipelines, failed: pipelinesFailed } =
@@ -238,10 +254,11 @@ export default async function IntegrationsPage({
                 </select>
               </div>
 
-              <h2 style={{ marginTop: '0.75rem', marginBottom: 0 }}>Sync-Regeln</h2>
+              <h2 style={{ marginTop: '0.75rem', marginBottom: 0 }}>Konversationen → HubSpot</h2>
               <p className="help">
-                Legt fest, welche Konversationen automatisch an HubSpot gehen. Der Button „An
-                HubSpot senden" pro Konversation funktioniert immer, unabhängig von dieser Regel.
+                Legt fest, welche Konversationen automatisch an HubSpot gehen (Pipeline und Stages
+                oben). Der Button „An HubSpot senden" pro Konversation funktioniert immer,
+                unabhängig von dieser Regel.
               </p>
               <div>
                 <label htmlFor="hs-rule">Regel</label>
@@ -273,7 +290,90 @@ export default async function IntegrationsPage({
                 )}
               </fieldset>
 
-              <label className="check-row" style={{ marginBottom: '0.35rem' }}>
+              <h2 style={{ marginTop: '1rem', marginBottom: 0 }}>Tickets → HubSpot</h2>
+              <p className="help">
+                Eigener Strom für Zendori-Tickets (Phase 11): eigene Pipeline, eigene Regel. Beide
+                Ströme können parallel laufen — z. B. Konversationen in eine Liste, Tickets in eine
+                andere. Ohne Ticket-Pipeline werden Tickets nicht übertragen.
+              </p>
+              <div>
+                <label htmlFor="hs-ticket-pipeline">Ticket-Pipeline</label>
+                <select id="hs-ticket-pipeline" name="ticket_pipeline_id" defaultValue={config.tickets.pipeline_id}>
+                  <option value="">— nicht konfiguriert —</option>
+                  {pipelines.length === 0 && config.tickets.pipeline_id ? (
+                    <option value={config.tickets.pipeline_id}>{config.tickets.pipeline_id}</option>
+                  ) : null}
+                  {pipelines.map((pipeline) => (
+                    <option key={pipeline.id} value={pipeline.id}>
+                      {pipeline.label ?? pipeline.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="hs-ticket-stage">Standard-Stage (neue Tickets)</label>
+                <select id="hs-ticket-stage" name="ticket_default_stage_id" defaultValue={config.tickets.default_stage_id}>
+                  <option value="">—</option>
+                  {pipelines.map((pipeline) => (
+                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
+                      {pipeline.stages.map((stage) => (
+                        <option key={stage.id} value={stage.id}>
+                          {stage.label ?? stage.id}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="hs-ticket-resolved">„Erledigt"-Stage (optional)</label>
+                <select id="hs-ticket-resolved" name="ticket_resolved_stage_id" defaultValue={config.tickets.resolved_stage_id}>
+                  <option value="">— kein Stage-Wechsel bei „Erledigt" —</option>
+                  {pipelines.map((pipeline) => (
+                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
+                      {pipeline.stages.map((stage) => (
+                        <option key={stage.id} value={stage.id}>
+                          {stage.label ?? stage.id}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <label className="check-row">
+                <input type="checkbox" name="ticket_subject_prefix" defaultChecked={config.tickets.subject_prefix} />
+                Ticket-ID im HubSpot-Betreff voranstellen (z. B. „[ZD-2026-0042] Rechnungsfrage")
+              </label>
+              <div>
+                <label htmlFor="hs-ticket-rule">Regel</label>
+                <select id="hs-ticket-rule" name="ticket_rules_mode" defaultValue={ticketRules.mode}>
+                  <option value="all">Alle Tickets</option>
+                  <option value="channels">Nur Tickets ausgewählter Kanäle</option>
+                  <option value="manual">Nur manuell</option>
+                </select>
+              </div>
+              <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+                <legend className="field-label" style={{ marginBottom: '0.5rem' }}>
+                  Kanäle (nur wirksam bei Regel „Nur Tickets ausgewählter Kanäle")
+                </legend>
+                {channels.length === 0 ? (
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Keine Kanäle vorhanden.</p>
+                ) : (
+                  channels.map((channel) => (
+                    <label key={channel.id} className="check-row">
+                      <input
+                        type="checkbox"
+                        name="ticket_channel_ids"
+                        value={channel.id}
+                        defaultChecked={ticketChannelIds.has(channel.id)}
+                      />
+                      {channel.name}
+                    </label>
+                  ))
+                )}
+              </fieldset>
+
+              <label className="check-row" style={{ marginBottom: '0.35rem', marginTop: '0.75rem' }}>
                 <input type="checkbox" name="is_active" defaultChecked={isActive} />
                 Integration aktiv
               </label>

@@ -43,9 +43,12 @@ import type {
   ProcessingState,
   SenderType,
   SupabaseClient,
-  SyncRules,
 } from '@zendori/core';
-import { syncRulesSchema } from '@zendori/core';
+import {
+  hubspotRuleApplies,
+  parseHubspotSyncRules,
+  requestConversationTicketsResync,
+} from '@zendori/core';
 import { getServiceClient, isMissingColumnError } from '../db.js';
 import {
   decideDraftAction,
@@ -211,6 +214,13 @@ export async function processMessage(messageId: string): Promise<void> {
   const forceDraft = conv.mode === 'human' && message.metadata.force_draft === true;
   if (conv.mode !== 'bot' && !forceDraft) {
     await markDone(supabase, message.id);
+    // Phase 11b: a customer follow-up on a human-owned conversation reaches the
+    // open ticket's HubSpot record as a note (ticket-stream rules apply).
+    await requestConversationTicketsResync(supabase, {
+      orgId: message.org_id,
+      channelId: channel.id,
+      conversationId: conv.id,
+    });
     return;
   }
 
@@ -747,9 +757,10 @@ export async function maybeRequestHubspotSync(
       .maybeSingle();
     if (error) throw error;
     if (!data) return; // no active hubspot integration
-    const rules = syncRulesSchema.safeParse((data as { rules: unknown }).rules);
-    if (!rules.success) return; // malformed rules — nothing to do
-    if (!hubspotRuleApplies(rules.data, channelId)) return; // manual / channel not covered
+    // Phase 11b: this is the CONVERSATION stream — the ticket stream has its
+    // own rules and is armed from ensureTicket / requestConversationTicketsResync.
+    const rules = parseHubspotSyncRules((data as { rules: unknown }).rules).conversations;
+    if (!hubspotRuleApplies(rules, channelId)) return; // manual / channel not covered
     await supabase
       .from('conversations')
       .update({ hubspot_sync_requested_at: new Date().toISOString() })
@@ -760,24 +771,6 @@ export async function maybeRequestHubspotSync(
   }
 }
 
-/**
- * Whether an active HubSpot integration's sync rules apply to a conversation on
- * the given channel (§ Phase 6):
- *   - all      → always sync
- *   - channels → only when channel_ids contains this channel
- *   - manual   → never automatically (the "An HubSpot senden" button is separate)
- * Pure; exported for unit tests.
- */
-export function hubspotRuleApplies(rules: SyncRules, channelId: string): boolean {
-  switch (rules.mode) {
-    case 'all':
-      return true;
-    case 'channels':
-      return rules.channel_ids.includes(channelId);
-    case 'manual':
-      return false;
-  }
-}
 
 /**
  * Terminal-failure handler (called by the queue handler once retries are

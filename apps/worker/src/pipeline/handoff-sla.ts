@@ -4,7 +4,7 @@ import {
   isWithinBusinessHours,
   type BusinessHours,
 } from '@zendori/channels';
-import type { Logger, SupabaseClient } from '@zendori/core';
+import { findOpenTicket, type Logger, type SupabaseClient } from '@zendori/core';
 import { toErrorInfo } from '../db.js';
 
 // Handoff SLA reminder (0018, v1.5): a pending handoff without an agent
@@ -103,7 +103,10 @@ export async function remindOverdueHandoffs(
           .eq('id', event.id);
       };
 
-      // Still waiting? (one-queue principle: status='pending' is the queue key)
+      // Still waiting? status='pending' is the inbox queue key; since Phase 11b
+      // a voice callback promise opens a TICKET without flipping the
+      // conversation — an unassigned open ticket counts as waiting, an assigned
+      // or in-progress one as "a human reacted".
       const { data: conv } = await supabase
         .from('conversations')
         .select('id')
@@ -111,8 +114,17 @@ export async function remindOverdueHandoffs(
         .eq('id', event.conversation_id)
         .eq('status', 'pending')
         .maybeSingle();
-      if (!conv) {
-        await markReminded(); // resolved meanwhile — never re-check
+      let stillWaiting = Boolean(conv);
+      if (!stillWaiting) {
+        const open = await findOpenTicket(supabase, orgRow.org_id, event.conversation_id).catch(
+          () => null
+        );
+        if (open && open !== 'unavailable') {
+          stillWaiting = open.status === 'open' && open.assignee_id === null;
+        }
+      }
+      if (!stillWaiting) {
+        await markReminded(); // resolved / handled meanwhile — never re-check
         continue;
       }
 

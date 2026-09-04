@@ -10,3 +10,4 @@ export * from './billing.js';
 export * from './permissions.js';
 export * from './tickets.js';
 export * from './ticket-service.js';
+export * from './hubspot-rules.js';

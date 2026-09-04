@@ -1081,6 +1081,83 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
   redirect(inboxUrl({ ...base, notice: 'Konversation übernommen — der Bot pausiert.' }));
 }
 
+/**
+ * „Ticket an HubSpot senden" in the inbox sidebar (Phase 11b): ensures the
+ * conversation's ticket (manual origin) and arms the TICKET-stream sync
+ * regardless of rules — the conversation-stream button stays separate.
+ */
+export async function syncConversationTicketToHubspot(formData: FormData): Promise<void> {
+  if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
+  }
+  const errorText = 'Ticket konnte nicht an HubSpot übergeben werden.';
+  const parsed = handoffActionSchema.safeParse({
+    org: formData.get('org'),
+    conversationId: formData.get('conversationId'),
+  });
+  if (!parsed.success) {
+    redirect(inboxUrl(fallbackInboxRedirect(formData, errorText)));
+  }
+  const { org, conversationId } = parsed.data;
+  const base: InboxRedirect = {
+    org,
+    c: conversationId,
+    status: sanitizeFilterStatus(formData.get('filterStatus')),
+    channel: sanitizeFilterChannel(formData.get('filterChannel')),
+    q: sanitizeFilterQ(formData.get('filterQ')) || undefined,
+  };
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  const { data: integration } = await supabase
+    .from('integrations')
+    .select('config')
+    .eq('org_id', org)
+    .eq('type', 'hubspot')
+    .maybeSingle();
+  const config = ((integration as { config?: unknown } | null)?.config ?? {}) as Record<string, unknown>;
+  if (!integration) redirect(inboxUrl({ ...base, error: 'HubSpot ist nicht verbunden.' }));
+  if (!config.tickets || typeof config.tickets !== 'object') {
+    redirect(
+      inboxUrl({
+        ...base,
+        error: 'Für Tickets ist keine HubSpot-Pipeline konfiguriert (Einstellungen → Integrationen).',
+      })
+    );
+  }
+
+  let displayId = '';
+  let failed = false;
+  try {
+    const result = await ensureTicket(supabase, {
+      orgId: org,
+      conversationId,
+      origin: 'manual',
+      createdBy: user.id,
+    });
+    if (result.outcome === 'unavailable') {
+      failed = true;
+    } else {
+      displayId = result.ticket.displayId;
+      const { error } = await supabase
+        .from('tickets')
+        .update({ hubspot_sync_requested_at: new Date().toISOString() })
+        .eq('org_id', org)
+        .eq('id', result.ticket.id);
+      if (error) failed = true;
+    }
+  } catch {
+    failed = true;
+  }
+  if (failed) redirect(inboxUrl({ ...base, error: errorText }));
+  revalidatePath('/inbox');
+  revalidatePath('/tickets');
+  redirect(inboxUrl({ ...base, notice: `Ticket ${displayId} zum HubSpot-Sync vorgemerkt.` }));
+}
+
 /** „Ticket anlegen" in the inbox sidebar (Phase 11): manual ticket for the conversation. */
 export async function createTicketFromConversation(formData: FormData): Promise<void> {
   if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {

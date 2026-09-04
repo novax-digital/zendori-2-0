@@ -22,6 +22,7 @@ import {
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
 export const HUBSPOT_SYNC_QUEUE = 'hubspot.sync-conversation';
+export const HUBSPOT_TICKET_SYNC_QUEUE = 'hubspot.sync-ticket';
 export const PROCESS_MESSAGE_RETRY_LIMIT = 3;
 export const INDEX_SOURCE_RETRY_LIMIT = 2;
 export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
@@ -62,6 +63,9 @@ export interface IndexSourceJob {
 export interface HubspotSyncJob {
   conversationId: string;
 }
+export interface HubspotTicketSyncJob {
+  ticketId: string;
+}
 
 /**
  * Start the scan loop. Returns a stop function that clears the interval.
@@ -78,6 +82,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueuePendingMessages(boss, supabase);
       await enqueuePendingSources(boss, supabase);
       await enqueueDueHubspotSyncs(boss, supabase);
+      await enqueueDueTicketHubspotSyncs(boss, supabase);
       await enqueueDuePostCalls(boss, supabase);
       await enqueuePendingFormNotifications(boss, supabase);
       await enqueueLearningCandidates(boss, supabase);
@@ -165,6 +170,41 @@ async function enqueueDueHubspotSyncs(boss: PgBoss, supabase: SupabaseClient): P
     const isDue = syncedMs === null || syncedMs < requestedMs;
     if (!isDue) continue;
     await boss.send(HUBSPOT_SYNC_QUEUE, { conversationId: row.id } satisfies HubspotSyncJob, {
+      singletonKey: row.id,
+      retryLimit: HUBSPOT_SYNC_RETRY_LIMIT,
+      retryBackoff: true,
+    });
+    enqueued += 1;
+  }
+}
+
+/**
+ * Ticket stream (Phase 11b): same due predicate over tickets. A worker deployed
+ * before migration 0030 sees a missing table and stays silent.
+ */
+async function enqueueDueTicketHubspotSyncs(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('tickets')
+    .select('id, hubspot_sync_requested_at, hubspot_synced_at')
+    .not('hubspot_sync_requested_at', 'is', null)
+    .order('hubspot_sync_requested_at', { ascending: false })
+    .limit(HUBSPOT_SYNC_CANDIDATES);
+  if (error) {
+    if (isMissingTable(error)) return;
+    throw error;
+  }
+  const rows = (data ?? []) as {
+    id: string;
+    hubspot_sync_requested_at: string;
+    hubspot_synced_at: string | null;
+  }[];
+  let enqueued = 0;
+  for (const row of rows) {
+    if (enqueued >= HUBSPOT_SYNC_BATCH) break;
+    const requestedMs = Date.parse(row.hubspot_sync_requested_at);
+    const syncedMs = row.hubspot_synced_at !== null ? Date.parse(row.hubspot_synced_at) : null;
+    if (!(syncedMs === null || syncedMs < requestedMs)) continue;
+    await boss.send(HUBSPOT_TICKET_SYNC_QUEUE, { ticketId: row.id } satisfies HubspotTicketSyncJob, {
       singletonKey: row.id,
       retryLimit: HUBSPOT_SYNC_RETRY_LIMIT,
       retryBackoff: true,

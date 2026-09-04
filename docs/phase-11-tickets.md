@@ -1,7 +1,7 @@
 # Phase 11 — Tickets (Konversation ≠ Ticket)
 
-Owner-Entscheidung 2026-09-04. Stand: **11a gebaut** (Tickets existieren, Bereich, Einstellungen,
-alle Erzeugungs-Hooks; HubSpot unverändert). 11b (HubSpot als zwei Ströme + Status-Cutover) folgt.
+Owner-Entscheidung 2026-09-04. Stand: **11a + 11b gebaut** — Tickets existieren (0030), Bereich,
+Einstellungen, alle Erzeugungs-Hooks, HubSpot als zwei konfigurierbare Ströme, Status-Cutover.
 
 ## Semantik in einem Absatz
 
@@ -74,13 +74,35 @@ Die Ticketnummer wird **nicht** vorgelesen (Owner-Regel 2026-09-03). Die System-
 Inbox trägt sie („Ticket #12 aufgenommen: …"). Follow-up-Idee: org-Toggle
 `voice_announce_ticket_id`.
 
-## 11b — Cutover-Checkliste (noch offen)
+## HubSpot: zwei Ströme (11b)
 
-1. HubSpot als zwei Ströme (`integrations.config.tickets`, `rules.{conversations,tickets}`),
-   Ticket-Sync (`hubspot.sync-ticket`, `zendori_ref = ticket.id`, Betreff-Präfix konfigurierbar).
-2. `createTicketTool` setzt kein `status:'pending'` mehr; `handoff-sla.ts` prüft „wartet noch?" über
-   das offene Ticket; Ticket-Zuweisung/`in_progress` zählt als Reaktion.
-3. HubSpot-Panel auf dem Ticket; `ticket_events.hubspot_synced`.
+`integrations.config` trägt neben dem Konversations-Strom (`pipeline_id/default_stage_id/
+resolved_stage_id`, Phase 6) den Block `tickets: { pipeline_id, default_stage_id, resolved_stage_id?,
+subject_prefix }`; `integrations.rules` ist `{ conversations: Regel, tickets: Regel }` (die flache
+Alt-Form wird als Konversations-Strom gelesen, Tickets dann „manuell" — `parseHubspotSyncRules`).
+Einstellungen → Integrationen zeigt beide Ströme mit Pipeline/Stages/Regel; ohne Ticket-Pipeline
+werden Tickets nicht übertragen.
+
+- **Ticket-Strom** (`syncTicket`, Queue `hubspot.sync-ticket`, Anker `zendori_ref = tickets.id`,
+  Scan über `tickets.hubspot_sync_requested_at/hubspot_synced_at`): Betreff `[display_id] Betreff`
+  (Toggle), Inhalt = Beschreibung + Eröffnungsnachricht (Text) bzw. komplettes Transkript (Voice)
+  + „— Zendori-Ticket …", Folge-Nachrichten ab Wasserzeichen (nie vor `opened_at`) als Notizen,
+  „Erledigt" → Erledigt-Stage. `ticket_events.hubspot_synced` beim Anlegen.
+- **Auslöser:** `ensureTicket` (created + attached) armt den Sync, wenn die Ticket-Regel den Kanal
+  deckt **oder** das Ticket schon in HubSpot ist (`ticketSyncWanted`); Folge-Nachrichten in
+  menschgeführten Konversationen und der Voice-Post-Call re-armen offene Tickets
+  (`requestConversationTicketsResync`); „Erledigt" armt bei bereits gesendetem Ticket oder passender
+  Regel. Buttons: Ticket-Detail „An HubSpot senden", Inbox-Seitenleiste „Ticket an HubSpot senden"
+  (legt bei Bedarf ein manuelles Ticket an).
+- **Konversations-Strom** bleibt unverändert (sechs Aufrufstellen, `status='hubspot_sent'`).
+
+## Status-Cutover (11b)
+
+`create_ticket` (Voice) setzt die Konversation nicht mehr auf `pending` — das offene Ticket ist der
+Warteschlangeneintrag; Übergaben (Text/Voice/Übernahme) setzen `pending` weiterhin. Die
+SLA-Erinnerung gilt als „wartet noch", wenn die Konversation `pending` ist **oder** ein
+unzugewiesenes offenes Ticket existiert; ein zugewiesenes/in Bearbeitung befindliches Ticket zählt
+als Reaktion.
 
 ## Manueller Test (11a)
 
@@ -102,3 +124,20 @@ Inbox trägt sie („Ticket #12 aufgenommen: …"). Follow-up-Idee: org-Toggle
     Text; mit Ansehen + Kanal-Scope → nur diese Kanäle, Auswahlfelder deaktiviert.
 11. Realtime: `/tickets` offen lassen, Übergabe in anderem Tab → Liste aktualisiert sich.
 12. Suche `?q=ZD-2026-0002` und Kontakt-E-Mail-Fragment treffen.
+
+## Manueller Test (11b)
+
+1. Einstellungen → Integrationen: Ticket-Pipeline + Standard-Stage wählen, Regel „Alle Tickets",
+   Präfix an; Konversations-Regel „Nur manuell". Speichern.
+2. Übergabe im Test-Kanal auslösen → Ticket entsteht → innerhalb von Sekunden ein HubSpot-Ticket
+   `[ZD-2026-000x] …` in der Ticket-Pipeline (Inhalt: Beschreibung + erste Nachricht + Fußzeile);
+   Ticket-Detail zeigt „In HubSpot" + Deep-Link; Zeitleiste „An HubSpot übertragen".
+3. Weitere Kundennachricht auf derselben (menschgeführten) Konversation → Notiz am HubSpot-Ticket.
+4. Ticket „Erledigt" → HubSpot-Stage wechselt.
+5. Präfix-Toggle aus → nächstes Ticket ohne Klammer. Regel „Nur manuell" → kein automatischer
+   Sync; Button „An HubSpot senden" auf dem Ticket funktioniert; ohne Ticket-Pipeline meldet er
+   den Konfigurationshinweis.
+6. Konversations-Regel „Alle" zusätzlich → dieselbe Anfrage erzeugt zwei HubSpot-Tickets in zwei
+   Pipelines (gewollt: zwei Ströme), keine Dublette innerhalb eines Stroms.
+7. Voice: Rückruf-Versprechen → Ticket → nach Auflegen Transkript-Notizen am HubSpot-Ticket;
+   Konversation bleibt `open` (kein `pending` mehr durch `create_ticket`).

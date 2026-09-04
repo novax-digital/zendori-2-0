@@ -3,7 +3,11 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { conversationPrioritySchema, ticketStatusSchema } from '@zendori/core';
+import {
+  conversationPrioritySchema,
+  requestTicketHubspotSync,
+  ticketStatusSchema,
+} from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { hasTicketEdit } from '@/lib/access';
 
@@ -69,7 +73,61 @@ export async function setTicketStatus(formData: FormData): Promise<void> {
   const { org, ticketId } = await guard(formData);
   const status = ticketStatusSchema.safeParse(textField(formData.get('status')));
   if (!status.success) redirect(ticketUrl(org, ticketId, { error: 'Ungültiger Status.' }));
-  await patchTicket(org, ticketId, { status: status.data }, 'Status aktualisiert.', 'Status konnte nicht gespeichert werden.');
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from('tickets')
+    .update({ status: status.data })
+    .eq('org_id', org)
+    .eq('id', ticketId)
+    .select('id, channel_id, hubspot_ticket_id');
+  if (error || !data || data.length === 0) {
+    redirect(ticketUrl(org, ticketId, { error: 'Status konnte nicht gespeichert werden.' }));
+  }
+  if (status.data === 'resolved') {
+    // Phase 11b: "Erledigt" moves the HubSpot ticket to the resolved stage —
+    // when it is already in HubSpot, or the ticket-stream rule covers the channel.
+    const row = data[0] as { channel_id: string; hubspot_ticket_id: string | null };
+    await requestTicketHubspotSync(supabase, {
+      orgId: org,
+      channelId: row.channel_id,
+      ticketId,
+      alreadySynced: row.hubspot_ticket_id !== null,
+    });
+  }
+  revalidatePath('/tickets');
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath('/inbox');
+  redirect(ticketUrl(org, ticketId, { notice: 'Status aktualisiert.' }));
+}
+
+/** „An HubSpot senden" on the ticket (Phase 11b): arms the ticket-stream sync regardless of rules. */
+export async function syncTicketToHubspot(formData: FormData): Promise<void> {
+  const { org, ticketId } = await guard(formData);
+  const supabase = await createSupabaseServerClient();
+  const { data: integration } = await supabase
+    .from('integrations')
+    .select('id, is_active, config')
+    .eq('org_id', org)
+    .eq('type', 'hubspot')
+    .maybeSingle();
+  if (!integration) redirect(ticketUrl(org, ticketId, { error: 'HubSpot ist nicht verbunden.' }));
+  const config = ((integration as { config?: unknown }).config ?? {}) as Record<string, unknown>;
+  if (!config.tickets || typeof config.tickets !== 'object') {
+    redirect(
+      ticketUrl(org, ticketId, {
+        error: 'Für Tickets ist keine HubSpot-Pipeline konfiguriert (Einstellungen → Integrationen).',
+      })
+    );
+  }
+  await patchTicket(
+    org,
+    ticketId,
+    { hubspot_sync_requested_at: new Date().toISOString() },
+    (integration as { is_active?: boolean }).is_active
+      ? 'Ticket zum HubSpot-Sync vorgemerkt.'
+      : 'Vorgemerkt — die Integration ist deaktiviert, der Sync läuft erst nach dem Aktivieren.',
+    'HubSpot-Sync konnte nicht vorgemerkt werden.'
+  );
 }
 
 export async function setTicketPriority(formData: FormData): Promise<void> {

@@ -18,6 +18,7 @@ import {
   type ConversationPriority,
   type ConversationStatus,
   type SupabaseClient,
+  type TicketStatus,
 } from '@zendori/core';
 import {
   attachNote,
@@ -35,9 +36,30 @@ const logger = createLogger('worker.hubspot-sync');
 /** Shape of integrations.config for a HubSpot integration (§ contract Config-Formen). */
 const hubspotIntegrationConfigSchema = z.object({
   token_encrypted: z.string().min(1),
+  // conversation stream (Phase 6)
   pipeline_id: z.string().min(1),
   default_stage_id: z.string().min(1),
   resolved_stage_id: z.string().min(1).optional(),
+  // ticket stream (Phase 11b) — absent = not configured, ticket syncs are skipped
+  tickets: z
+    .object({
+      pipeline_id: z.string().min(1),
+      default_stage_id: z.string().min(1),
+      resolved_stage_id: z.string().min(1).optional(),
+      subject_prefix: z.boolean().default(true),
+    })
+    .optional(),
+});
+
+/** Ticket-stream config only needs the token + the tickets block (the conversation stream may be unconfigured). */
+const hubspotTicketStreamConfigSchema = z.object({
+  token_encrypted: z.string().min(1),
+  tickets: z.object({
+    pipeline_id: z.string().min(1),
+    default_stage_id: z.string().min(1),
+    resolved_stage_id: z.string().min(1).optional(),
+    subject_prefix: z.boolean().default(true),
+  }),
 });
 
 // --- loaded row shapes (DB boundary, cast via `as unknown as`) ----------------
@@ -642,5 +664,310 @@ async function touchIntegrationSync(
     .from('integrations')
     .update({ last_sync_at: new Date().toISOString() })
     .eq('id', integrationId);
+  if (error) throw error;
+}
+
+// =============================================================================
+// Ticket stream (Phase 11b): one Zendori ticket → one HubSpot ticket, anchored
+// on zendori_ref = tickets.id. Driven by tickets.hubspot_sync_requested_at /
+// hubspot_synced_at exactly like the conversation stream above; the two
+// streams are independent (own pipeline, own rules) and may both be active.
+// =============================================================================
+
+interface LoadedTicketRow {
+  id: string;
+  org_id: string;
+  conversation_id: string;
+  channel_id: string;
+  contact_id: string | null;
+  display_id: string;
+  subject: string | null;
+  description: string | null;
+  status: TicketStatus;
+  priority: ConversationPriority;
+  opened_at: string;
+  opened_message_id: string | null;
+  hubspot_ticket_id: string | null;
+  hubspot_noted_through: string | null;
+  hubspot_synced_at: string | null;
+  channel: LoadedChannel;
+  conversation: { id: string; contact_id: string | null; subject: string | null };
+}
+
+const TICKET_SELECT =
+  'id, org_id, conversation_id, channel_id, contact_id, display_id, subject, description, status, priority, ' +
+  'opened_at, opened_message_id, hubspot_ticket_id, hubspot_noted_through, hubspot_synced_at, ' +
+  'channel:channels!inner(id, type, name), conversation:conversations!inner(id, contact_id, subject)';
+
+/** The HubSpot subject: optional "[display_id] " prefix (config.tickets.subject_prefix). */
+export function buildTicketSubject(
+  ticket: { display_id: string; subject: string | null },
+  fallback: string | null,
+  prefix: boolean
+): string {
+  const base = ticket.subject?.trim() || fallback?.trim() || 'Ticket';
+  return prefix ? `[${ticket.display_id}] ${base}` : base;
+}
+
+/**
+ * Sync one ticket to HubSpot (idempotent via zendori_ref = ticket id). Same
+ * scheduling contract as syncConversation: throws for pg-boss retries, the
+ * queue handler stamps terminal failures.
+ */
+export async function syncTicket(ticketId: string): Promise<void> {
+  const supabase = getServiceClient();
+  const syncStartedAt = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('tickets')
+    .select(TICKET_SELECT)
+    .eq('id', ticketId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return; // ticket vanished
+  const ticket = data as unknown as LoadedTicketRow;
+  const orgId = ticket.org_id;
+
+  const { data: integrationData, error: integrationError } = await supabase
+    .from('integrations')
+    .select('id, config')
+    .eq('org_id', orgId)
+    .eq('type', 'hubspot')
+    .eq('is_active', true)
+    .maybeSingle();
+  if (integrationError) throw integrationError;
+  if (!integrationData) {
+    await stampTicketSynced(supabase, ticketId, orgId, syncStartedAt);
+    return;
+  }
+  const integration = integrationData as { id: string; config: unknown };
+  const parsedConfig = hubspotTicketStreamConfigSchema.safeParse(integration.config);
+  if (!parsedConfig.success) {
+    // Ticket stream not configured (no tickets pipeline) — permanent until the
+    // owner configures it; stamp so the scan stops.
+    logger.warn({ ticketId }, 'hubspot ticket stream not configured — skipping sync');
+    await stampTicketSynced(supabase, ticketId, orgId, syncStartedAt);
+    return;
+  }
+  const cfg = parsedConfig.data.tickets;
+
+  const masterKey = loadWorkerEnv().MASTER_ENCRYPTION_KEY;
+  if (!masterKey) {
+    throw new Error('MASTER_ENCRYPTION_KEY is not set — cannot decrypt HubSpot token');
+  }
+  const token = await decryptSecret(parsedConfig.data.token_encrypted, masterKey);
+  const baseUrl = process.env.HUBSPOT_API_BASE?.trim();
+  const hubspotConfig: HubSpotConfig = baseUrl ? { token, baseUrl } : { token };
+
+  // Contact: the conversation's contact is the live truth (Phase-4 correction),
+  // the ticket's snapshot the fallback.
+  const contactId = ticket.conversation.contact_id ?? ticket.contact_id;
+  const contact = contactId ? await loadContact(supabase, contactId, orgId) : null;
+  if (!contact || (!contact.email && !contact.phone)) {
+    logger.warn({ ticketId }, 'ticket has no contact channel — skipping hubspot sync');
+    await stampTicketSynced(supabase, ticketId, orgId, syncStartedAt);
+    return;
+  }
+  const contactRef = await upsertContact(hubspotConfig, {
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone,
+    company: contact.company,
+    callbackPhone: contact.callback_phone,
+  });
+
+  const existing = await findTicketByRef(hubspotConfig, ticket.id);
+  let hubspotTicketId: string;
+  let notedThrough: string | null = ticket.hubspot_noted_through;
+  let created = false;
+  if (!existing) {
+    const result = await createHubspotTicketForTicket(supabase, hubspotConfig, ticket, cfg, contactRef.id, syncStartedAt);
+    hubspotTicketId = result.id;
+    notedThrough = result.notedThrough;
+    created = true;
+    await persistTicketHubspot(supabase, ticket, {
+      hubspot_ticket_id: hubspotTicketId,
+      hubspot_noted_through: notedThrough,
+    });
+  } else {
+    hubspotTicketId = existing.id;
+    if (ticket.hubspot_ticket_id !== hubspotTicketId) {
+      await persistTicketHubspot(supabase, ticket, { hubspot_ticket_id: hubspotTicketId });
+    }
+    if (ticket.status === 'resolved' && cfg.resolved_stage_id) {
+      await updateTicketStage(hubspotConfig, hubspotTicketId, cfg.resolved_stage_id);
+    }
+  }
+
+  // Follow-ups: inbound messages after the ticket's watermark (never before its
+  // opened_at — those belong to earlier tickets of the same conversation).
+  const boundary = notedThrough ?? ticket.opened_at;
+  if (ticket.channel.type === 'voice') {
+    const turns = await loadTranscriptTurns(supabase, ticket.conversation_id, boundary);
+    let batch: TranscriptTurn[] = [];
+    let batchLength = 0;
+    const flush = async () => {
+      if (batch.length === 0) return;
+      await attachNote(hubspotConfig, hubspotTicketId, {
+        body: batch.map(formatVoiceTurn).join('\n'),
+        sourceChannel: ticket.channel.type,
+        occurredAt: batch[0]!.created_at,
+      });
+      await persistTicketHubspot(supabase, ticket, {
+        hubspot_noted_through: batch[batch.length - 1]!.created_at,
+      });
+      batch = [];
+      batchLength = 0;
+    };
+    for (const turn of turns) {
+      const lineLength = formatVoiceTurn(turn).length + 1;
+      if (batch.length > 0 && batchLength + lineLength > VOICE_TRANSCRIPT_MAX_CHARS) await flush();
+      batch.push(turn);
+      batchLength += lineLength;
+    }
+    await flush();
+  } else {
+    const messages = await loadInboundSince(supabase, ticket.conversation_id, boundary);
+    for (const message of messages) {
+      await attachNote(hubspotConfig, hubspotTicketId, {
+        body: cleanMessageBody(ticket.channel.type, message.content, message.metadata),
+        sourceChannel: ticket.channel.type,
+        occurredAt: message.created_at,
+      });
+      await persistTicketHubspot(supabase, ticket, { hubspot_noted_through: message.created_at });
+    }
+  }
+
+  await persistTicketHubspot(supabase, ticket, { hubspot_synced_at: syncStartedAt });
+  await touchIntegrationSync(supabase, integration.id);
+  if (created) {
+    // content-free timeline entry (best-effort)
+    await supabase.from('ticket_events').insert({
+      org_id: orgId,
+      ticket_id: ticket.id,
+      kind: 'hubspot_synced',
+      actor_id: null,
+      details: { hubspot_ticket_id: hubspotTicketId },
+    });
+  }
+}
+
+/** Terminal-failure stamp for the ticket stream (mirror of markHubspotSyncTerminal). */
+export async function markTicketHubspotSyncTerminal(ticketId: string): Promise<void> {
+  try {
+    const supabase = getServiceClient();
+    await supabase
+      .from('tickets')
+      .update({ hubspot_synced_at: new Date().toISOString() })
+      .eq('id', ticketId);
+  } catch {
+    // best-effort
+  }
+}
+
+async function createHubspotTicketForTicket(
+  supabase: SupabaseClient,
+  hubspotConfig: HubSpotConfig,
+  ticket: LoadedTicketRow,
+  cfg: { pipeline_id: string; default_stage_id: string; resolved_stage_id?: string; subject_prefix: boolean },
+  contactId: string,
+  syncStartedAt: string
+): Promise<{ id: string; notedThrough: string | null }> {
+  const description = ticket.description?.trim() || null;
+  let content: string;
+  let notedThrough: string | null;
+  if (ticket.channel.type === 'voice') {
+    // the whole call is the context (owner 2026-07-28)
+    const turns = await loadTranscriptTurns(supabase, ticket.conversation_id);
+    const transcript = buildVoiceTranscriptBody(turns);
+    content = buildTicketContent({
+      body: [description, transcript.body].filter((p): p is string => Boolean(p)).join('\n\n'),
+      attachments: [],
+      channelName: ticket.channel.name,
+      receivedAt: turns[0]?.created_at ?? ticket.opened_at,
+    });
+    notedThrough = transcript.notedThrough;
+  } else {
+    const opening = await loadOpeningMessage(supabase, ticket);
+    const attachments = opening ? await loadAttachments(supabase, opening.id) : [];
+    const body = opening
+      ? cleanMessageBody(ticket.channel.type, opening.content, opening.metadata)
+      : '(kein Text)';
+    content = buildTicketContent({
+      body: [description, body].filter((p): p is string => Boolean(p)).join('\n\n'),
+      attachments,
+      channelName: ticket.channel.name,
+      receivedAt: opening?.created_at ?? ticket.opened_at,
+    });
+    notedThrough = opening?.created_at ?? null;
+  }
+  content += `\n— Zendori-Ticket ${ticket.display_id}`;
+  const stageId =
+    ticket.status === 'resolved' && cfg.resolved_stage_id ? cfg.resolved_stage_id : cfg.default_stage_id;
+  const draft: TicketDraft = {
+    subject: buildTicketSubject(ticket, ticket.conversation.subject, cfg.subject_prefix),
+    content,
+    priority: ticket.priority,
+    pipelineId: cfg.pipeline_id,
+    stageId,
+    sourceChannel: ticket.channel.type,
+    ref: ticket.id,
+  };
+  const created = await createTicket(hubspotConfig, draft, contactId);
+  return { id: created.id, notedThrough: notedThrough ?? syncStartedAt };
+}
+
+/** The message the ticket opened with (opened_message_id), else the first inbound at/after opened_at. */
+async function loadOpeningMessage(
+  supabase: SupabaseClient,
+  ticket: LoadedTicketRow
+): Promise<LoadedInboundMessage | null> {
+  if (ticket.opened_message_id) {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id, content, content_type, created_at, metadata')
+      .eq('id', ticket.opened_message_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data as unknown as LoadedInboundMessage;
+  }
+  const { data, error } = await supabase
+    .from('messages')
+    .select('id, content, content_type, created_at, metadata')
+    .eq('conversation_id', ticket.conversation_id)
+    .eq('direction', 'in')
+    .eq('sender_type', 'contact')
+    .gte('created_at', ticket.opened_at)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? (data as unknown as LoadedInboundMessage) : null;
+}
+
+async function persistTicketHubspot(
+  supabase: SupabaseClient,
+  ticket: LoadedTicketRow,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const { error } = await supabase
+    .from('tickets')
+    .update(patch)
+    .eq('id', ticket.id)
+    .eq('org_id', ticket.org_id);
+  if (error) throw error;
+}
+
+async function stampTicketSynced(
+  supabase: SupabaseClient,
+  ticketId: string,
+  orgId: string,
+  syncedAt: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('tickets')
+    .update({ hubspot_synced_at: syncedAt })
+    .eq('id', ticketId)
+    .eq('org_id', orgId);
   if (error) throw error;
 }

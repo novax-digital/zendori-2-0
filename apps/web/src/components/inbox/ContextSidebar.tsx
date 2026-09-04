@@ -7,6 +7,7 @@ import type { TicketSummary } from '@/lib/tickets/types';
 import {
   addNote,
   createTicketFromConversation,
+  syncConversationTicketToHubspot,
   requestDraft,
   returnToBot,
   setConversationAssignee,
@@ -228,14 +229,24 @@ export default function ContextSidebar({
             })}
           </div>
         )}
-        {!tickets.some((ticket) => ticket.status !== 'resolved') ? (
-          <form action={createTicketFromConversation} style={{ marginTop: '0.5rem' }}>
-            {hiddenFields}
-            <button className="ghost" type="submit">
-              Ticket anlegen
-            </button>
-          </form>
-        ) : null}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          {!tickets.some((ticket) => ticket.status !== 'resolved') ? (
+            <form action={createTicketFromConversation}>
+              {hiddenFields}
+              <button className="ghost" type="submit">
+                Ticket anlegen
+              </button>
+            </form>
+          ) : null}
+          {hubspot.connected ? (
+            <form action={syncConversationTicketToHubspot}>
+              {hiddenFields}
+              <button className="ghost" type="submit" title="Legt bei Bedarf ein Ticket an und schickt es an HubSpot (Ticket-Strom)">
+                Ticket an HubSpot senden
+              </button>
+            </form>
+          ) : null}
+        </div>
       </section>
 
       <section>

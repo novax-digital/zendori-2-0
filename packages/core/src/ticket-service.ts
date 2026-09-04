@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isMissingColumnError, isMissingRelationError } from './db.js';
+import { requestTicketHubspotSync } from './hubspot-rules.js';
 import type { ConversationPriority } from './schemas.js';
 import { PRIORITY_RANK, isPlaceholderSubject, type TicketOrigin, type TicketStatus } from './tickets.js';
 
@@ -58,10 +59,12 @@ interface OpenTicketRow {
   priority: ConversationPriority;
   assignee_id: string | null;
   contact_id: string | null;
+  channel_id: string;
+  hubspot_ticket_id: string | null;
 }
 
 const OPEN_TICKET_SELECT =
-  'id, number, display_id, status, subject, description, category, priority, assignee_id, contact_id';
+  'id, number, display_id, status, subject, description, category, priority, assignee_id, contact_id, channel_id, hubspot_ticket_id';
 
 function toRef(row: {
   id: string;
@@ -161,6 +164,14 @@ async function attachToTicket(
   });
   if (eventError && !isMissingRelationError(eventError)) throw eventError;
 
+  // Phase 11b: a new event on the ticket → HubSpot follow-up (rules of the ticket stream)
+  await requestTicketHubspotSync(supabase, {
+    orgId: input.orgId,
+    channelId: open.channel_id,
+    ticketId: open.id,
+    alreadySynced: open.hubspot_ticket_id !== null,
+  });
+
   const status = (patch.status as TicketStatus | undefined) ?? open.status;
   const subjectNow = (patch.subject as string | undefined) ?? open.subject;
   return { outcome: 'attached', ticket: toRef({ ...open, status, subject: subjectNow }) };
@@ -190,7 +201,7 @@ export async function ensureTicket(
       opened_message_id: input.openedMessageId ?? null,
       created_by: input.createdBy ?? null,
     })
-    .select('id, number, display_id, status, subject')
+    .select('id, number, display_id, status, subject, channel_id')
     .single();
   if (error) {
     if ((error as { code?: string }).code === '23505') {
@@ -204,18 +215,21 @@ export async function ensureTicket(
     }
     throw error;
   }
-  return {
-    outcome: 'created',
-    ticket: toRef(
-      data as {
-        id: string;
-        number: number | string;
-        display_id: string;
-        status: TicketStatus;
-        subject: string | null;
-      }
-    ),
+  const created = data as {
+    id: string;
+    number: number | string;
+    display_id: string;
+    status: TicketStatus;
+    subject: string | null;
+    channel_id: string;
   };
+  // Phase 11b: arm the ticket-stream HubSpot sync (rules all | channels)
+  await requestTicketHubspotSync(supabase, {
+    orgId: input.orgId,
+    channelId: created.channel_id,
+    ticketId: created.id,
+  });
+  return { outcome: 'created', ticket: toRef(created) };
 }
 
 export interface RefineOpenTicketInput {

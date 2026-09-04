@@ -10,6 +10,14 @@ Stand: 2026-07-13. Einseitiger Sync Konversation → HubSpot-Ticket, pro Org akt
 
 Der Token wird **verschlüsselt** in `integrations.config` gespeichert (libsodium secretbox, `MASTER_ENCRYPTION_KEY`), nie im Klartext an den Client oder in Logs.
 
+## Zwei Ströme seit Phase 11b
+
+Seit Phase 11 gibt es neben dem hier beschriebenen **Konversations-Strom** einen **Ticket-Strom**
+(eigene Pipeline/Stages/Regel in `integrations.config.tickets` + `rules.tickets`, Worker-Sync
+`syncTicket`, Anker `zendori_ref = tickets.id`). Beide sind unabhängig konfigurierbar und können
+parallel laufen — Details in docs/phase-11-tickets.md. Der Rest dieses Dokuments beschreibt den
+Konversations-Strom.
+
 ## Sync-Ablauf (Worker)
 
 ```

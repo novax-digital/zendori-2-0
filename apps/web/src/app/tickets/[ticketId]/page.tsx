@@ -8,7 +8,7 @@ import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
 import TicketActionsPanel from '@/components/tickets/TicketActionsPanel';
 import { channelBadgeClass } from '@/lib/inbox/channel-badge';
 import { formatDateTime } from '@/lib/inbox/format';
-import { listMembers } from '@/lib/inbox/queries';
+import { getHubspotSidebarInfo, listMembers } from '@/lib/inbox/queries';
 import { requireActiveOrg } from '@/lib/org';
 import {
   PRIORITY_BADGE,
@@ -18,7 +18,7 @@ import {
   TICKET_STATUS_LABELS,
 } from '@/lib/tickets/labels';
 import { getTicketDetail } from '@/lib/tickets/queries';
-import { addTicketNote, updateTicketFields } from '../actions';
+import { addTicketNote, syncTicketToHubspot, updateTicketFields } from '../actions';
 
 // Ticket detail (Phase 11): the work item plus its transcript slice.
 
@@ -60,7 +60,11 @@ export default async function TicketDetailPage({
   if (!detail) notFound();
   const { ticket, channel, contact, conversation, messages, earlierMessageCount, notes, events } = detail;
   const canEdit = canEditArea(access, 'tickets');
-  const members = await listMembers(orgId);
+  const [members, hubspot] = await Promise.all([listMembers(orgId), getHubspotSidebarInfo(orgId)]);
+  const hubspotTicketUrl =
+    ticket.hubspot_ticket_id && hubspot.ui_domain && hubspot.portal_id
+      ? `https://${hubspot.ui_domain}/contacts/${hubspot.portal_id}/ticket/${encodeURIComponent(ticket.hubspot_ticket_id)}`
+      : null;
   const hidden = (
     <>
       <input type="hidden" name="org" value={orgId} />
@@ -162,6 +166,50 @@ export default async function TicketDetailPage({
             'Die Konversation existiert nicht mehr.'
           )}
         </p>
+      </div>
+
+      <div className="panel">
+        <h2>HubSpot</h2>
+        {!hubspot.connected ? (
+          <p className="hint">Nicht verbunden — unter Einstellungen → Integrationen einrichten.</p>
+        ) : (
+          <div className="stack" style={{ gap: '0.5rem' }}>
+            {!hubspot.active ? (
+              <p className="hint">Verbunden, aber deaktiviert — der Sync ist pausiert.</p>
+            ) : null}
+            <div className="inbox-badges-row" style={{ flexWrap: 'wrap' }}>
+              {ticket.hubspot_ticket_id ? (
+                <span className="badge badge--hubspot">In HubSpot</span>
+              ) : (
+                <span className="badge badge--muted">Noch nicht übertragen</span>
+              )}
+              {ticket.hubspot_synced_at ? (
+                <span className="hint" style={{ margin: 0 }}>
+                  zuletzt synchronisiert {formatDateTime(ticket.hubspot_synced_at)}
+                </span>
+              ) : null}
+              {ticket.hubspot_sync_requested_at &&
+              (!ticket.hubspot_synced_at || ticket.hubspot_sync_requested_at > ticket.hubspot_synced_at) ? (
+                <span className="hint" style={{ margin: 0 }}>· Sync ausstehend</span>
+              ) : null}
+            </div>
+            <div className="inbox-badges-row" style={{ flexWrap: 'wrap' }}>
+              {canEdit ? (
+                <form action={syncTicketToHubspot}>
+                  {hidden}
+                  <button className="ghost" type="submit">
+                    {ticket.hubspot_ticket_id ? 'Erneut an HubSpot senden' : 'An HubSpot senden'}
+                  </button>
+                </form>
+              ) : null}
+              {hubspotTicketUrl ? (
+                <a href={hubspotTicketUrl} target="_blank" rel="noopener noreferrer">
+                  In HubSpot öffnen
+                </a>
+              ) : null}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="panel">

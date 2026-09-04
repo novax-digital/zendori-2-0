@@ -6,9 +6,15 @@ import { writeHeartbeat } from './heartbeat.js';
 import { getServiceClient, toErrorInfo } from './db.js';
 import { handlePipelineFailure, processMessage } from './pipeline/process-message.js';
 import { indexSource, markIndexSourceFailed } from './pipeline/index-source.js';
-import { markHubspotSyncTerminal, syncConversation } from './pipeline/hubspot-sync.js';
+import {
+  markHubspotSyncTerminal,
+  markTicketHubspotSyncTerminal,
+  syncConversation,
+  syncTicket,
+} from './pipeline/hubspot-sync.js';
 import {
   HUBSPOT_SYNC_QUEUE,
+  HUBSPOT_TICKET_SYNC_QUEUE,
   HUBSPOT_SYNC_RETRY_LIMIT,
   INDEX_SOURCE_QUEUE,
   INDEX_SOURCE_RETRY_LIMIT,
@@ -38,6 +44,7 @@ const HEARTBEAT_QUEUE = 'worker.heartbeat';
 const processMessageJobSchema = z.object({ messageId: z.uuid() });
 const indexSourceJobSchema = z.object({ sourceId: z.uuid() });
 const hubspotSyncJobSchema = z.object({ conversationId: z.uuid() });
+const hubspotTicketSyncJobSchema = z.object({ ticketId: z.uuid() });
 const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
 const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
@@ -88,6 +95,7 @@ async function main(): Promise<void> {
   await ensureQueuePolicy(boss, PROCESS_MESSAGE_QUEUE);
   await ensureQueuePolicy(boss, INDEX_SOURCE_QUEUE);
   await ensureQueuePolicy(boss, HUBSPOT_SYNC_QUEUE);
+  await ensureQueuePolicy(boss, HUBSPOT_TICKET_SYNC_QUEUE);
 
   await boss.work(
     PROCESS_MESSAGE_QUEUE,
@@ -160,6 +168,31 @@ async function main(): Promise<void> {
             return; // recorded terminally; do not rethrow
           }
           throw err; // let pg-boss retry
+        }
+      }
+    }
+  );
+
+  // --- Phase-11b ticket stream → HubSpot ------------------------------------------
+  await boss.work(
+    HUBSPOT_TICKET_SYNC_QUEUE,
+    { includeMetadata: true },
+    async (jobs: JobWithMetadata<{ ticketId: string }>[]) => {
+      for (const job of jobs) {
+        const { ticketId } = hubspotTicketSyncJobSchema.parse(job.data);
+        try {
+          await syncTicket(ticketId);
+        } catch (err) {
+          const isFinal = job.retryCount >= HUBSPOT_SYNC_RETRY_LIMIT;
+          logger.error(
+            { err: toErrorInfo(err), ticketId, retryCount: job.retryCount, final: isFinal },
+            'hubspot-ticket-sync failed'
+          );
+          if (isFinal) {
+            await markTicketHubspotSyncTerminal(ticketId);
+            return;
+          }
+          throw err;
         }
       }
     }

@@ -1,6 +1,12 @@
 import { AI_MODELS, classify, extract } from '@zendori/ai';
 import type { ConversationPriority, SupabaseClient } from '@zendori/core';
-import { createLogger, loadWorkerEnv, refineOpenTicket, voiceMinutesCostUsd } from '@zendori/core';
+import {
+  createLogger,
+  loadWorkerEnv,
+  refineOpenTicket,
+  requestConversationTicketsResync,
+  voiceMinutesCostUsd,
+} from '@zendori/core';
 import { getServiceClient, isMissingColumnError, toErrorInfo } from '../db.js';
 import { maybeRequestHubspotSync } from './process-message.js';
 import { recordUsage } from './usage.js';
@@ -40,6 +46,11 @@ export async function markPostCallTerminal(voiceCallId: string): Promise<void> {
   const row = ((data ?? []) as { org_id: string; channel_id: string; conversation_id: string }[])[0];
   if (row) {
     await maybeRequestHubspotSync(supabase, row.org_id, row.channel_id, row.conversation_id);
+    await requestConversationTicketsResync(supabase, {
+      orgId: row.org_id,
+      channelId: row.channel_id,
+      conversationId: row.conversation_id,
+    });
   }
 }
 
@@ -411,6 +422,13 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
   // is created from the enriched conversation. Best-effort inside the helper;
   // rules (all | channels | manual) are evaluated there.
   await maybeRequestHubspotSync(supabase, call.org_id, call.channel_id, call.conversation_id);
+  // Phase 11b: the call's ticket (callback promise / create_ticket) gets the
+  // rest of the transcript as HubSpot notes once the call is over.
+  await requestConversationTicketsResync(supabase, {
+    orgId: call.org_id,
+    channelId: call.channel_id,
+    conversationId: call.conversation_id,
+  });
 }
 
 async function logRun(

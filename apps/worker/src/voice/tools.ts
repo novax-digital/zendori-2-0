@@ -406,12 +406,12 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     else callbackNumber = toE164(normalizedCallback!, channelNumber);
   }
 
-  // status='pending' (one-queue principle, 0018): every promised callback —
-  // also from the intake/suppressed flows that never flip mode — is visible in
-  // the inbox pending queue and covered by the SLA reminder.
+  // Phase 11b: the TICKET is the queue entry now (no status='pending' flip —
+  // that stays the handoff's job); the subject still lands on the conversation
+  // so the inbox list shows what the call was about.
   const { error: convError } = await ctx.supabase
     .from('conversations')
-    .update({ subject: args.subject, status: 'pending' })
+    .update({ subject: args.subject })
     .eq('org_id', ctx.orgId)
     .eq('id', ctx.conversationId);
   if (convError) return { ok: false, error: 'Ticket konnte nicht gespeichert werden' };

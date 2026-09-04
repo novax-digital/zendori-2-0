@@ -198,7 +198,25 @@ const saveConfigSchema = z.object({
   default_stage_id: z.string(),
   resolved_stage_id: z.string(),
   rules_mode: z.enum(['all', 'channels', 'manual']),
+  // ticket stream (Phase 11b)
+  ticket_pipeline_id: z.string(),
+  ticket_default_stage_id: z.string(),
+  ticket_resolved_stage_id: z.string(),
+  ticket_rules_mode: z.enum(['all', 'channels', 'manual']),
 });
+
+/** Builds one stream's rules from its select + checkbox list; null = invalid channel ids. */
+function rulesFrom(
+  mode: 'all' | 'channels' | 'manual',
+  channelIds: FormDataEntryValue[]
+): SyncRules | null {
+  if (mode === 'channels') {
+    const ids = channelIds.filter((value): value is string => typeof value === 'string');
+    const parsed = syncRulesSchema.safeParse({ mode: 'channels', channel_ids: ids });
+    return parsed.success ? parsed.data : null;
+  }
+  return mode === 'all' ? { mode: 'all' } : { mode: 'manual' };
+}
 
 /**
  * Updates pipeline/stage + sync rules + active flag via config read-modify-write
@@ -213,32 +231,40 @@ export async function saveHubspotConfig(formData: FormData): Promise<void> {
     default_stage_id: textField(formData.get('default_stage_id')),
     resolved_stage_id: textField(formData.get('resolved_stage_id')),
     rules_mode: textField(formData.get('rules_mode')),
+    ticket_pipeline_id: textField(formData.get('ticket_pipeline_id')),
+    ticket_default_stage_id: textField(formData.get('ticket_default_stage_id')),
+    ticket_resolved_stage_id: textField(formData.get('ticket_resolved_stage_id')),
+    ticket_rules_mode: textField(formData.get('ticket_rules_mode')) || 'manual',
   });
   if (!parsed.success) {
     redirect(
       integrationsUrl(org, { error: 'Die Einstellungen konnten nicht gespeichert werden.' })
     );
   }
-  const { org: orgId, pipeline_id, default_stage_id, resolved_stage_id, rules_mode } = parsed.data;
+  const {
+    org: orgId,
+    pipeline_id,
+    default_stage_id,
+    resolved_stage_id,
+    rules_mode,
+    ticket_pipeline_id,
+    ticket_default_stage_id,
+    ticket_resolved_stage_id,
+    ticket_rules_mode,
+  } = parsed.data;
   const isActive = formData.get('is_active') != null;
 
-  let rules: SyncRules;
-  if (rules_mode === 'channels') {
-    const channelIds = formData
-      .getAll('channel_ids')
-      .filter((value): value is string => typeof value === 'string');
-    const rulesParsed = syncRulesSchema.safeParse({ mode: 'channels', channel_ids: channelIds });
-    if (!rulesParsed.success) {
-      redirect(
-        integrationsUrl(orgId, { error: 'Bitte gültige Kanäle für die Sync-Regel auswählen.' })
-      );
-    }
-    rules = rulesParsed.data;
-  } else if (rules_mode === 'all') {
-    rules = { mode: 'all' };
-  } else {
-    rules = { mode: 'manual' };
+  const conversationRules = rulesFrom(rules_mode, formData.getAll('channel_ids'));
+  const ticketRules = rulesFrom(ticket_rules_mode, formData.getAll('ticket_channel_ids'));
+  if (!conversationRules || !ticketRules) {
+    redirect(integrationsUrl(orgId, { error: 'Bitte gültige Kanäle für die Sync-Regel auswählen.' }));
   }
+  if (ticket_pipeline_id !== '' && ticket_default_stage_id === '') {
+    redirect(
+      integrationsUrl(orgId, { error: 'Bitte eine Standard-Stage für die Ticket-Pipeline wählen.' })
+    );
+  }
+  const rules = { conversations: conversationRules, tickets: ticketRules };
 
   const supabase = await createSupabaseServerClient();
   const { data: existing } = await supabase
@@ -272,6 +298,17 @@ export async function saveHubspotConfig(formData: FormData): Promise<void> {
     newConfig.resolved_stage_id = resolved_stage_id;
   } else {
     delete newConfig.resolved_stage_id;
+  }
+  // ticket stream (Phase 11b): absent = not configured → ticket syncs are skipped
+  if (ticket_pipeline_id !== '') {
+    newConfig.tickets = {
+      pipeline_id: ticket_pipeline_id,
+      default_stage_id: ticket_default_stage_id,
+      ...(ticket_resolved_stage_id !== '' ? { resolved_stage_id: ticket_resolved_stage_id } : {}),
+      subject_prefix: formData.get('ticket_subject_prefix') != null,
+    };
+  } else {
+    delete newConfig.tickets;
   }
 
   const { data, error } = await supabase
