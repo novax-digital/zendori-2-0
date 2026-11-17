@@ -3,20 +3,24 @@ import { allowedChannelIds, canViewArea, conversationPrioritySchema } from '@zen
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
-import TicketFilterBar from '@/components/tickets/TicketFilterBar';
-import { channelBadgeClass } from '@/lib/inbox/channel-badge';
+import TicketFilterBar, { ticketStatusTabs } from '@/components/tickets/TicketFilterBar';
+import Badge from '@/components/ui/Badge';
+import ChannelIcon from '@/components/ui/ChannelIcon';
+import { Avatar, EmptyState, Tabs } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
+import { href } from '@/lib/href';
 import { formatRelativeTime } from '@/lib/inbox/format';
 import { listChannels, listMembers } from '@/lib/inbox/queries';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
-  PRIORITY_BADGE,
   PRIORITY_LABELS,
+  PRIORITY_TONE,
   TICKET_ORIGIN_LABELS,
-  TICKET_STATUS_BADGE,
   TICKET_STATUS_LABELS,
+  TICKET_STATUS_TONE,
 } from '@/lib/tickets/labels';
-import { listTickets } from '@/lib/tickets/queries';
+import { countTicketsByStatus, listTickets } from '@/lib/tickets/queries';
 import type { TicketAssigneeFilter, TicketFilters, TicketStatusFilter } from '@/lib/tickets/types';
 
 // Tickets area (Phase 11): the work queue. List → detail like agents/channels.
@@ -24,6 +28,8 @@ import type { TicketAssigneeFilter, TicketFilters, TicketStatusFilter } from '@/
 const STATUS_VALUES: TicketStatusFilter[] = ['active', 'open', 'in_progress', 'waiting', 'resolved', 'all'];
 const ASSIGNEE_VALUES: TicketAssigneeFilter[] = ['all', 'me', 'none'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** listTickets returns at most this many rows (newest first). */
+const LIST_LIMIT = 100;
 
 function parseFilters(params: {
   status?: string;
@@ -71,88 +77,115 @@ export default async function TicketsPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [tickets, channels, members] = await Promise.all([
+  const [tickets, counts, channels, members] = await Promise.all([
     listTickets(orgId, filters, user?.id ?? null, scope),
+    countTicketsByStatus(orgId, filters, user?.id ?? null, scope),
     listChannels(orgId, scope),
     listMembers(orgId),
   ]);
   const memberEmail = new Map(members.map((m) => [m.user_id, m.email]));
 
   return (
-    <div className="shell">
+    <div className="page">
       <RealtimeRefresher orgId={orgId} tables={['tickets']} channelKey="tickets" />
-      <div className="page-head">
-        <h1>Tickets</h1>
-        <p>
-          Alle Anliegen, die ein Mensch bearbeitet — aus Übergaben, Telefonaten, Formularen oder
-          manuell angelegt. Die Konversation dazu läuft in der Inbox weiter.
-        </p>
-      </div>
-      <DismissibleBanners error={params.error} notice={params.notice} />
-      <TicketFilterBar orgId={orgId} filters={filters} channels={channels} />
-      <div className="panel" style={{ overflowX: 'auto' }}>
+      <PageHeader
+        title="Tickets"
+        subtitle="Anliegen, die ein Mensch bearbeitet. Die Konversation dazu läuft in der Inbox weiter."
+        tabs={<Tabs label="Status" items={ticketStatusTabs(orgId, filters, counts)} />}
+      />
+      <div className="page-body">
+        <DismissibleBanners error={params.error} notice={params.notice} />
+        <TicketFilterBar orgId={orgId} filters={filters} channels={channels} />
         {tickets.length === 0 ? (
-          <p className="hint">Keine Tickets für diese Auswahl.</p>
+          <EmptyState title="Keine Tickets" text="Für diese Auswahl gibt es keine Tickets." />
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Nr.</th>
-                <th>Betreff</th>
-                <th>Kontakt</th>
-                <th>Kanal</th>
-                <th>Status</th>
-                <th>Priorität</th>
-                <th>Zuständig</th>
-                <th>Aktualisiert</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tickets.map((ticket) => (
-                <tr key={ticket.id}>
-                  <td className="mono">
-                    <Link href={`/tickets/${ticket.id}?org=${orgId}`}>{ticket.display_id}</Link>
-                  </td>
-                  <td>
-                    <Link href={`/tickets/${ticket.id}?org=${orgId}`}>
-                      {ticket.subject ?? 'Ohne Betreff'}
-                    </Link>
-                    <div className="hint" style={{ margin: 0 }}>
-                      {TICKET_ORIGIN_LABELS[ticket.origin]}
-                      {ticket.hubspot_ticket_id ? (
-                        <span className="badge badge--hubspot" style={{ marginLeft: '0.4rem' }}>
-                          HubSpot
-                        </span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    {ticket.contact?.name ?? ticket.contact?.email ?? '—'}
-                    {ticket.contact?.company ? (
-                      <div className="hint" style={{ margin: 0 }}>{ticket.contact.company}</div>
-                    ) : null}
-                  </td>
-                  <td>
-                    {ticket.channel ? (
-                      <span className={channelBadgeClass(ticket.channel.type)}>{ticket.channel.name}</span>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td>
-                    <span className={TICKET_STATUS_BADGE[ticket.status]}>
-                      {TICKET_STATUS_LABELS[ticket.status]}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={PRIORITY_BADGE[ticket.priority]}>{PRIORITY_LABELS[ticket.priority]}</span>
-                  </td>
-                  <td>{ticket.assignee_id ? (memberEmail.get(ticket.assignee_id) ?? '…') : '—'}</td>
-                  <td title={ticket.updated_at}>{formatRelativeTime(ticket.updated_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div className="table-wrap">
+              <table className="ticket-table">
+                <thead>
+                  <tr>
+                    <th>Nr.</th>
+                    <th className="ticket-col-subject">Betreff</th>
+                    <th>Kontakt</th>
+                    <th>Kanal</th>
+                    <th>Status</th>
+                    <th>Priorität</th>
+                    <th>Zuständig</th>
+                    <th className="right">Aktualisiert</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tickets.map((ticket) => {
+                    const detailHref = href(`/tickets/${ticket.id}`, { org: orgId });
+                    const assignee = ticket.assignee_id
+                      ? (memberEmail.get(ticket.assignee_id) ?? null)
+                      : null;
+                    return (
+                      <tr key={ticket.id}>
+                        <td className="mono muted nowrap">{ticket.display_id}</td>
+                        <td>
+                          <Link href={detailHref} className="cell-title">
+                            {ticket.subject ?? 'Ohne Betreff'}
+                          </Link>
+                          <div className="row">
+                            <span className="cell-sub">{TICKET_ORIGIN_LABELS[ticket.origin]}</span>
+                            {ticket.hubspot_ticket_id ? <Badge tone="hubspot">HubSpot</Badge> : null}
+                          </div>
+                        </td>
+                        <td>
+                          {ticket.contact?.name ?? ticket.contact?.email ?? (
+                            <span className="muted">Kein Kontakt</span>
+                          )}
+                          {ticket.contact?.company ? (
+                            <div className="cell-sub">{ticket.contact.company}</div>
+                          ) : null}
+                        </td>
+                        <td>
+                          {ticket.channel ? (
+                            <div className="cell-main">
+                              <ChannelIcon kind={ticket.channel.type} />
+                              <span className="truncate">{ticket.channel.name}</span>
+                            </div>
+                          ) : (
+                            <span className="muted">Kein Kanal</span>
+                          )}
+                        </td>
+                        <td>
+                          <Badge tone={TICKET_STATUS_TONE[ticket.status]} dot>
+                            {TICKET_STATUS_LABELS[ticket.status]}
+                          </Badge>
+                        </td>
+                        <td>
+                          <Badge tone={PRIORITY_TONE[ticket.priority]}>
+                            {PRIORITY_LABELS[ticket.priority]}
+                          </Badge>
+                        </td>
+                        <td>
+                          {ticket.assignee_id ? (
+                            <div className="cell-main">
+                              <Avatar name={assignee ?? '?'} />
+                              <span className="truncate">{assignee ?? 'Unbekannt'}</span>
+                            </div>
+                          ) : (
+                            <span className="muted">Nicht zugewiesen</span>
+                          )}
+                        </td>
+                        <td className="right muted nowrap" title={ticket.updated_at}>
+                          {formatRelativeTime(ticket.updated_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {tickets.length >= LIST_LIMIT ? (
+              <p className="muted small ticket-list-note">
+                Angezeigt werden die {LIST_LIMIT} zuletzt aktualisierten Tickets. Mit Suche und
+                Filtern grenzt du die Liste ein.
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </div>

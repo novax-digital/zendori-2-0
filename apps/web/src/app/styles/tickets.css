@@ -1,3 +1,103 @@
-/* Tickets — page-specific styles (redesign stages 4-7).
+/* Tickets — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx). */
+
+/* --- list --- */
+/* eight columns: the subject gets the room, the table scrolls sideways before
+   cells start to wrap word by word */
+.ticket-table {
+  min-width: 1000px;
+}
+.ticket-col-subject {
+  width: 30%;
+}
+.ticket-table .cell-main {
+  max-width: 220px;
+}
+.ticket-list-note {
+  margin-top: var(--space-4);
+}
+
+/* --- detail: main column --- */
+/* everything in the main column keeps reading width, so section heads and
+   their actions line up with the content below them */
+.ticket-main > * {
+  max-width: 720px;
+}
+/* description exactly as typed */
+.ticket-description {
+  color: var(--ink);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Transcript in the page flow: MessageThread (components/inbox) brings its own
+   scroll box and padding for the inbox pane — here it simply flows. The child
+   selector does not depend on the class names inside MessageThread. */
+.page-body .ticket-thread > * {
+  flex: none;
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+}
+/* run-up before the ticket opened: set back on a sunken ground (not faded) */
+.ticket-history > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.ticket-history[open] > summary {
+  margin-bottom: 8px;
+}
+.ticket-thread--context {
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+
+/* internal notes: tinted so they are never mistaken for customer messages */
+.ticket-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ticket-note {
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--warn-tint);
+  font-size: var(--fs-small);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ticket-note-meta {
+  margin-top: 4px;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+/* content-free timeline: time column + what happened */
+.ticket-timeline {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-small);
+}
+.ticket-timeline li {
+  display: flex;
+  gap: 12px;
+}
+.ticket-timeline-time {
+  flex: 0 0 128px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- detail: rail + menu --- */
+/* long member e-mails must not push the selects out of the rail */
+.ticket-actions select {
+  max-width: 176px;
+}

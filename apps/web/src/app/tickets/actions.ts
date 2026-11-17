@@ -21,8 +21,15 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function ticketUrl(org: string, ticketId: string, message?: { error?: string; notice?: string }): string {
+function ticketUrl(
+  org: string,
+  ticketId: string,
+  message?: { error?: string; notice?: string },
+  /** Drawer to (re)open on the detail page — set on errors of a drawer form so it stays open. */
+  panel?: string
+): string {
   const params = new URLSearchParams({ org });
+  if (panel) params.set('panel', panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/tickets/${ticketId}?${params.toString()}`;
@@ -52,7 +59,9 @@ async function patchTicket(
   ticketId: string,
   patch: Record<string, unknown>,
   notice: string,
-  errorText: string
+  errorText: string,
+  /** Drawer the form was submitted from: an error redirects back into it. */
+  errorPanel?: string
 ): Promise<never> {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
@@ -62,7 +71,7 @@ async function patchTicket(
     .eq('id', ticketId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(ticketUrl(org, ticketId, { error: errorText }));
+    redirect(ticketUrl(org, ticketId, { error: errorText }, errorPanel));
   }
   revalidatePath('/tickets');
   revalidatePath(`/tickets/${ticketId}`);
@@ -167,19 +176,30 @@ const fieldsSchema = z.object({
 
 export async function updateTicketFields(formData: FormData): Promise<void> {
   const { org, ticketId } = await guard(formData);
+  // The form lives in the "Anliegen bearbeiten" drawer (?panel=edit): on an
+  // error the redirect keeps the drawer open, on success it closes.
+  const panel = textField(formData.get('panel')) === 'edit' ? 'edit' : undefined;
   const parsed = fieldsSchema.safeParse({
     subject: textField(formData.get('subject')),
     description: textField(formData.get('description')),
   });
   if (!parsed.success) {
-    redirect(ticketUrl(org, ticketId, { error: 'Bitte Betreff (1–200 Zeichen) und Beschreibung (max. 4000 Zeichen) prüfen.' }));
+    redirect(
+      ticketUrl(
+        org,
+        ticketId,
+        { error: 'Bitte Betreff (1–200 Zeichen) und Beschreibung (max. 4000 Zeichen) prüfen.' },
+        panel
+      )
+    );
   }
   await patchTicket(
     org,
     ticketId,
     { subject: parsed.data.subject, description: parsed.data.description === '' ? null : parsed.data.description },
     'Anliegen gespeichert.',
-    'Anliegen konnte nicht gespeichert werden.'
+    'Anliegen konnte nicht gespeichert werden.',
+    panel
   );
 }
 

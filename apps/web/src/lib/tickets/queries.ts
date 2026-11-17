@@ -15,6 +15,7 @@ import type {
   TicketFilters,
   TicketListItem,
   TicketSettings,
+  TicketStatusCounts,
   TicketStatusFilter,
   TicketSummary,
 } from './types';
@@ -99,6 +100,50 @@ export async function listTickets(
     throw error;
   }
   return (data ?? []) as TicketListItem[];
+}
+
+const COUNTED_STATUSES = ['open', 'in_progress', 'waiting', 'resolved'] as const;
+
+/**
+ * Tickets per status for the status tabs of the list — same channel scope and
+ * column filters as listTickets, the status filter itself excluded. Returns
+ * null while a search term is active (the search runs through an RPC, the
+ * numbers would not match the list) and while 0030 is pending.
+ */
+export async function countTicketsByStatus(
+  orgId: string,
+  filters: TicketFilters,
+  userId: string | null,
+  allowedChannelIds: string[] | null = null
+): Promise<TicketStatusCounts | null> {
+  if (filters.q.trim().length > 0) return null;
+  if (allowedChannelIds && allowedChannelIds.length === 0) {
+    return { open: 0, in_progress: 0, waiting: 0, resolved: 0 };
+  }
+  const supabase = await createSupabaseServerClient();
+  const results = await Promise.all(
+    COUNTED_STATUSES.map((status) => {
+      let query = supabase
+        .from('tickets')
+        .select('id', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('status', status);
+      if (allowedChannelIds) query = query.in('channel_id', allowedChannelIds);
+      if (filters.channelId !== 'all') query = query.eq('channel_id', filters.channelId);
+      if (filters.priority !== 'all') query = query.eq('priority', filters.priority);
+      if (filters.assignee === 'me' && userId) query = query.eq('assignee_id', userId);
+      if (filters.assignee === 'none') query = query.is('assignee_id', null);
+      return query;
+    })
+  );
+  if (results.some((result) => result.error)) return null;
+  const [open, inProgress, waiting, resolved] = results;
+  return {
+    open: open?.count ?? 0,
+    in_progress: inProgress?.count ?? 0,
+    waiting: waiting?.count ?? 0,
+    resolved: resolved?.count ?? 0,
+  };
 }
 
 export async function getTicketDetail(

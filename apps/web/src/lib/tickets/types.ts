@@ -52,3 +52,6 @@ export type TicketSettings = {
   counterStarted: boolean;
   nextNumber: number;
 };
+
+/** Tickets per status — the numbers on the status tabs of the list. */
+export type TicketStatusCounts = Record<TicketStatus, number>;

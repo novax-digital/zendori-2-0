@@ -7,6 +7,7 @@ import {
   type TicketStatus,
 } from '@zendori/core/tickets';
 import type { ConversationPriority } from '@zendori/core/tickets';
+import type { BadgeTone } from '@/components/ui/Badge';
 
 export { TICKET_ORIGIN_LABELS, TICKET_STATUS_LABELS };
 export type { TicketOrigin, TicketStatus };
@@ -16,6 +17,14 @@ export const TICKET_STATUS_BADGE: Record<TicketStatus, string> = {
   in_progress: 'badge',
   waiting: 'badge badge--warn',
   resolved: 'badge badge--success',
+};
+
+/** Tone of the status <Badge> (redesign): open = info, in progress = accent. */
+export const TICKET_STATUS_TONE: Record<TicketStatus, BadgeTone> = {
+  open: 'info',
+  in_progress: 'accent',
+  waiting: 'warn',
+  resolved: 'success',
 };
 
 export const PRIORITY_LABELS: Record<ConversationPriority, string> = {
@@ -33,3 +42,11 @@ export const PRIORITY_BADGE: Record<ConversationPriority, string> = {
 };
 
 export const TICKET_STATUS_ORDER: TicketStatus[] = ['open', 'in_progress', 'waiting', 'resolved'];
+
+/** Tone of the priority <Badge> (redesign). */
+export const PRIORITY_TONE: Record<ConversationPriority, BadgeTone> = {
+  low: 'muted',
+  normal: 'neutral',
+  high: 'warn',
+  urgent: 'danger',
+};
