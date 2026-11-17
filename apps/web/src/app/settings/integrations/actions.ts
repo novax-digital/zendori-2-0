@@ -18,8 +18,14 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function integrationsUrl(org: string, message?: { error?: string; notice?: string }): string {
+// `panel` keeps the connect drawer open when connecting fails (redesign: the
+// token form lives in a drawer opened via ?panel=connect).
+function integrationsUrl(
+  org: string,
+  message?: { error?: string; notice?: string; panel?: string }
+): string {
   const params = new URLSearchParams({ org });
+  if (message?.panel) params.set('panel', message.panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/integrations?${params.toString()}`;
@@ -97,7 +103,12 @@ export async function connectHubspot(formData: FormData): Promise<void> {
     token: textField(formData.get('token')),
   });
   if (!parsed.success) {
-    redirect(integrationsUrl(org, { error: 'Bitte einen gültigen Private-App-Token angeben.' }));
+    redirect(
+      integrationsUrl(org, {
+        panel: 'connect',
+        error: 'Bitte einen gültigen Private-App-Token angeben.',
+      })
+    );
   }
   const { org: orgId, token } = parsed.data;
 
@@ -105,6 +116,7 @@ export async function connectHubspot(formData: FormData): Promise<void> {
   if (!masterKey) {
     redirect(
       integrationsUrl(orgId, {
+        panel: 'connect',
         error: 'Serverseitiger Verschlüsselungsschlüssel fehlt — bitte Administrator kontaktieren.',
       })
     );
@@ -126,7 +138,7 @@ export async function connectHubspot(formData: FormData): Promise<void> {
     }
     defaults = firstPipelineDefaults(pipelinesRaw);
   } catch (err) {
-    redirect(integrationsUrl(orgId, { error: mapHubspotError(err) }));
+    redirect(integrationsUrl(orgId, { panel: 'connect', error: mapHubspotError(err) }));
   }
 
   // 2. provision the custom ticket properties (zendori_ref / zendori_source)
@@ -135,6 +147,7 @@ export async function connectHubspot(formData: FormData): Promise<void> {
   } catch {
     redirect(
       integrationsUrl(orgId, {
+        panel: 'connect',
         error:
           'HubSpot-Verbindung steht, aber die Zendori-Ticket-Eigenschaften konnten nicht angelegt werden. Bitte prüfen, ob der Token den Scope „tickets" besitzt.',
       })
@@ -183,7 +196,9 @@ export async function connectHubspot(formData: FormData): Promise<void> {
     )
     .select('org_id');
   if (error || !data || data.length === 0) {
-    redirect(integrationsUrl(orgId, { error: 'Integration konnte nicht gespeichert werden.' }));
+    redirect(
+      integrationsUrl(orgId, { panel: 'connect', error: 'Integration konnte nicht gespeichert werden.' })
+    );
   }
 
   revalidatePath('/settings/integrations');

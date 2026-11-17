@@ -18,7 +18,7 @@ export default function TicketIdFormatField({
   const [format, setFormat] = useState(defaultFormat);
   const check = validateTicketIdFormat(format);
   return (
-    <div className="stack" style={{ gap: '0.35rem' }}>
+    <div className="field field--short">
       <label htmlFor="ticket-id-format">Format der Ticket-ID</label>
       <input
         id="ticket-id-format"
@@ -27,22 +27,25 @@ export default function TicketIdFormatField({
         value={format}
         maxLength={40}
         disabled={disabled}
+        aria-invalid={check.ok ? undefined : true}
+        aria-describedby="ticket-id-format-status ticket-id-format-help"
         onChange={(e) => setFormat(e.target.value)}
-        style={{ maxWidth: '20rem' }}
       />
       {check.ok ? (
-        <p className="hint">
-          Nächstes Ticket: <strong className="mono">{formatTicketId(check.format, nextNumber)}</strong>
+        <p id="ticket-id-format-status" className="field-help">
+          Nächstes Ticket:{' '}
+          <strong className="mono">{formatTicketId(check.format, nextNumber)}</strong>
         </p>
       ) : (
-        <p className="hint" style={{ color: 'var(--danger)' }}>
+        <p id="ticket-id-format-status" className="field-error" role="alert">
           {check.error}
         </p>
       )}
-      <p className="hint">
-        Platzhalter: <code>{'{N}'}</code> laufende Nummer · <code>{'{NNNN}'}</code> mit führenden Nullen ·{' '}
-        <code>{'{YYYY}'}</code> / <code>{'{YY}'}</code> Jahr. Beispiele: <code>{'#{N}'}</code>,{' '}
-        <code>{'ZD-{YYYY}-{NNNN}'}</code>. Gilt nur für neue Tickets — vergebene Nummern bleiben unverändert.
+      <p id="ticket-id-format-help" className="field-help">
+        Platzhalter: <code>{'{N}'}</code> laufende Nummer, <code>{'{NNNN}'}</code> mit führenden
+        Nullen, <code>{'{YYYY}'}</code> oder <code>{'{YY}'}</code> Jahr. Beispiele:{' '}
+        <code>{'#{N}'}</code>, <code>{'ZD-{YYYY}-{NNNN}'}</code>. Gilt nur für neue Tickets —
+        vergebene Nummern bleiben unverändert.
       </p>
     </div>
   );

@@ -10,8 +10,14 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function numbersUrl(org: string, message?: { error?: string; notice?: string }): string {
+// `panel` keeps the request drawer open when a request fails (redesign: the
+// form lives in a drawer opened via ?panel=new).
+function numbersUrl(
+  org: string,
+  message?: { error?: string; notice?: string; panel?: string }
+): string {
   const params = new URLSearchParams({ org });
+  if (message?.panel) params.set('panel', message.panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/phone-numbers?${params.toString()}`;
@@ -41,6 +47,7 @@ export async function requestPhoneNumber(formData: FormData): Promise<void> {
   if (!parsed.success) {
     redirect(
       numbersUrl(textField(formData.get('org')), {
+        panel: 'new',
         error: 'Bitte Nummern-Typ wählen (Wunschregion/Notiz optional, max. 120/500 Zeichen).',
       })
     );
@@ -64,7 +71,10 @@ export async function requestPhoneNumber(formData: FormData): Promise<void> {
   if (error) {
     // RLS rejects non-owners — the likeliest failure here.
     redirect(
-      numbersUrl(org, { error: 'Anfrage konnte nicht angelegt werden (nur Inhaber).' })
+      numbersUrl(org, {
+        panel: 'new',
+        error: 'Anfrage konnte nicht angelegt werden (nur Inhaber).',
+      })
     );
   }
 

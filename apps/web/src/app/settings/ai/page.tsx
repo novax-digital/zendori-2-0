@@ -10,8 +10,15 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { saveAiSettings } from './actions';
 import { canViewArea, isAdminRole } from '@zendori/core';
+import { href } from '@/lib/href';
+import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
-import SettingsTabs from '@/components/SettingsTabs';
+import SettingsFrame from '@/components/SettingsTabs';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field, SettingRow } from '@/components/ui/Field';
+import { Section } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 type Weekday = (typeof WEEKDAYS)[number];
@@ -87,225 +94,214 @@ export default async function AiSettingsPage({
   const disabled = !isOwner;
 
   return (
-    <div className="shell">
-      <SettingsTabs active="ai" access={access} orgId={orgId} />
+    <SettingsFrame access={access} orgId={orgId}>
+      <div className="page">
+        <PageHeader
+          title="Übergabe & Zeiten"
+          subtitle={`Org-weite Regeln von ${orgName} für Eskalationen: Keywords, Geschäftszeiten und Bestätigungstexte.`}
+        />
 
-      <div className="page-head">
-        <h1>Übergabe &amp; Zeiten</h1>
-        <p>
-          Org-weite Regeln von {orgName} für Eskalationen: Eskalations-Keywords, Geschäftszeiten
-          und die Bestätigungstexte für Übergaben und Tickets. Ob eine Eskalation an einen Menschen
-          übergibt oder ein Ticket aufnimmt, Verhalten, Identität und Autopilot konfigurierst du pro
-          Agent unter <Link href={`/settings/agents?org=${orgId}`}>Agenten</Link>.
-        </p>
-      </div>
+        <div className="page-body">
+          <DismissibleBanners error={error} notice={notice} />
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
-
-      {!isOwner ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          Nur Inhaber können diese Einstellungen ändern. Die aktuellen Werte werden schreibgeschützt
-          angezeigt.
-        </p>
-      ) : null}
-
-      <form action={saveAiSettings}>
-        <input type="hidden" name="org" value={orgId} />
-
-        <div className="panel">
-          <h2>Eskalations-Keywords</h2>
-          <p className="help">
-            Kommagetrennte Liste. Taucht eines dieser Wörter in einer Nachricht auf, wird eskaliert —
-            als Übergabe an einen Menschen oder als Ticket, je nach Einstellung des Agenten. Gilt für
-            Text-Kanäle UND für den Voice-Agenten am Telefon.
-          </p>
-          <input
-            name="escalation_keywords"
-            type="text"
-            defaultValue={keywords.join(', ')}
-            disabled={disabled}
-            placeholder="kündigung, beschwerde, anwalt, datenschutz"
-          />
-        </div>
-
-        <div className="panel">
-          <h2>Geschäftszeiten</h2>
-          <p className="help">
-            Bestimmen, welcher Auto-Ack-Text verwendet wird. Nicht geöffnete Tage gelten als
-            geschlossen.
-          </p>
-          <div style={{ maxWidth: '20rem', marginBottom: '1.25rem' }}>
-            <label htmlFor="timezone">Zeitzone (IANA)</label>
-            <input
-              id="timezone"
-              name="timezone"
-              type="text"
-              defaultValue={businessHours.timezone}
-              disabled={disabled}
-              placeholder="Europe/Berlin"
-            />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {WEEKDAYS.map((day) => {
-              const slot = businessHours.hours[day];
-              return (
-                <div
-                  key={day}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <label className="check-row" style={{ minWidth: '9rem', marginBottom: 0 }}>
-                    <input
-                      type="checkbox"
-                      name={`bh_${day}_enabled`}
-                      defaultChecked={Boolean(slot)}
-                      disabled={disabled}
-                    />
-                    {weekdayLabels[day]}
-                  </label>
-                  <input
-                    type="time"
-                    name={`bh_${day}_open`}
-                    defaultValue={slot?.open ?? '09:00'}
-                    disabled={disabled}
-                    aria-label={`${weekdayLabels[day]} Öffnung`}
-                  />
-                  <span style={{ color: 'var(--text-muted)' }}>bis</span>
-                  <input
-                    type="time"
-                    name={`bh_${day}_close`}
-                    defaultValue={slot?.close ?? '17:00'}
-                    disabled={disabled}
-                    aria-label={`${weekdayLabels[day]} Schließung`}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2>SLA-Erinnerung für Übergaben</h2>
-          <p className="help">
-            Wartet eine Übergabe länger als die angegebene Zeit ohne Reaktion eines Mitarbeiters,
-            wird eine interne Notiz an der Konversation hinterlegt. Die Erinnerung feuert nur
-            innerhalb der Geschäftszeiten — nachts aufgelaufene Übergaben erinnern kurz nach
-            Öffnung. Leer = aus.
-          </p>
-          <div style={{ maxWidth: '16rem' }}>
-            <label htmlFor="handoff_sla_minutes">Erinnerung nach (Minuten)</label>
-            <input
-              id="handoff_sla_minutes"
-              name="handoff_sla_minutes"
-              type="number"
-              min={5}
-              max={1440}
-              defaultValue={handoffSlaMinutes ?? ''}
-              disabled={disabled}
-              placeholder="aus"
-            />
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2>Automatische Eingangsbestätigung</h2>
-          <p className="help">
-            Sendet bei einer Übergabe an einen Menschen automatisch eine kurze Bestätigung an den
-            Kunden — je nach Geschäftszeiten unterschiedlich.
-          </p>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              name="ack_enabled"
-              defaultChecked={autoAck.enabled}
-              disabled={disabled}
-            />
-            Automatische Eingangsbestätigung aktivieren
-          </label>
-          <div style={{ marginBottom: '1rem' }}>
-            <label htmlFor="ack_in_hours">Text innerhalb der Geschäftszeiten</label>
-            <textarea
-              id="ack_in_hours"
-              name="ack_in_hours"
-              rows={3}
-              defaultValue={autoAck.in_hours}
-              disabled={disabled}
-            />
-          </div>
-          <div>
-            <label htmlFor="ack_out_of_hours">Text außerhalb der Geschäftszeiten</label>
-            <textarea
-              id="ack_out_of_hours"
-              name="ack_out_of_hours"
-              rows={3}
-              defaultValue={autoAck.out_of_hours}
-              disabled={disabled}
-            />
-          </div>
-
-        </div>
-
-        <div className="panel">
-          <h2>Ticket-Bestätigung</h2>
-          <p className="help">
-            Wird gesendet, wenn ein Agent mit „Als Ticket aufnehmen" ein neues Ticket anlegt
-            (Text-Kanäle; am Telefon wird keine Nummer genannt). Platzhalter{' '}
-            <code>{'{ticket_id}'}</code> = die Ticketnummer. Leere Felder verwenden den Standardtext.
-          </p>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              name="ticket_ack_enabled"
-              defaultChecked={ticketAck.enabled}
-              disabled={disabled}
-            />
-            Ticket-Bestätigung senden
-          </label>
-          <div style={{ marginBottom: '1rem' }}>
-            <label htmlFor="ticket_ack_in_hours">Text innerhalb der Geschäftszeiten</label>
-            <textarea
-              id="ticket_ack_in_hours"
-              name="ticket_ack_in_hours"
-              rows={3}
-              maxLength={1000}
-              defaultValue={ticketAck.in_hours}
-              placeholder={DEFAULT_TICKET_ACK_TEXT}
-              disabled={disabled}
-            />
-          </div>
-          <div>
-            <label htmlFor="ticket_ack_out_of_hours">Text außerhalb der Geschäftszeiten</label>
-            <textarea
-              id="ticket_ack_out_of_hours"
-              name="ticket_ack_out_of_hours"
-              rows={3}
-              maxLength={1000}
-              defaultValue={ticketAck.out_of_hours}
-              placeholder={DEFAULT_TICKET_ACK_TEXT}
-              disabled={disabled}
-            />
-          </div>
-
-          {isOwner ? (
-            <button className="primary" type="submit" style={{ marginTop: '0.25rem' }}>
-              Einstellungen speichern
-            </button>
+          {!isOwner ? (
+            <Callout>
+              Nur Inhaber können diese Einstellungen ändern. Die aktuellen Werte werden
+              schreibgeschützt angezeigt.
+            </Callout>
           ) : null}
+
+          <form id="ai-settings-form" className="form-narrow" action={saveAiSettings}>
+            <input type="hidden" name="org" value={orgId} />
+
+            <Section
+              title="Eskalations-Keywords"
+              help={
+                <>
+                  Fällt eines dieser Wörter, wird immer eskaliert — als Übergabe an einen Menschen
+                  oder als Ticket, je nach Einstellung des{' '}
+                  <Link href={href('/settings/agents', { org: orgId })}>Agenten</Link>. Gilt für Text
+                  und Telefon.
+                </>
+              }
+            >
+              <Field label="Keywords" htmlFor="escalation_keywords" help="Kommagetrennte Liste.">
+                <input
+                  id="escalation_keywords"
+                  name="escalation_keywords"
+                  type="text"
+                  defaultValue={keywords.join(', ')}
+                  disabled={disabled}
+                  placeholder="kündigung, beschwerde, anwalt, datenschutz"
+                />
+              </Field>
+            </Section>
+
+            <Section
+              title="Geschäftszeiten"
+              help="Bestimmen, welcher Bestätigungstext verwendet wird. Ausgeschaltete Tage gelten als geschlossen."
+            >
+              <div className="field--short">
+                <Field label="Zeitzone (IANA)" htmlFor="timezone">
+                  <input
+                    id="timezone"
+                    name="timezone"
+                    type="text"
+                    defaultValue={businessHours.timezone}
+                    disabled={disabled}
+                    placeholder="Europe/Berlin"
+                  />
+                </Field>
+              </div>
+              <div className="hours">
+                {WEEKDAYS.map((day) => {
+                  const slot = businessHours.hours[day];
+                  return (
+                    <div key={day} className="hours-row">
+                      <input
+                        id={`bh_${day}_enabled`}
+                        type="checkbox"
+                        className="switch"
+                        name={`bh_${day}_enabled`}
+                        defaultChecked={Boolean(slot)}
+                        disabled={disabled}
+                      />
+                      <label htmlFor={`bh_${day}_enabled`} className="hours-day">
+                        {weekdayLabels[day]}
+                      </label>
+                      <span className="hours-times">
+                        <input
+                          type="time"
+                          name={`bh_${day}_open`}
+                          defaultValue={slot?.open ?? '09:00'}
+                          disabled={disabled}
+                          aria-label={`${weekdayLabels[day]} Öffnung`}
+                        />
+                        bis
+                        <input
+                          type="time"
+                          name={`bh_${day}_close`}
+                          defaultValue={slot?.close ?? '17:00'}
+                          disabled={disabled}
+                          aria-label={`${weekdayLabels[day]} Schließung`}
+                        />
+                      </span>
+                      <span className="hours-closed">Geschlossen</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </Section>
+
+            <Section
+              title="Bestätigung bei Übergabe"
+              help="Kurze Nachricht an den Kunden, sobald an einen Menschen übergeben wird — je nach Geschäftszeiten ein anderer Text."
+            >
+              <SettingRow label="Automatische Eingangsbestätigung senden" htmlFor="ack_enabled">
+                <input
+                  id="ack_enabled"
+                  type="checkbox"
+                  className="switch"
+                  name="ack_enabled"
+                  defaultChecked={autoAck.enabled}
+                  disabled={disabled}
+                />
+              </SettingRow>
+              <Field label="Text innerhalb der Geschäftszeiten" htmlFor="ack_in_hours">
+                <textarea
+                  id="ack_in_hours"
+                  name="ack_in_hours"
+                  rows={3}
+                  defaultValue={autoAck.in_hours}
+                  disabled={disabled}
+                />
+              </Field>
+              <Field label="Text außerhalb der Geschäftszeiten" htmlFor="ack_out_of_hours">
+                <textarea
+                  id="ack_out_of_hours"
+                  name="ack_out_of_hours"
+                  rows={3}
+                  defaultValue={autoAck.out_of_hours}
+                  disabled={disabled}
+                />
+              </Field>
+            </Section>
+
+            <Section
+              title="Ticket-Bestätigung"
+              help={
+                <>
+                  Wird gesendet, wenn ein Agent mit „Als Ticket aufnehmen“ ein neues Ticket anlegt
+                  (Text-Kanäle; am Telefon wird keine Nummer genannt). Der Platzhalter{' '}
+                  <code>{'{ticket_id}'}</code> steht für die Ticketnummer, leere Felder verwenden
+                  den Standardtext.
+                </>
+              }
+            >
+              <SettingRow label="Ticket-Bestätigung senden" htmlFor="ticket_ack_enabled">
+                <input
+                  id="ticket_ack_enabled"
+                  type="checkbox"
+                  className="switch"
+                  name="ticket_ack_enabled"
+                  defaultChecked={ticketAck.enabled}
+                  disabled={disabled}
+                />
+              </SettingRow>
+              <Field label="Text innerhalb der Geschäftszeiten" htmlFor="ticket_ack_in_hours">
+                <textarea
+                  id="ticket_ack_in_hours"
+                  name="ticket_ack_in_hours"
+                  rows={3}
+                  maxLength={1000}
+                  defaultValue={ticketAck.in_hours}
+                  placeholder={DEFAULT_TICKET_ACK_TEXT}
+                  disabled={disabled}
+                />
+              </Field>
+              <Field label="Text außerhalb der Geschäftszeiten" htmlFor="ticket_ack_out_of_hours">
+                <textarea
+                  id="ticket_ack_out_of_hours"
+                  name="ticket_ack_out_of_hours"
+                  rows={3}
+                  maxLength={1000}
+                  defaultValue={ticketAck.out_of_hours}
+                  placeholder={DEFAULT_TICKET_ACK_TEXT}
+                  disabled={disabled}
+                />
+              </Field>
+            </Section>
+
+            <Section title="Erinnerung bei wartender Übergabe">
+              <SettingRow
+                label="Erinnerung nach"
+                help="Interne Notiz an der Konversation, wenn so lange kein Mitarbeiter reagiert hat. Nur innerhalb der Geschäftszeiten; nachts aufgelaufene Übergaben erinnern kurz nach Öffnung. Leer lassen schaltet sie aus."
+                htmlFor="handoff_sla_minutes"
+              >
+                <input
+                  id="handoff_sla_minutes"
+                  name="handoff_sla_minutes"
+                  type="number"
+                  min={5}
+                  max={1440}
+                  defaultValue={handoffSlaMinutes ?? ''}
+                  disabled={disabled}
+                  placeholder="aus"
+                />
+                Minuten
+              </SettingRow>
+            </Section>
+          </form>
         </div>
-      </form>
-    </div>
+
+        {isOwner ? (
+          <div className="save-bar">
+            <Button type="submit" form="ai-settings-form" variant="primary">
+              Einstellungen speichern
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </SettingsFrame>
   );
 }

@@ -1,9 +1,13 @@
-// Tab bar for the consolidated "Einstellungen" hub (nav restructure 2026-07-24):
-// the individual pages keep their routes/guards; this bar just links between
-// them. Server component — the active tab is passed in, tabs the member may not
-// view are hidden (pages still guard authoritatively).
-import Link from 'next/link';
+// Frame of the "Einstellungen" hub (redesign stage 6, page type D): the
+// sub-navigation on the left over the full height, the page itself — a normal
+// page with its own PageHeader — in the content column. The individual pages
+// keep their routes and guards; entries the member may not view are hidden
+// (pages still guard authoritatively). Server component; the active entry
+// follows the pathname inside SubNav.
+import type { ReactNode } from 'react';
 import { canViewArea, isAdminRole, type MemberAccess } from '@zendori/core';
+import SubNav from '@/components/ui/SubNav';
+import { href } from '@/lib/href';
 
 export type SettingsTabKey =
   | 'organization'
@@ -49,29 +53,28 @@ export function firstVisibleSettingsTab(access: MemberAccess): string | null {
   return tab ? tab.href : null;
 }
 
-export default function SettingsTabs({
-  active,
+/**
+ * Wraps one page of the hub. With a single visible entry there is nothing to
+ * navigate between, so the page renders without the sub-navigation.
+ */
+export default function SettingsFrame({
   access,
   orgId,
+  children,
 }: {
-  active: SettingsTabKey;
   access: MemberAccess;
   orgId: string;
+  children: ReactNode;
 }) {
   const visible = TABS.filter((t) => settingsTabVisible(access, t.key));
-  if (visible.length <= 1) return null;
+  if (visible.length <= 1) return <>{children}</>;
   return (
-    <div className="tabbar" style={{ marginBottom: '1.25rem' }}>
-      {visible.map((tab) => (
-        <Link
-          key={tab.key}
-          href={`${tab.href}?org=${orgId}`}
-          className={`tab${tab.key === active ? ' tab--active' : ''}`}
-          style={{ textDecoration: 'none' }}
-        >
-          {tab.label}
-        </Link>
-      ))}
+    <div className="with-subnav">
+      <SubNav
+        label="Einstellungen"
+        items={visible.map((tab) => ({ href: href(tab.href, { org: orgId }), label: tab.label }))}
+      />
+      <div className="with-subnav-content">{children}</div>
     </div>
   );
 }

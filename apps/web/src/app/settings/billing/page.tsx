@@ -15,8 +15,12 @@ import {
   resolveOrgTier,
 } from '@/lib/billing';
 import { categoryPriceEur, canViewArea, type BillingCategory } from '@zendori/core';
-import SettingsTabs from '@/components/SettingsTabs';
-import Link from 'next/link';
+import { href } from '@/lib/href';
+import SettingsFrame from '@/components/SettingsTabs';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
 
 // The per-event log mirrors the SQL rollup's step→category mapping (0021
 // billing_org_rollup) so each row is priced exactly like its invoice line:
@@ -70,15 +74,10 @@ export default async function CustomerBillingPage({
 
   if (!canViewArea(access, 'billing')) {
     return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Abrechnung</h1>
-        </div>
-
-        <div className="panel">
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Die Abrechnung ist nur für Inhaber der Organisation sichtbar.
-          </p>
+      <div className="page">
+        <PageHeader title="Abrechnung" />
+        <div className="page-body">
+          <Callout>Die Abrechnung ist nur für Inhaber der Organisation sichtbar.</Callout>
         </div>
       </div>
     );
@@ -87,12 +86,14 @@ export default async function CustomerBillingPage({
   const admin = createSupabaseAdminClient();
   if (!admin) {
     return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Abrechnung</h1>
+      <SettingsFrame access={access} orgId={orgId}>
+        <div className="page">
+          <PageHeader title="Abrechnung" />
+          <div className="page-body">
+            <Callout tone="danger">Die Abrechnung ist derzeit nicht verfügbar.</Callout>
+          </div>
         </div>
-        <p className="error">Die Abrechnung ist derzeit nicht verfügbar.</p>
-      </div>
+      </SettingsFrame>
     );
   }
 
@@ -191,149 +192,149 @@ export default async function CustomerBillingPage({
   const totalPages = Math.max(1, Math.ceil(logRows.length / LOG_PAGE_SIZE));
   const page = Math.min(totalPages, Math.max(1, Number.parseInt(vpage ?? '1', 10) || 1));
   const pageRows = logRows.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE);
-  const logHref = (p: number) => `/settings/billing?org=${orgId}&month=${period.key}&vpage=${p}`;
+  const logHref = (p: number) =>
+    href('/settings/billing', { org: orgId, month: period.key, vpage: p });
+  const usageTotalEur = usedLines.reduce((sum, line) => sum + line.priceEur, 0);
 
   return (
-    <div className="shell">
-      <SettingsTabs active="billing" access={access} orgId={orgId} />
+    <SettingsFrame access={access} orgId={orgId}>
+      <div className="page">
+        <PageHeader
+          title="Abrechnung"
+          subtitle="Deine Monatsrechnung aus Paketgebühren und Verbrauch, alle Beträge netto in Euro."
+        />
 
-      <div className="page-head">
-        <h1>Abrechnung</h1>
-        <p>
-          Deine Monatsrechnung — Paketgebühren und Verbrauch. Alle Beträge sind Netto in Euro.
-          {invoice.packageName ? (
-            <>
-              {' '}Dein Paket: <strong>{invoice.packageName}</strong>
-              {invoice.interval === 'yearly' ? ' (jährliche Laufzeit)' : ' (monatliche Laufzeit)'}.
-            </>
-          ) : null}
-        </p>
-      </div>
-
-      <div className="panel">
-        <form method="get" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <input type="hidden" name="org" value={orgId} />
-          <div>
-            <label htmlFor="month">Abrechnungsmonat</label>
-            {/* width:auto: the global select is 100%-wide, which parks the native
-                arrow far away from the month text in this short field. */}
-            <select id="month" name="month" defaultValue={period.key} style={{ width: 'auto', minWidth: '11rem' }}>
+        <div className="page-body">
+          <form method="get" className="toolbar">
+            <input type="hidden" name="org" value={orgId} />
+            <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
               {months.map((m) => (
-                <option key={m.key} value={m.key}>{m.label}</option>
+                <option key={m.key} value={m.key}>
+                  {m.label}
+                </option>
               ))}
             </select>
-          </div>
-          <button className="ghost" type="submit">Anzeigen</button>
-        </form>
-      </div>
+            <Button type="submit">Anzeigen</Button>
+          </form>
 
-      <div className="panel">
-        <h2>{period.label}</h2>
-        {isEmpty ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            In diesem Monat ist noch nichts angefallen.
-          </p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Leistung</th>
-                <th style={{ textAlign: 'right' }}>Verbrauch</th>
-                <th style={{ textAlign: 'right' }}>Betrag</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoice.recurring.map((line, i) => (
-                <tr key={`rec-${i}`}>
-                  <td>{line.label}</td>
-                  <td></td>
-                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.amountEur)}</td>
-                </tr>
-              ))}
-              {usedLines.map((line) => (
-                <tr key={line.category}>
-                  <td>{line.label}</td>
-                  <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                    {formatQuantity(line.quantity, line.unit)}
-                  </td>
-                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.priceEur)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              {/* td, not th: the global th style renders 0.72rem uppercase muted,
-                  which made the grand total SMALLER than every line amount. */}
-              <tr style={{ borderTop: '2px solid var(--border-strong)' }}>
-                <td style={{ fontWeight: 700 }}>Gesamt</td>
-                <td></td>
-                <td style={{ textAlign: 'right', fontWeight: 700 }}>
-                  {formatEur(invoice.grandTotalEur)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-        <p className="help" style={{ marginTop: '0.75rem' }}>
-          Angaben ohne Gewähr — die endgültige Rechnung kann abweichen. Bei Fragen zur Abrechnung
-          wende dich an deinen Ansprechpartner.
-        </p>
-      </div>
+          <Section title={period.label}>
+            <Stats>
+              <Stat label="Gesamt" value={formatEur(invoice.grandTotalEur)} note="netto" />
+              <Stat label="Paketgebühren" value={formatEur(invoice.recurringTotalEur)} />
+              <Stat label="Verbrauch" value={formatEur(usageTotalEur)} />
+              <Stat
+                label="Paket"
+                value={invoice.packageName ?? '—'}
+                note={
+                  invoice.packageName
+                    ? invoice.interval === 'yearly'
+                      ? 'jährliche Laufzeit'
+                      : 'monatliche Laufzeit'
+                    : undefined
+                }
+              />
+            </Stats>
+          </Section>
 
-      <div className="panel">
-        <h2>Kosten-Log</h2>
-        <p className="help">
-          Die letzten {LOG_TOTAL} Einzelvorgänge dieses Monats mit ihrem Preis laut deiner
-          Preisliste. WhatsApp-Nachrichten, E-Mails und Rufnummern werden monatlich gezählt und
-          erscheinen nur oben in der Rechnung.
-        </p>
-        {pageRows.length === 0 ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Keine Einzelvorgänge in diesem Monat.
-          </p>
-        ) : (
-          <>
-            <table>
-              <thead>
-                <tr>
-                  <th>Zeitpunkt</th>
-                  <th>Vorgang</th>
-                  <th style={{ textAlign: 'right' }}>Menge</th>
-                  <th style={{ textAlign: 'right' }}>Betrag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((row, i) => (
-                  <tr key={`${row.when}-${i}`}>
-                    <td style={{ color: 'var(--text-muted)' }}>{formatDateTime(row.when)}</td>
-                    <td>{row.label}</td>
-                    <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                      {row.detail ?? ''}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>{formatEur(row.priceEur)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {totalPages > 1 ? (
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '1rem',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginTop: '0.75rem',
-                }}
-              >
-                {page > 1 ? <Link href={logHref(page - 1)}>← Neuere</Link> : <span />}
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Seite {page} von {totalPages}
-                </span>
-                {page < totalPages ? <Link href={logHref(page + 1)}>Ältere →</Link> : <span />}
+          <Section
+            title="Rechnungspositionen"
+            help="Angaben ohne Gewähr — die endgültige Rechnung kann abweichen. Bei Fragen zur Abrechnung wende dich an deinen Ansprechpartner."
+          >
+            {isEmpty ? (
+              <EmptyState title="In diesem Monat ist noch nichts angefallen" />
+            ) : (
+              <div className="table-wrap">
+                <table className="table--compact">
+                  <thead>
+                    <tr>
+                      <th>Leistung</th>
+                      <th className="num">Verbrauch</th>
+                      <th className="num">Betrag</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.recurring.map((line, i) => (
+                      <tr key={`rec-${i}`}>
+                        <td>{line.label}</td>
+                        <td />
+                        <td className="num strong">{formatEur(line.amountEur)}</td>
+                      </tr>
+                    ))}
+                    {usedLines.map((line) => (
+                      <tr key={line.category}>
+                        <td>{line.label}</td>
+                        <td className="num muted">{formatQuantity(line.quantity, line.unit)}</td>
+                        <td className="num strong">{formatEur(line.priceEur)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    {/* td, not th: the global th style is the small muted table head */}
+                    <tr className="table-sum">
+                      <td>Gesamt</td>
+                      <td />
+                      <td className="num">{formatEur(invoice.grandTotalEur)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
-            ) : null}
-          </>
-        )}
+            )}
+          </Section>
+
+          <Section
+            title="Kosten-Log"
+            help={`Die letzten ${LOG_TOTAL} Einzelvorgänge dieses Monats mit ihrem Preis laut deiner Preisliste. WhatsApp-Nachrichten, E-Mails und Rufnummern werden monatlich gezählt und erscheinen nur in den Rechnungspositionen.`}
+          >
+            {pageRows.length === 0 ? (
+              <EmptyState title="Keine Einzelvorgänge in diesem Monat" />
+            ) : (
+              <>
+                <div className="table-wrap">
+                  <table className="table--compact">
+                    <thead>
+                      <tr>
+                        <th>Zeitpunkt</th>
+                        <th>Vorgang</th>
+                        <th className="num">Menge</th>
+                        <th className="num">Betrag</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((row, i) => (
+                        <tr key={`${row.when}-${i}`}>
+                          <td className="muted nowrap">{formatDateTime(row.when)}</td>
+                          <td>{row.label}</td>
+                          <td className="num muted">{row.detail ?? ''}</td>
+                          <td className="num">{formatEur(row.priceEur)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {totalPages > 1 ? (
+                  <div className="row row--between">
+                    <span className="muted small">
+                      Seite {page} von {totalPages}
+                    </span>
+                    <div className="row">
+                      {page > 1 ? (
+                        <Button href={logHref(page - 1)} size="sm">
+                          Neuere
+                        </Button>
+                      ) : null}
+                      {page < totalPages ? (
+                        <Button href={logHref(page + 1)} size="sm">
+                          Ältere
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </Section>
+        </div>
       </div>
-    </div>
+    </SettingsFrame>
   );
 }

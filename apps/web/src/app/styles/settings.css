@@ -1,3 +1,74 @@
-/* Einstellungen — page-specific styles (redesign stages 4-7).
+/* Einstellungen — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx). */
+
+/* hours — business-hours rows (switch, day, from–to) in one
+   outlined group. A day that is switched off shows "Geschlossen" instead of
+   its time fields; the fields stay in the form, so nothing changes for the
+   server action. */
+.hours {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.hours-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 48px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.hours-row:last-child {
+  border-bottom: 0;
+}
+.hours-day {
+  flex: 1 1 120px;
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+.hours-times {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.hours-closed {
+  display: none;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.hours-row:has(.switch:not(:checked)) .hours-times {
+  display: none;
+}
+.hours-row:has(.switch:not(:checked)) .hours-closed {
+  display: inline;
+}
+
+/* Textbausteine: the stored text keeps its line breaks in the table */
+.canned-text {
+  max-width: 40rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Integrationen: channel pick lists inside the HubSpot form */
+.check-list {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.check-list > legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--ink);
+}
+

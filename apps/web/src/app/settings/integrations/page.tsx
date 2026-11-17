@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import { z } from 'zod';
 import { decryptSecret, parseHubspotSyncRules } from '@zendori/core';
 import type { Channel, SyncRules } from '@zendori/core';
@@ -6,14 +5,22 @@ import { listTicketPipelines } from '@zendori/integrations';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import IntegrationGallery, {
-  type IntegrationKey,
-  type IntegrationTileMeta,
-} from '@/components/IntegrationGallery';
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
 import { isAdminRole } from '@zendori/core';
+import { href } from '@/lib/href';
+import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
-import SettingsTabs from '@/components/SettingsTabs';
+import SettingsFrame from '@/components/SettingsTabs';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Drawer from '@/components/ui/Drawer';
+import { Field, SettingRow } from '@/components/ui/Field';
+import { Section } from '@/components/ui/Layout';
+import Menu from '@/components/ui/Menu';
+import PageHeader from '@/components/ui/PageHeader';
+
+const PATH = '/settings/integrations';
 
 // listTicketPipelines returns network data → parsed defensively (labels tolerate
 // absence so a client-shape drift never crashes the settings page).
@@ -93,9 +100,9 @@ async function loadPipelines(
 export default async function IntegrationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ org?: string; error?: string; notice?: string; panel?: string }>;
 }) {
-  const { org, error, notice } = await searchParams;
+  const { org, error, notice, panel } = await searchParams;
   const { orgId, orgs, role, access } = await requireActiveOrg(org);
   if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
@@ -123,313 +130,329 @@ export default async function IntegrationsPage({
       ? await loadPipelines(config.token_encrypted)
       : { pipelines: [], failed: false };
 
-  const tiles: IntegrationTileMeta[] = [
-    {
-      key: 'hubspot',
-      name: 'HubSpot',
-      description: 'Konversationen als HubSpot-Tickets anlegen und aktualisieren.',
-      status: connected ? (isActive ? 'active' : 'inactive') : 'disconnected',
-    },
-  ];
+  const listHref = href(PATH, { org: orgId });
+  const connectHref = href(PATH, { org: orgId, panel: 'connect' });
+  // the token form lives in a drawer; once connected there is nothing to connect
+  const drawerOpen = panel === 'connect' && !connected;
 
-  const hubspotPanel: ReactNode = (
-    <>
-      <div className="panel">
-        <h2>HubSpot</h2>
-        <p className="help">
-          Einseitiger Sync: Konversationen werden als HubSpot-Tickets angelegt und aktualisiert. Der
-          Private-App-Token wird verschlüsselt gespeichert und nie im Klartext angezeigt.
-        </p>
-        <p style={{ marginBottom: 0 }}>
-          Status:{' '}
-          {connected ? (
-            <span className="badge badge--success">
-              Verbunden{isActive ? '' : ' (inaktiv)'}
-            </span>
-          ) : (
-            <span className="badge badge--muted">Nicht verbunden</span>
-          )}
-        </p>
-        {connected && config.portal_id ? (
-          <p className="help" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
-            Portal-ID: {config.portal_id}
-            {config.ui_domain ? ` · ${config.ui_domain}` : ''}
-          </p>
-        ) : null}
-      </div>
-
-      {!connected ? (
-        <div className="panel">
-          <h2>Verbinden</h2>
-          <p className="help">
-            Private-App-Token der HubSpot-App des Kunden. Benötigte Scopes: „tickets",
-            „crm.objects.contacts.read", „crm.objects.contacts.write". Der Token wird zunächst
-            getestet (Account-Info + Pipelines) und dann verschlüsselt abgelegt.
-          </p>
-          <form className="stack" action={connectHubspot} style={{ maxWidth: '28rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <div>
-              <label htmlFor="hs-token">Private-App-Token</label>
-              <input
-                id="hs-token"
-                name="token"
-                type="password"
-                required
-                autoComplete="off"
-                placeholder="pat-eu1-…"
-              />
-            </div>
-            <button className="primary" type="submit">
-              HubSpot verbinden
-            </button>
-          </form>
-        </div>
-      ) : (
-        <>
-          <div className="panel">
-            <h2>Pipeline &amp; Stages</h2>
-            {pipelinesFailed ? (
-              <p className="error" style={{ marginBottom: '1rem' }}>
-                Die Pipelines konnten nicht von HubSpot geladen werden (Token, Scopes oder
-                Verbindung prüfen). Die zuletzt gespeicherten Werte bleiben erhalten.
-              </p>
-            ) : (
-              <p className="help">
-                Neue Tickets landen in dieser Pipeline und Stage. Bitte eine Stage wählen, die zur
-                gewählten Pipeline gehört. Die „Gelöst"-Stage ist optional — sie wird gesetzt, wenn
-                eine Konversation auf „Gelöst" gestellt wird.
-              </p>
-            )}
-
-            <form className="stack" action={saveHubspotConfig} style={{ maxWidth: '28rem' }}>
-              <input type="hidden" name="org" value={orgId} />
-
-              <div>
-                <label htmlFor="hs-pipeline">Pipeline</label>
-                <select id="hs-pipeline" name="pipeline_id" defaultValue={config.pipeline_id}>
-                  {pipelines.length === 0 ? (
-                    <option value={config.pipeline_id}>{config.pipeline_id || '—'}</option>
-                  ) : null}
-                  {pipelines.map((pipeline) => (
-                    <option key={pipeline.id} value={pipeline.id}>
-                      {pipeline.label ?? pipeline.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="hs-stage">Standard-Stage (neue Tickets)</label>
-                <select id="hs-stage" name="default_stage_id" defaultValue={config.default_stage_id}>
-                  {pipelines.length === 0 ? (
-                    <option value={config.default_stage_id}>
-                      {config.default_stage_id || '—'}
-                    </option>
-                  ) : null}
-                  {pipelines.map((pipeline) => (
-                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
-                      {pipeline.stages.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.label ?? stage.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="hs-resolved">„Gelöst"-Stage (optional)</label>
-                <select id="hs-resolved" name="resolved_stage_id" defaultValue={config.resolved_stage_id}>
-                  <option value="">— kein Stage-Wechsel bei „Gelöst" —</option>
-                  {pipelines.map((pipeline) => (
-                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
-                      {pipeline.stages.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.label ?? stage.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-
-              <h2 style={{ marginTop: '0.75rem', marginBottom: 0 }}>Konversationen → HubSpot</h2>
-              <p className="help">
-                Legt fest, welche Konversationen automatisch an HubSpot gehen (Pipeline und Stages
-                oben). Der Button „An HubSpot senden" pro Konversation funktioniert immer,
-                unabhängig von dieser Regel.
-              </p>
-              <div>
-                <label htmlFor="hs-rule">Regel</label>
-                <select id="hs-rule" name="rules_mode" defaultValue={rules.mode}>
-                  <option value="all">Alle Konversationen</option>
-                  <option value="channels">Nur ausgewählte Kanäle</option>
-                  <option value="manual">Nur manuell</option>
-                </select>
-              </div>
-
-              <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-                <legend className="field-label" style={{ marginBottom: '0.5rem' }}>
-                  Kanäle (nur wirksam bei Regel „Nur ausgewählte Kanäle")
-                </legend>
-                {channels.length === 0 ? (
-                  <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Keine Kanäle vorhanden.</p>
-                ) : (
-                  channels.map((channel) => (
-                    <label key={channel.id} className="check-row">
-                      <input
-                        type="checkbox"
-                        name="channel_ids"
-                        value={channel.id}
-                        defaultChecked={selectedChannelIds.has(channel.id)}
-                      />
-                      {channel.name}
-                    </label>
-                  ))
-                )}
-              </fieldset>
-
-              <h2 style={{ marginTop: '1rem', marginBottom: 0 }}>Tickets → HubSpot</h2>
-              <p className="help">
-                Eigener Strom für Zendori-Tickets (Phase 11): eigene Pipeline, eigene Regel. Beide
-                Ströme können parallel laufen — z. B. Konversationen in eine Liste, Tickets in eine
-                andere. Ohne Ticket-Pipeline werden Tickets nicht übertragen.
-              </p>
-              <div>
-                <label htmlFor="hs-ticket-pipeline">Ticket-Pipeline</label>
-                <select id="hs-ticket-pipeline" name="ticket_pipeline_id" defaultValue={config.tickets.pipeline_id}>
-                  <option value="">— nicht konfiguriert —</option>
-                  {pipelines.length === 0 && config.tickets.pipeline_id ? (
-                    <option value={config.tickets.pipeline_id}>{config.tickets.pipeline_id}</option>
-                  ) : null}
-                  {pipelines.map((pipeline) => (
-                    <option key={pipeline.id} value={pipeline.id}>
-                      {pipeline.label ?? pipeline.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="hs-ticket-stage">Standard-Stage (neue Tickets)</label>
-                <select id="hs-ticket-stage" name="ticket_default_stage_id" defaultValue={config.tickets.default_stage_id}>
-                  <option value="">—</option>
-                  {pipelines.map((pipeline) => (
-                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
-                      {pipeline.stages.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.label ?? stage.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="hs-ticket-resolved">„Erledigt"-Stage (optional)</label>
-                <select id="hs-ticket-resolved" name="ticket_resolved_stage_id" defaultValue={config.tickets.resolved_stage_id}>
-                  <option value="">— kein Stage-Wechsel bei „Erledigt" —</option>
-                  {pipelines.map((pipeline) => (
-                    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
-                      {pipeline.stages.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.label ?? stage.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-              <label className="check-row">
-                <input type="checkbox" name="ticket_subject_prefix" defaultChecked={config.tickets.subject_prefix} />
-                Ticket-ID im HubSpot-Betreff voranstellen (z. B. „[ZD-2026-0042] Rechnungsfrage")
-              </label>
-              <div>
-                <label htmlFor="hs-ticket-rule">Regel</label>
-                <select id="hs-ticket-rule" name="ticket_rules_mode" defaultValue={ticketRules.mode}>
-                  <option value="all">Alle Tickets</option>
-                  <option value="channels">Nur Tickets ausgewählter Kanäle</option>
-                  <option value="manual">Nur manuell</option>
-                </select>
-              </div>
-              <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-                <legend className="field-label" style={{ marginBottom: '0.5rem' }}>
-                  Kanäle (nur wirksam bei Regel „Nur Tickets ausgewählter Kanäle")
-                </legend>
-                {channels.length === 0 ? (
-                  <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Keine Kanäle vorhanden.</p>
-                ) : (
-                  channels.map((channel) => (
-                    <label key={channel.id} className="check-row">
-                      <input
-                        type="checkbox"
-                        name="ticket_channel_ids"
-                        value={channel.id}
-                        defaultChecked={ticketChannelIds.has(channel.id)}
-                      />
-                      {channel.name}
-                    </label>
-                  ))
-                )}
-              </fieldset>
-
-              <label className="check-row" style={{ marginBottom: '0.35rem', marginTop: '0.75rem' }}>
-                <input type="checkbox" name="is_active" defaultChecked={isActive} />
-                Integration aktiv
-              </label>
-
-              <button className="primary" type="submit">
-                Einstellungen speichern
-              </button>
-            </form>
-          </div>
-
-          <div className="panel">
-            <h2>Verbindung trennen</h2>
-            <p className="help">
-              Entfernt die Integration samt verschlüsseltem Token. Bereits erstellte HubSpot-Tickets
-              bleiben in HubSpot bestehen.
-            </p>
-            <form action={disconnectHubspot}>
-              <input type="hidden" name="org" value={orgId} />
-              <button className="ghost" type="submit">
-                HubSpot trennen
-              </button>
-            </form>
-          </div>
-        </>
-      )}
-    </>
-  );
-
-  const panels: Record<IntegrationKey, ReactNode> = {
-    hubspot: hubspotPanel,
-  };
+  // one <optgroup> per pipeline, shared by the four stage selects
+  const stageOptions = pipelines.map((pipeline) => (
+    <optgroup key={pipeline.id} label={pipeline.label ?? pipeline.id}>
+      {pipeline.stages.map((stage) => (
+        <option key={stage.id} value={stage.id}>
+          {stage.label ?? stage.id}
+        </option>
+      ))}
+    </optgroup>
+  ));
 
   return (
-    <div className="shell">
-      <SettingsTabs active="integrations" access={access} orgId={orgId} />
+    <SettingsFrame access={access} orgId={orgId}>
+      <div className="page">
+        <PageHeader
+          title="Integrationen"
+          subtitle={`Verbinde ${orgName} mit externen Systemen.`}
+        />
 
-      <div className="page-head">
-        <h1>Integrationen</h1>
-        <p>
-          Verbinde {orgName} mit externen Systemen. Wähle eine Integration, um sie zu aktivieren und
-          einzurichten.
-        </p>
+        <div className="page-body">
+          {/* while the drawer is open its own banner shows the message */}
+          {drawerOpen ? null : <DismissibleBanners error={error} notice={notice} />}
+
+          <Section
+            title="Verfügbare Integrationen"
+            help={
+              connected
+                ? 'Trennen entfernt die Integration samt verschlüsseltem Token; bereits erstellte HubSpot-Tickets bleiben in HubSpot bestehen.'
+                : undefined
+            }
+          >
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Integration</th>
+                    <th>Status</th>
+                    <th aria-label="Aktionen" />
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div className="cell-title">HubSpot</div>
+                      <div className="cell-sub">
+                        Einseitiger Sync: Konversationen und Tickets werden als HubSpot-Tickets
+                        angelegt und aktualisiert.
+                        {connected && config.portal_id
+                          ? ` Portal-ID ${config.portal_id}${config.ui_domain ? ` · ${config.ui_domain}` : ''}`
+                          : ''}
+                      </div>
+                    </td>
+                    <td>
+                      {connected ? (
+                        isActive ? (
+                          <Badge tone="success" dot>
+                            Aktiv
+                          </Badge>
+                        ) : (
+                          <Badge tone="warn" dot>
+                            Verbunden, inaktiv
+                          </Badge>
+                        )
+                      ) : (
+                        <Badge tone="muted" dot>
+                          Nicht verbunden
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="cell-actions">
+                      {connected ? (
+                        <Menu label="Aktionen für HubSpot">
+                          <form action={disconnectHubspot}>
+                            <input type="hidden" name="org" value={orgId} />
+                            <button className="menu-item menu-item--danger" type="submit">
+                              <span className="menu-label">HubSpot trennen</span>
+                            </button>
+                          </form>
+                        </Menu>
+                      ) : (
+                        <Button href={connectHref} variant="primary" size="sm" scroll={false}>
+                          Verbinden
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </Section>
+
+          {connected ? (
+            <form
+              id="hubspot-config-form"
+              className="section-group form-narrow"
+              action={saveHubspotConfig}
+            >
+              <input type="hidden" name="org" value={orgId} />
+
+              <Section
+                title="Pipeline und Stages"
+                help="Neue Tickets landen in dieser Pipeline und Stage. Die Stage muss zur gewählten Pipeline gehören; die „Gelöst“-Stage ist optional und wird gesetzt, wenn eine Konversation auf „Gelöst“ gestellt wird."
+              >
+                {pipelinesFailed ? (
+                  <Callout tone="danger">
+                    Die Pipelines konnten nicht von HubSpot geladen werden (Token, Scopes oder
+                    Verbindung prüfen). Die zuletzt gespeicherten Werte bleiben erhalten.
+                  </Callout>
+                ) : null}
+                <Field label="Pipeline" htmlFor="hs-pipeline">
+                  <select id="hs-pipeline" name="pipeline_id" defaultValue={config.pipeline_id}>
+                    {pipelines.length === 0 ? (
+                      <option value={config.pipeline_id}>{config.pipeline_id || '—'}</option>
+                    ) : null}
+                    {pipelines.map((pipeline) => (
+                      <option key={pipeline.id} value={pipeline.id}>
+                        {pipeline.label ?? pipeline.id}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Standard-Stage (neue Tickets)" htmlFor="hs-stage">
+                  <select id="hs-stage" name="default_stage_id" defaultValue={config.default_stage_id}>
+                    {pipelines.length === 0 ? (
+                      <option value={config.default_stage_id}>
+                        {config.default_stage_id || '—'}
+                      </option>
+                    ) : null}
+                    {stageOptions}
+                  </select>
+                </Field>
+                <Field label="„Gelöst“-Stage (optional)" htmlFor="hs-resolved">
+                  <select
+                    id="hs-resolved"
+                    name="resolved_stage_id"
+                    defaultValue={config.resolved_stage_id}
+                  >
+                    <option value="">— kein Stage-Wechsel bei „Gelöst“ —</option>
+                    {stageOptions}
+                  </select>
+                </Field>
+              </Section>
+
+              <Section
+                title="Konversationen an HubSpot"
+                help="Welche Konversationen automatisch an HubSpot gehen (Pipeline und Stages oben). „An HubSpot senden“ an einer Konversation funktioniert immer, unabhängig von dieser Regel."
+              >
+                <Field label="Regel" htmlFor="hs-rule">
+                  <select id="hs-rule" name="rules_mode" defaultValue={rules.mode}>
+                    <option value="all">Alle Konversationen</option>
+                    <option value="channels">Nur ausgewählte Kanäle</option>
+                    <option value="manual">Nur manuell</option>
+                  </select>
+                </Field>
+                <fieldset className="check-list">
+                  <legend>Kanäle (nur wirksam bei Regel „Nur ausgewählte Kanäle“)</legend>
+                  {channels.length === 0 ? (
+                    <p className="muted small">Keine Kanäle vorhanden.</p>
+                  ) : (
+                    channels.map((channel) => (
+                      <label key={channel.id} className="check-row">
+                        <input
+                          type="checkbox"
+                          name="channel_ids"
+                          value={channel.id}
+                          defaultChecked={selectedChannelIds.has(channel.id)}
+                        />
+                        {channel.name}
+                      </label>
+                    ))
+                  )}
+                </fieldset>
+              </Section>
+
+              <Section
+                title="Tickets an HubSpot"
+                help="Eigener Strom für Zendori-Tickets mit eigener Pipeline und Regel; beide Ströme können parallel laufen. Ohne Ticket-Pipeline werden Tickets nicht übertragen."
+              >
+                <Field label="Ticket-Pipeline" htmlFor="hs-ticket-pipeline">
+                  <select
+                    id="hs-ticket-pipeline"
+                    name="ticket_pipeline_id"
+                    defaultValue={config.tickets.pipeline_id}
+                  >
+                    <option value="">— nicht konfiguriert —</option>
+                    {pipelines.length === 0 && config.tickets.pipeline_id ? (
+                      <option value={config.tickets.pipeline_id}>{config.tickets.pipeline_id}</option>
+                    ) : null}
+                    {pipelines.map((pipeline) => (
+                      <option key={pipeline.id} value={pipeline.id}>
+                        {pipeline.label ?? pipeline.id}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Standard-Stage (neue Tickets)" htmlFor="hs-ticket-stage">
+                  <select
+                    id="hs-ticket-stage"
+                    name="ticket_default_stage_id"
+                    defaultValue={config.tickets.default_stage_id}
+                  >
+                    <option value="">—</option>
+                    {stageOptions}
+                  </select>
+                </Field>
+                <Field label="„Erledigt“-Stage (optional)" htmlFor="hs-ticket-resolved">
+                  <select
+                    id="hs-ticket-resolved"
+                    name="ticket_resolved_stage_id"
+                    defaultValue={config.tickets.resolved_stage_id}
+                  >
+                    <option value="">— kein Stage-Wechsel bei „Erledigt“ —</option>
+                    {stageOptions}
+                  </select>
+                </Field>
+                <SettingRow
+                  label="Ticket-ID im HubSpot-Betreff voranstellen"
+                  help="Zum Beispiel „[ZD-2026-0042] Rechnungsfrage“."
+                  htmlFor="hs-ticket-prefix"
+                >
+                  <input
+                    id="hs-ticket-prefix"
+                    type="checkbox"
+                    className="switch"
+                    name="ticket_subject_prefix"
+                    defaultChecked={config.tickets.subject_prefix}
+                  />
+                </SettingRow>
+                <Field label="Regel" htmlFor="hs-ticket-rule">
+                  <select id="hs-ticket-rule" name="ticket_rules_mode" defaultValue={ticketRules.mode}>
+                    <option value="all">Alle Tickets</option>
+                    <option value="channels">Nur Tickets ausgewählter Kanäle</option>
+                    <option value="manual">Nur manuell</option>
+                  </select>
+                </Field>
+                <fieldset className="check-list">
+                  <legend>Kanäle (nur wirksam bei Regel „Nur Tickets ausgewählter Kanäle“)</legend>
+                  {channels.length === 0 ? (
+                    <p className="muted small">Keine Kanäle vorhanden.</p>
+                  ) : (
+                    channels.map((channel) => (
+                      <label key={channel.id} className="check-row">
+                        <input
+                          type="checkbox"
+                          name="ticket_channel_ids"
+                          value={channel.id}
+                          defaultChecked={ticketChannelIds.has(channel.id)}
+                        />
+                        {channel.name}
+                      </label>
+                    ))
+                  )}
+                </fieldset>
+              </Section>
+
+              <Section title="Status">
+                <SettingRow
+                  label="Integration aktiv"
+                  help="Ausgeschaltet bleibt die Verbindung bestehen, es wird aber nichts übertragen."
+                  htmlFor="hs-active"
+                >
+                  <input
+                    id="hs-active"
+                    type="checkbox"
+                    className="switch"
+                    name="is_active"
+                    defaultChecked={isActive}
+                  />
+                </SettingRow>
+              </Section>
+            </form>
+          ) : null}
+        </div>
+
+        {connected ? (
+          <div className="save-bar">
+            <Button type="submit" form="hubspot-config-form" variant="primary">
+              Einstellungen speichern
+            </Button>
+          </div>
+        ) : null}
+
+        {drawerOpen ? (
+          <Drawer
+            title="HubSpot verbinden"
+            closeHref={listHref}
+            footer={
+              <>
+                <Button href={listHref} scroll={false}>
+                  Abbrechen
+                </Button>
+                <Button type="submit" form="hubspot-connect-form" variant="primary">
+                  HubSpot verbinden
+                </Button>
+              </>
+            }
+          >
+            <DismissibleBanners error={error} notice={notice} />
+            <form id="hubspot-connect-form" className="stack" action={connectHubspot}>
+              <input type="hidden" name="org" value={orgId} />
+              <Field
+                label="Private-App-Token"
+                htmlFor="hs-token"
+                help="Token der HubSpot-App des Kunden mit den Scopes „tickets“, „crm.objects.contacts.read“ und „crm.objects.contacts.write“. Er wird zuerst getestet (Account-Info und Pipelines), dann verschlüsselt gespeichert und nie im Klartext angezeigt."
+              >
+                <input
+                  id="hs-token"
+                  name="token"
+                  type="password"
+                  required
+                  autoComplete="off"
+                  placeholder="pat-eu1-…"
+                />
+              </Field>
+            </form>
+          </Drawer>
+        ) : null}
       </div>
-
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
-
-      <IntegrationGallery tiles={tiles} panels={panels} />
-    </div>
+    </SettingsFrame>
   );
 }
