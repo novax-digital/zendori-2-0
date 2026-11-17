@@ -200,6 +200,10 @@ export default async function ChannelDetailPage({
               Diesen Code auf der Website vor dem schließenden &lt;/body&gt;-Tag einfügen. Der
               Token ist öffentlich — er identifiziert nur den Kanal und enthält keine Geheimnisse.
             </p>
+            {/* former sidebar entry "Widget-Demo" */}
+            <p className="hint">
+              Ausprobieren: <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo öffnen</Link>
+            </p>
           </div>
           <div style={{ marginTop: '1.25rem' }}>{conversationSplitForm(widget.splitHours)}</div>
         </div>

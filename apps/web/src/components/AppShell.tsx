@@ -2,15 +2,18 @@
 
 import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { signOut } from '@/app/actions';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import ThemeToggle from './ThemeToggle';
+import Icon, { type IconName } from './ui/Icon';
+import { useDismiss } from './ui/useDismiss';
 // Client-safe subpath: the @zendori/core barrel pulls node:crypto (webhooks)
 // and cannot be bundled for the browser.
 import {
   EMPTY_PERMISSIONS,
   LEGACY_AGENT_PERMISSIONS,
+  ORG_ROLE_LABELS,
   canEditArea,
   canViewArea,
   parseMemberPermissions,
@@ -32,177 +35,14 @@ const BARE_PREFIXES = [
   '/f/',
 ];
 
-type IconName =
-  | 'inbox'
-  | 'ticket'
-  | 'book'
-  | 'form'
-  | 'channels'
-  | 'ai'
-  | 'canned'
-  | 'team'
-  | 'integrations'
-  | 'test'
-  | 'widget'
-  | 'shield'
-  | 'clock'
-  | 'phone'
-  | 'billing'
-  | 'package'
-  | 'settings'
-  | 'chevron'
-  | 'signout';
-
-function Icon({ name }: { name: IconName }) {
-  const common = {
-    width: 24,
-    height: 24,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.8,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-  };
-  switch (name) {
-    case 'inbox':
-      return (
-        <svg {...common}>
-          <path d="M4 13h4l1.5 3h5L16 13h4" />
-          <path d="M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7l-1.5 5a2 2 0 0 1-2 1.5H7.5a2 2 0 0 1-2-1.5L4 13Z" />
-        </svg>
-      );
-    case 'ticket':
-      return (
-        <svg {...common}>
-          <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4V7Z" />
-          <path d="M14 5v14" strokeDasharray="2 2" />
-        </svg>
-      );
-    case 'book':
-      return (
-        <svg {...common}>
-          <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z" />
-          <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20" />
-        </svg>
-      );
-    case 'form':
-      return (
-        <svg {...common}>
-          <rect x="5" y="3" width="14" height="18" rx="2" />
-          <path d="M9 8h6M9 12h6M9 16h3" />
-        </svg>
-      );
-    case 'channels':
-      return (
-        <svg {...common}>
-          <path d="M10 3 8 21M16 3l-2 18M4 8h17M3 16h17" />
-        </svg>
-      );
-    case 'ai':
-      return (
-        <svg {...common}>
-          <path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4L12 3Z" />
-          <path d="M18 15l.9 2.3L21 18l-2.1.7L18 21l-.9-2.3L15 18l2.1-.7L18 15Z" />
-        </svg>
-      );
-    case 'canned':
-      return (
-        <svg {...common}>
-          <path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 4v-4H6a2 2 0 0 1-2-2V6Z" />
-          <path d="M8 9h8M8 12h5" />
-        </svg>
-      );
-    case 'team':
-      return (
-        <svg {...common}>
-          <circle cx="9" cy="8" r="3" />
-          <path d="M3 20a6 6 0 0 1 12 0" />
-          <path d="M16 6a3 3 0 0 1 0 6M17 20a6 6 0 0 0-2-4.7" />
-        </svg>
-      );
-    case 'integrations':
-      return (
-        <svg {...common}>
-          <path d="M9 3v4M15 3v4M8 7h8v3a4 4 0 0 1-4 4 4 4 0 0 1-4-4V7Z" />
-          <path d="M12 14v7" />
-        </svg>
-      );
-    case 'test':
-      return (
-        <svg {...common}>
-          <path d="M9 3h6M10 3v6l-4.5 8A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.8-3L14 9V3" />
-          <path d="M8 15h8" />
-        </svg>
-      );
-    case 'widget':
-      return (
-        <svg {...common}>
-          <path d="m8 9-3 3 3 3M16 9l3 3-3 3M13 7l-2 10" />
-        </svg>
-      );
-    case 'shield':
-      return (
-        <svg {...common}>
-          <path d="M12 3l7 3v5c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6l7-3Z" />
-          <path d="m9.5 12 1.8 1.8L15 10" />
-        </svg>
-      );
-    case 'clock':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8.5" />
-          <path d="M12 7.5V12l3 2" />
-        </svg>
-      );
-    case 'phone':
-      return (
-        <svg {...common}>
-          <path d="M5 4h4l1.5 4.5-2.2 1.6a12.5 12.5 0 0 0 5.6 5.6l1.6-2.2L20 15v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2Z" />
-        </svg>
-      );
-    case 'billing':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M15 9.5a4 4 0 0 0-3-1.5c-2 0-3.5 1.8-3.5 4s1.5 4 3.5 4a4 4 0 0 0 3-1.5M7.5 11.5h5M7.5 13.5h4" />
-        </svg>
-      );
-    case 'package':
-      return (
-        <svg {...common}>
-          <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" />
-          <path d="m3 8 9 5 9-5M12 13v8" />
-        </svg>
-      );
-    case 'settings':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="3.2" />
-          <path d="M12 3v2.4M12 18.6V21M21 12h-2.4M5.4 12H3M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7M18.4 18.4l-1.7-1.7M7.3 7.3 5.6 5.6" />
-        </svg>
-      );
-    case 'chevron':
-      return (
-        <svg {...common}>
-          <path d="m15 6-6 6 6 6" />
-        </svg>
-      );
-    case 'signout':
-      return (
-        <svg {...common}>
-          <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 12H4M8 8l-4 4 4 4" />
-        </svg>
-      );
-  }
-}
-
 type NavItem = { href: string; label: string; icon: IconName };
 type NavSection = { title?: string; items: NavItem[] };
 
-// Nav restructure (owner 2026-07-24): the main areas are top-level; ONE
-// "Einstellungen" entry leads to the tabbed hub (Organisation, Telefonnummern,
-// Übergabe & Zeiten, Textbausteine, Integrationen, Abrechnung — SettingsTabs).
+// Redesign stage 2 (docs/design-redesign.md §6): three groups, routes
+// unchanged. The former "Werkzeuge" group is gone — MD-Generator lives in the
+// Wissensdatenbank page head, Test-Channel in the Kanäle page head, Widget-Demo
+// on the chat channel page. ONE "Einstellungen" entry leads to the tabbed hub
+// (SettingsTabs), ONE "Plattform" entry to the admin area (its own sub-nav).
 const NAV: NavSection[] = [
   {
     items: [
@@ -211,21 +51,19 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    title: 'Einrichten',
     items: [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
-      { href: '/settings/knowledge', label: 'Wissensdatenbank', icon: 'book' },
+      { href: '/settings/knowledge', label: 'Wissen', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
-      { href: '/settings/members', label: 'Team', icon: 'team' },
-      { href: '/settings', label: 'Einstellungen', icon: 'settings' },
+      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
     ],
   },
   {
-    title: 'Werkzeuge',
+    title: 'Organisation',
     items: [
-      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
-      { href: '/tools/md-generator', label: 'MD-Generator', icon: 'book' },
-      { href: '/test-channel', label: 'Test-Channel', icon: 'test' },
-      { href: '/widget-demo', label: 'Widget-Demo', icon: 'widget' },
+      { href: '/settings/members', label: 'Team', icon: 'team' },
+      { href: '/settings', label: 'Einstellungen', icon: 'settings' },
     ],
   },
 ];
@@ -244,9 +82,12 @@ const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'ad
   '/settings/forms': { area: 'channels', level: 'view' },
   '/settings/members': 'admin',
   '/settings': 'settings-hub',
-  '/tools/md-generator': { area: 'knowledge', level: 'view' },
-  '/test-channel': { area: 'inbox', level: 'edit' },
-  '/widget-demo': { area: 'inbox', level: 'view' },
+};
+
+/** Pages without a sidebar entry of their own highlight the entry they are reached from. */
+const NAV_ALSO_ACTIVE: Record<string, string[]> = {
+  '/settings/knowledge': ['/tools/md-generator'],
+  '/settings/channels': ['/test-channel'],
 };
 
 /** Tab routes of the Einstellungen hub — drive the hub's active state + visibility. */
@@ -276,12 +117,163 @@ function navItemVisible(access: MemberAccess | null, href: string): boolean {
 
 type OrgOption = { id: string; name: string };
 
-function SidebarAccount({ collapsed, org }: { collapsed: boolean; org: string | null }) {
-  const router = useRouter();
+/**
+ * Sidebar head: logo mark + name of the active organisation. With several
+ * memberships it is a button that opens the organisation list; with one it is
+ * a plain link to the inbox.
+ */
+function OrgSwitcher({
+  orgs,
+  activeOrgId,
+  activeName,
+  pathname,
+  homeHref,
+}: {
+  orgs: OrgOption[];
+  activeOrgId: string;
+  activeName: string;
+  pathname: string;
+  homeHref: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss<HTMLDivElement>(open, setOpen);
+
+  const brand = (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className="app-org-logo" src="/brand/icon.svg" alt="" />
+      <span className="app-org-name">{activeName}</span>
+    </>
+  );
+
+  if (orgs.length <= 1) {
+    return (
+      <Link href={homeHref} className="app-org" aria-label={`${activeName} — zur Inbox`}>
+        {brand}
+      </Link>
+    );
+  }
+
+  return (
+    <div className="app-org-wrap" ref={ref}>
+      <button
+        type="button"
+        className="app-org"
+        aria-expanded={open}
+        aria-controls="app-org-list"
+        aria-label={`Organisation wechseln, aktiv: ${activeName}`}
+        title="Organisation wechseln"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {brand}
+        <span className="app-org-chevron">
+          <Icon name="chevronDown" />
+        </span>
+      </button>
+      <div id="app-org-list" className="menu-pop app-pop app-pop--org" hidden={!open}>
+        {orgs.map((option) => (
+          <Link
+            key={option.id}
+            href={`${pathname}?org=${option.id}`}
+            className="menu-item"
+            aria-current={option.id === activeOrgId ? 'true' : undefined}
+            onClick={() => setOpen(false)}
+          >
+            <span className="menu-label">{option.name}</span>
+            {option.id === activeOrgId ? <Icon name="check" /> : null}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sidebar foot: one row (avatar, e-mail, role). It opens the account menu with
+ * the colour scheme, the collapse toggle and sign-out. The menu stays mounted
+ * while closed so ThemeToggle keeps following the OS scheme in 'auto'.
+ */
+function AccountMenu({
+  email,
+  roleLabel,
+  collapsed,
+  onToggleCollapse,
+}: {
+  email: string;
+  roleLabel: string;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss<HTMLDivElement>(open, setOpen);
+  const initial = (email.trim()[0] ?? 'Z').toUpperCase();
+
+  return (
+    <div className="app-account-wrap" ref={ref}>
+      <div id="app-account-menu" className="menu-pop app-pop app-pop--account" hidden={!open}>
+        <div className="app-pop-head">{email || '—'}</div>
+        <div className="app-pop-row">
+          <span>Design</span>
+          <ThemeToggle />
+        </div>
+        <button
+          type="button"
+          className="menu-item"
+          onClick={() => {
+            onToggleCollapse();
+            setOpen(false);
+          }}
+        >
+          <Icon name="collapse" />
+          <span className="menu-label">
+            {collapsed ? 'Seitenleiste ausklappen' : 'Seitenleiste einklappen'}
+          </span>
+        </button>
+        <form action={signOut}>
+          <button type="submit" className="menu-item">
+            <Icon name="signout" />
+            <span className="menu-label">Abmelden</span>
+          </button>
+        </form>
+      </div>
+      <button
+        type="button"
+        className="app-account"
+        aria-expanded={open}
+        aria-controls="app-account-menu"
+        aria-label={`Konto-Menü: ${email}`}
+        title={email}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="app-account-avatar">{initial}</span>
+        <span className="app-account-meta">
+          <span className="app-account-email">{email || '—'}</span>
+          <span className="app-account-role">{roleLabel}</span>
+        </span>
+        <span className="app-account-more">
+          <Icon name="more" />
+        </span>
+      </button>
+    </div>
+  );
+}
+
+function Sidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const org = searchParams.get('org');
+  const [collapsed, setCollapsed] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [memberAccess, setMemberAccess] = useState<MemberAccess | null>(null);
   const [email, setEmail] = useState<string>('');
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
 
+  useEffect(() => {
+    const stored = localStorage.getItem('zendori-nav-collapsed');
+    if (stored !== null) setCollapsed(stored === '1');
+  }, []);
+
+  // Account e-mail + the organisations this user belongs to (org switcher).
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
     let active = true;
@@ -307,58 +299,6 @@ function SidebarAccount({ collapsed, org }: { collapsed: boolean; org: string | 
     return () => {
       active = false;
     };
-  }, []);
-
-  const activeOrgId = (org && orgs.some((o) => o.id === org) ? org : orgs[0]?.id) ?? '';
-  const activeOrg = orgs.find((o) => o.id === activeOrgId);
-  const initial = (email.trim()[0] ?? 'Z').toUpperCase();
-
-  return (
-    <div className="app-sidebar-footer">
-      {orgs.length > 1 && !collapsed ? (
-        <select
-          className="app-orgswitch"
-          aria-label="Organisation wechseln"
-          value={activeOrgId}
-          onChange={(e) => router.push(`${pathname}?org=${e.target.value}`)}
-        >
-          {orgs.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      <div className="app-account" title={email}>
-        <span className="app-account-avatar">{initial}</span>
-        <span className="app-account-meta">
-          <span className="app-account-email">{email || '—'}</span>
-          <span className="app-account-org">{activeOrg?.name ?? 'Zendori'}</span>
-        </span>
-      </div>
-      <div className="app-footer-actions">
-        <form action={signOut} style={{ flex: 1, display: 'flex' }}>
-          <button className="app-signout" type="submit" title="Abmelden">
-            <Icon name="signout" />
-            <span className="app-signout-label">Abmelden</span>
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function Sidebar() {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const org = searchParams.get('org');
-  const [collapsed, setCollapsed] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [memberAccess, setMemberAccess] = useState<MemberAccess | null>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem('zendori-nav-collapsed');
-    if (stored !== null) setCollapsed(stored === '1');
   }, []);
 
   // Platform-admin check: the self-select RLS policy returns the user's own row
@@ -429,114 +369,74 @@ function Sidebar() {
     if (href === '/settings') {
       return pathname === '/settings' || SETTINGS_TAB_ROUTES.some((r) => pathname.startsWith(r));
     }
-    return pathname.startsWith(href);
+    return (
+      pathname.startsWith(href) ||
+      (NAV_ALSO_ACTIVE[href] ?? []).some((other) => pathname.startsWith(other))
+    );
   };
+
+  const activeOrgId = (org && orgs.some((o) => o.id === org) ? org : orgs[0]?.id) ?? '';
+  const activeOrgName = orgs.find((o) => o.id === activeOrgId)?.name ?? 'Zendori';
+  const adminActive = pathname.startsWith('/admin');
 
   return (
     <aside className={`app-sidebar${collapsed ? ' app-sidebar--collapsed' : ''}`}>
-      <Link href={withOrg('/inbox')} className="app-brand" aria-label="Zendori — zur Inbox">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          className="app-brand-wordmark app-brand-wordmark--onlight"
-          src="/brand/logo-onlight.svg"
-          alt="Zendori"
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          className="app-brand-wordmark app-brand-wordmark--ondark"
-          src="/brand/logo-ondark.svg"
-          alt="Zendori"
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="app-brand-icon" src="/brand/icon.svg" alt="Zendori" />
-      </Link>
+      <OrgSwitcher
+        orgs={orgs}
+        activeOrgId={activeOrgId}
+        activeName={activeOrgName}
+        pathname={pathname}
+        homeHref={withOrg('/inbox')}
+      />
 
       <nav className="app-nav" aria-label="Hauptnavigation">
-        {NAV.map((section, i) => (
-          <div key={section.title ?? `sec-${i}`}>
-            {section.title ? <div className="app-nav-section">{section.title}</div> : null}
-            {section.items.filter((item) => navItemVisible(memberAccess, item.href)).map((item) => (
-              <Link
-                key={item.href}
-                href={withOrg(item.href)}
-                className={`app-nav-item${isActive(item.href) ? ' app-nav-item--active' : ''}`}
-                title={item.label}
-                aria-current={isActive(item.href) ? 'page' : undefined}
-              >
-                <span className="app-nav-icon">
-                  <Icon name={item.icon} />
-                </span>
-                <span className="app-nav-label">{item.label}</span>
-              </Link>
-            ))}
-          </div>
-        ))}
+        {NAV.map((section, i) => {
+          const items = section.items.filter((item) => navItemVisible(memberAccess, item.href));
+          if (items.length === 0) return null;
+          return (
+            <div className="app-nav-group" key={section.title ?? `sec-${i}`}>
+              {section.title ? <div className="app-nav-section">{section.title}</div> : null}
+              {items.map((item) => (
+                <Link
+                  key={item.href}
+                  href={withOrg(item.href)}
+                  className={`app-nav-item${isActive(item.href) ? ' app-nav-item--active' : ''}`}
+                  title={item.label}
+                  aria-current={isActive(item.href) ? 'page' : undefined}
+                >
+                  <span className="app-nav-icon">
+                    <Icon name={item.icon} />
+                  </span>
+                  <span className="app-nav-label">{item.label}</span>
+                </Link>
+              ))}
+            </div>
+          );
+        })}
         {isAdmin ? (
-          <div>
+          <div className="app-nav-group">
             <div className="app-nav-section">Zendori</div>
             <Link
-              href="/admin/users"
-              className={`app-nav-item${pathname.startsWith('/admin/users') || pathname === '/admin' ? ' app-nav-item--active' : ''}`}
-              title="Admin"
-              aria-current={pathname.startsWith('/admin/users') ? 'page' : undefined}
+              href="/admin"
+              className={`app-nav-item${adminActive ? ' app-nav-item--active' : ''}`}
+              title="Plattform"
+              aria-current={adminActive ? 'page' : undefined}
             >
               <span className="app-nav-icon">
                 <Icon name="shield" />
               </span>
-              <span className="app-nav-label">Admin</span>
-            </Link>
-            <Link
-              href="/admin/phone-numbers"
-              className={`app-nav-item${pathname.startsWith('/admin/phone-numbers') ? ' app-nav-item--active' : ''}`}
-              title="Nummern"
-              aria-current={pathname.startsWith('/admin/phone-numbers') ? 'page' : undefined}
-            >
-              <span className="app-nav-icon">
-                <Icon name="phone" />
-              </span>
-              <span className="app-nav-label">Nummern</span>
-            </Link>
-            <Link
-              href="/admin/billing"
-              className={`app-nav-item${pathname.startsWith('/admin/billing') ? ' app-nav-item--active' : ''}`}
-              title="Abrechnung"
-              aria-current={pathname.startsWith('/admin/billing') ? 'page' : undefined}
-            >
-              <span className="app-nav-icon">
-                <Icon name="billing" />
-              </span>
-              <span className="app-nav-label">Abrechnung</span>
-            </Link>
-            <Link
-              href="/admin/pricing"
-              className={`app-nav-item${pathname.startsWith('/admin/pricing') ? ' app-nav-item--active' : ''}`}
-              title="Preise & Pakete"
-              aria-current={pathname.startsWith('/admin/pricing') ? 'page' : undefined}
-            >
-              <span className="app-nav-icon">
-                <Icon name="package" />
-              </span>
-              <span className="app-nav-label">Preise & Pakete</span>
+              <span className="app-nav-label">Plattform</span>
             </Link>
           </div>
         ) : null}
       </nav>
 
-      <SidebarAccount collapsed={collapsed} org={org} />
-      <div style={{ padding: '0 0.6rem 0.7rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <ThemeToggle />
-        <button
-          className="app-collapse-btn"
-          type="button"
-          onClick={toggle}
-          style={{ width: '100%' }}
-          aria-label={collapsed ? 'Navigation ausklappen' : 'Navigation einklappen'}
-          title={collapsed ? 'Ausklappen' : 'Einklappen'}
-        >
-          <Icon name="chevron" />
-          <span className="app-signout-label">Einklappen</span>
-        </button>
-      </div>
+      <AccountMenu
+        email={email}
+        roleLabel={memberAccess ? ORG_ROLE_LABELS[memberAccess.role] : ''}
+        collapsed={collapsed}
+        onToggleCollapse={toggle}
+      />
     </aside>
   );
 }

@@ -21,6 +21,7 @@ import {
 import { canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
+import PageHeader from '@/components/ui/PageHeader';
 
 type KbRow = {
   id: string;
@@ -406,14 +407,22 @@ export default async function KnowledgePage({
 
   return (
     <div className="shell">
-      <div className="page-head">
-        <h1>Wissensdatenbank</h1>
-        <p>
-          Das Wissen von {orgName}, gebündelt in Datenbanken: Quellen werden im Hintergrund
-          zerlegt und als Embeddings indiziert. Welche Datenbanken ein Agent nutzt, legst du unter
-          Einstellungen → Agenten fest.
-        </p>
-      </div>
+      <PageHeader
+        title="Wissensdatenbank"
+        subtitle={
+          <>
+            Das Wissen von {orgName}, gebündelt in Datenbanken: Quellen werden im Hintergrund
+            zerlegt und als Embeddings indiziert. Welche Datenbanken ein Agent nutzt, legst du
+            unter Einstellungen → Agenten fest.
+          </>
+        }
+        actions={
+          // former sidebar entry "MD-Generator" (needs the same 'knowledge' view right)
+          <Link className="ghost" href={`/tools/md-generator?org=${orgId}`}>
+            MD-Generator
+          </Link>
+        }
+      />
 
       <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
 

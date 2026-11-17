@@ -1,7 +1,9 @@
 /* ============================================================================
-   Zendori app design system — matches the Zendori website
-   Light · Inter · teal brand (#0bb8ba/#0895a1) with a teal→blue signature
-   gradient · slate neutrals · very rounded · soft teal-tinted shadows
+   Zendori app design system — "Ruhige Arbeitsfläche" (docs/design-redesign.md)
+   Inter · flat surfaces separated by 1px lines · dark teal accent (#0b7480)
+   · slate neutrals · radii 6/8/12 · shadows only for overlays
+   Stage 1 of the redesign: tokens + base elements. Rules further down that
+   still use the legacy tokens are migrated page by page in stages 2-7.
    ========================================================================== */
 
 *,
@@ -15,7 +17,97 @@
 :root {
   color-scheme: light;
 
-  /* --- brand (teal ramp, from the website) --- */
+  /* --- surfaces & lines --- */
+  --bg: #ffffff; /* app ground */
+  --surface: #ffffff; /* content, drawers, fields */
+  --surface-sunken: #f8fafc; /* sidebar, callouts, table hover */
+  --surface-2: #f1f5f9; /* hover, selection, neutral badges */
+  --border: #e2e8f0; /* separators */
+  --border-strong: #cbd5e1; /* field + button borders */
+
+  /* --- text --- */
+  --ink: #0f172a; /* titles, values */
+  --text: #334155; /* body */
+  --text-muted: #5b677a; /* help + meta; >= 4.5:1 on --bg, --surface-sunken, --surface-2 */
+  --text-subtle: #94a3b8; /* placeholders + disabled icons only, never readable text */
+
+  /* --- accent --- */
+  --primary: #0b7480; /* primary button, links, active markers; white on it = 5.5:1 */
+  --primary-strong: #105e69; /* hover */
+  --primary-soft: #e6f6f5; /* accent surface */
+  --on-primary: #ffffff;
+  --link: var(--primary);
+
+  /* --- status: always a pair of text colour + tint --- */
+  --info: #1d4ed8;
+  --info-tint: #eff6ff;
+  --success: #047857;
+  --success-tint: #ecfdf5;
+  --warn: #b45309;
+  --warn-tint: #fffbeb;
+  --warn-border: #fde68a;
+  --danger: #be123c;
+  --danger-tint: #fff1f2;
+  --danger-border: #fecdd3;
+
+  /* --- channel colours: channel marks and channel badges only --- */
+  --ch-email: #0b7480;
+  --ch-email-tint: #e0f5f4;
+  --ch-form: #1d4ed8;
+  --ch-form-tint: #dbeafe;
+  --ch-voice: #6d28d9;
+  --ch-voice-tint: #ede9fe;
+  --ch-whatsapp: #15803d;
+  --ch-whatsapp-tint: #dcfce7;
+  --ch-chat: #c2410c;
+  --ch-chat-tint: #ffedd5;
+  --hubspot: #b93815; /* 'An HubSpot gesendet' — HubSpot orange */
+  --hubspot-tint: #fff1ec;
+  --hubspot-border: #ffd3c2;
+
+  /* --- type scale (weights: 400, 500, 600 only) --- */
+  --fs-title: 20px; /* page title, 600 */
+  --lh-title: 28px;
+  --fs-heading: 16px; /* section, pane and drawer titles, 600 */
+  --lh-heading: 24px;
+  --fs-body: 14px; /* text, fields, buttons */
+  --lh-body: 20px;
+  --fs-small: 13px; /* secondary + help text, table cells */
+  --fs-meta: 12px; /* badges, table head, timestamps */
+  --lh-meta: 16px;
+
+  /* --- typography (next/font sets --font-inter on <html>) --- */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* --- shape --- */
+  --r-sm: 6px; /* badge, chip */
+  --r: 8px; /* button, field, nav item */
+  --r-lg: 12px; /* option group, message, callout */
+  --r-full: 999px; /* avatar, switch */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* --- depth: lines on the page, a shadow only for what floats above it --- */
+  --shadow-pop: 0 0 0 1px rgb(15 23 42 / 0.06), 0 12px 32px rgb(15 23 42 / 0.14);
+  --ring: 0 0 0 3px rgb(11 116 128 / 0.25);
+  --scrim: rgb(15 23 42 / 0.32); /* behind a drawer */
+  --switch-off: #8492a6; /* switch track + option mark when off; 3:1 on --surface */
+
+  /* --- sidebar --- */
+  --sidebar-text: #475569; /* idle nav + sub-nav labels */
+  --sidebar-w: 224px;
+  --sidebar-w-collapsed: 56px;
+
+  /* --- legacy names, still referenced by rules that are not migrated yet.
+         Remove in stage 8 (docs/design-redesign.md). --- */
   --brand-50: #e8fffb;
   --brand-100: #c8fff6;
   --brand-200: #8df4eb;
@@ -27,118 +119,89 @@
   --brand-800: #105e69;
   --brand-900: #124f58;
   --blue-600: #2563eb;
-  --brand-gradient: linear-gradient(100deg, var(--brand-500) 0%, var(--blue-600) 100%);
-
-  /* --- neutrals (slate) --- */
-  --bg: #f8fafc;
-  --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --ink: #0f172a;
-  --text: #334155;
-  --text-muted: #64748b;
-  --text-subtle: #94a3b8;
-
-  /* --- semantic --- */
-  --primary: var(--brand-500);
-  --primary-strong: var(--brand-600);
-  --link: var(--brand-700);
-  --success: #059669;
-  --success-tint: #ecfdf5;
-  --success-ink: #047857;
-  --info: var(--blue-600);
-  --info-tint: #eff6ff;
-  --info-ink: #1d4ed8;
-  --warn: #c2680a;
-  --warn-tint: #fff7ed;
-  --danger: #e11d48;
-  --danger-tint: #fff1f2;
-  --danger-border: #fecdd3;
-
-  /* --- shape / depth --- */
-  --r-sm: 10px;
-  --r: 12px;
-  --r-lg: 16px;
-  --r-xl: 24px;
-  --r-pill: 999px;
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 14px 32px rgb(15 23 42 / 0.05);
-  --shadow-soft: 0 24px 80px rgb(8 149 161 / 0.14);
-  --ring: 0 0 0 4px rgb(11 184 186 / 0.16);
-
-  /* --- typography (next/font sets --font-inter on <html>) --- */
-  --font-sans:
-    var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    Roboto, Helvetica, Arial, sans-serif;
-  --font-display: var(--font-sans);
-
-  /* --- sidebar (light) --- */
-  --sidebar-bg: #ffffff;
-  --sidebar-text: #475569;
-  --sidebar-text-strong: #0f172a;
-  --sidebar-hover: #f1f5f9;
-  --sidebar-active-bg: var(--brand-50);
-  --sidebar-active-text: var(--brand-700);
-  --sidebar-border: #e2e8f0;
-  --sidebar-w: 250px;
-  --sidebar-w-collapsed: 74px;
+  --brand-gradient: var(--primary); /* was the teal→blue gradient */
+  --success-ink: var(--success);
+  --info-ink: var(--info);
+  --r-xl: var(--r-lg);
+  --r-pill: var(--r);
+  --shadow-sm: none;
+  --shadow-card: none;
+  --shadow-soft: var(--shadow-pop);
 }
 
 /* ---------------------------------------------------------------------------
    Dark theme. A no-flash inline script (see layout.tsx) resolves the stored
    preference ('auto' | 'light' | 'dark') to an explicit data-theme before
    paint, so only this one dark override block is needed. 'auto' follows the OS.
-   Brand teal/blue stay; neutrals + tints + shadows flip.
+   Same token names, only the values flip. Starting values — to be checked on
+   screen in the stage-8 dark pass.
    --------------------------------------------------------------------------- */
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  /* neutrals */
-  --bg: #0b1220;
-  --surface: #121c2e;
-  --surface-2: #1a2540;
-  --border: #263349;
+  /* surfaces & lines */
+  --bg: #0f1726;
+  --surface: #0f1726;
+  --surface-sunken: #0b1220;
+  --surface-2: #1a2438;
+  --border: #243044;
   --border-strong: #35435f;
+
+  /* text */
   --ink: #f1f5f9;
   --text: #cbd5e1;
-  --text-muted: #93a3b8;
+  --text-muted: #9aa8bc;
   --text-subtle: #6b7a91;
 
-  /* accent tints (used as active/selected/badge backgrounds) → dark teal wash */
+  /* accent: bright teal carries dark text */
+  --primary: #2cc7c2;
+  --primary-strong: #5eead4;
+  --primary-soft: rgb(45 199 194 / 0.14);
+  --on-primary: #04252a;
+
+  /* status */
+  --info: #93c5fd;
+  --info-tint: rgb(59 130 246 / 0.16);
+  --success: #6ee7b7;
+  --success-tint: rgb(16 185 129 / 0.14);
+  --warn: #fbbf24;
+  --warn-tint: rgb(245 158 11 / 0.14);
+  --warn-border: rgb(245 158 11 / 0.4);
+  --danger: #fda4af;
+  --danger-tint: rgb(244 63 94 / 0.16);
+  --danger-border: rgb(244 63 94 / 0.45);
+
+  /* channel colours */
+  --ch-email: #5eead4;
+  --ch-email-tint: rgb(45 199 194 / 0.16);
+  --ch-form: #93c5fd;
+  --ch-form-tint: rgb(59 130 246 / 0.18);
+  --ch-voice: #c4b5fd;
+  --ch-voice-tint: rgb(139 92 246 / 0.2);
+  --ch-whatsapp: #86efac;
+  --ch-whatsapp-tint: rgb(34 197 94 / 0.16);
+  --ch-chat: #fdba74;
+  --ch-chat-tint: rgb(249 115 22 / 0.18);
+  --hubspot: #fdba9f;
+  --hubspot-tint: rgb(255 122 89 / 0.18);
+  --hubspot-border: rgb(255 122 89 / 0.45);
+
+  /* depth */
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.06), 0 12px 32px rgb(0 0 0 / 0.5);
+  --ring: 0 0 0 3px rgb(45 199 194 / 0.35);
+  --scrim: rgb(0 0 0 / 0.55);
+  --switch-off: #64748b;
+
+  /* sidebar */
+  --sidebar-text: #93a3b8;
+
+  /* legacy accent tints (active/selected backgrounds) → dark teal wash */
   --brand-50: rgba(20, 212, 208, 0.13);
   --brand-100: rgba(20, 212, 208, 0.2);
   --brand-200: #1c5f63;
   --brand-500: #16cfca;
   --brand-600: #2ad6d0;
   --brand-700: #5eead4;
-  --link: #5eead4;
-
-  /* semantic */
-  --success-tint: rgba(5, 150, 105, 0.16);
-  --success-ink: #6ee7b7;
-  --info-tint: rgba(37, 99, 235, 0.18);
-  --info-ink: #93c5fd;
-  --warn-tint: rgba(194, 104, 10, 0.2);
-  --warn: #fbbf24;
-  --danger: #fca5a5;
-  --danger-tint: rgba(225, 29, 72, 0.16);
-  --danger-border: #7f1d2b;
-
-  /* depth: shadows read as darkness, not light bloom */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 32px rgba(0, 0, 0, 0.45);
-  --shadow-soft: 0 24px 80px rgba(0, 0, 0, 0.55);
-  --ring: 0 0 0 4px rgba(20, 212, 208, 0.32);
-
-  /* sidebar */
-  --sidebar-bg: #0d1626;
-  --sidebar-text: #93a3b8;
-  --sidebar-text-strong: #f1f5f9;
-  --sidebar-hover: #1a2540;
-  --sidebar-active-bg: rgba(20, 212, 208, 0.15);
-  --sidebar-active-text: #5eead4;
-  --sidebar-border: #263349;
 }
 
 /* Class-level dark tweaks for a few hard-coded light values. */
@@ -161,9 +224,10 @@ html {
 
 body {
   font-family: var(--font-sans);
+  font-size: var(--fs-body);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.55;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -174,6 +238,7 @@ h3,
 h4 {
   font-family: var(--font-display);
   color: var(--ink);
+  font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.011em;
   text-wrap: balance;
@@ -188,17 +253,22 @@ a:hover {
 }
 
 ::selection {
-  background: rgb(71 227 220 / 0.35);
+  background: rgb(11 116 128 / 0.22);
 }
 
+/* One focus ring everywhere. Controls keep their own radius; only bare links
+   get a small one so the ring does not look boxy. */
 :focus-visible {
   outline: none;
   box-shadow: var(--ring);
+}
+a:focus-visible {
   border-radius: var(--r-sm);
 }
 
 /* ============================================================================
-   App shell — collapsible left navigation (light)
+   App shell — sidebar (redesign stage 2)
+   org switcher (top) · nav groups · account menu (bottom)
    ========================================================================== */
 
 .app-shell {
@@ -209,68 +279,86 @@ a:hover {
 .app-sidebar {
   flex-shrink: 0;
   width: var(--sidebar-w);
-  background: var(--sidebar-bg);
+  background: var(--surface-sunken);
   color: var(--sidebar-text);
   position: sticky;
   top: 0;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--sidebar-border);
+  gap: 8px;
+  padding: 12px;
+  border-right: 1px solid var(--border);
   transition: width 0.18s ease;
   overflow: hidden;
 }
 .app-sidebar--collapsed {
   width: var(--sidebar-w-collapsed);
+  padding: 12px 8px;
 }
 
-.app-brand {
+/* --- org switcher --- */
+.app-org-wrap {
+  flex-shrink: 0;
+}
+.app-org {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  height: 68px;
-  padding: 0 1.15rem;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.app-org:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.app-org-logo {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--sidebar-border);
+  width: 28px;
+  height: 21px;
+  object-fit: contain;
 }
-.app-brand img.app-brand-wordmark {
-  height: 24px;
-  width: auto;
+.app-org-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.app-brand img.app-brand-icon {
-  height: 30px;
-  width: 30px;
+.app-org-chevron {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
 }
-.app-sidebar:not(.app-sidebar--collapsed) .app-brand-icon {
-  display: none;
-}
-.app-sidebar--collapsed .app-brand {
-  justify-content: center;
-  padding: 0;
-}
-.app-sidebar--collapsed .app-brand-wordmark {
-  display: none;
-}
-/* Wordmark ink must contrast with the sidebar ground: dark-ink mark on the
-   light theme, white mark on the dark theme. Show exactly one per theme. */
-.app-brand-wordmark--ondark {
-  display: none;
-}
-:root[data-theme='dark'] .app-brand-wordmark--onlight {
-  display: none;
-}
-:root[data-theme='dark'] .app-sidebar:not(.app-sidebar--collapsed) .app-brand-wordmark--ondark {
-  display: block;
+.app-org-chevron svg {
+  width: 14px;
+  height: 14px;
 }
 
+/* --- navigation --- */
 .app-nav {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.75rem 0.7rem;
+  /* 3px of room so focus rings are not clipped by the scroll container */
+  margin: 0 -3px;
+  padding: 8px 3px 3px;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 20px;
 }
 .app-nav::-webkit-scrollbar {
   width: 6px;
@@ -279,32 +367,29 @@ a:hover {
   background: var(--border);
   border-radius: 999px;
 }
-
+.app-nav-group {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .app-nav-section {
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-subtle);
-  padding: 1rem 0.75rem 0.4rem;
+  padding: 0 10px 6px;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  color: var(--text-muted);
   white-space: nowrap;
 }
-.app-sidebar--collapsed .app-nav-section {
-  text-align: center;
-  padding: 0.85rem 0 0.2rem;
-  font-size: 0.58rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .app-nav-item {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.58rem 0.75rem;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
   border-radius: var(--r);
   color: var(--sidebar-text);
-  font-size: 0.9rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
@@ -313,69 +398,69 @@ a:hover {
     color 0.12s ease;
 }
 .app-nav-item:hover {
-  background: var(--sidebar-hover);
-  color: var(--sidebar-text-strong);
+  background: var(--surface-2);
+  color: var(--ink);
   text-decoration: none;
 }
-.app-nav-item--active {
-  background: var(--sidebar-active-bg);
-  color: var(--sidebar-active-text);
-}
-.app-nav-item--active .app-nav-icon {
-  color: var(--brand-600);
+.app-nav-item--active,
+.app-nav-item--active:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink);
 }
 .app-nav-icon {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   display: grid;
   place-items: center;
-  color: var(--text-subtle);
 }
-.app-nav-item:hover .app-nav-icon {
-  color: var(--sidebar-text-strong);
+.app-nav-item--active .app-nav-icon {
+  color: var(--primary);
 }
-.app-nav-icon svg {
-  width: 19px;
-  height: 19px;
-}
-.app-sidebar--collapsed .app-nav-item {
-  justify-content: center;
-  padding: 0.58rem 0;
-}
-.app-sidebar--collapsed .app-nav-label {
-  display: none;
+.app-nav-label {
+  flex: 1;
+  min-width: 0;
 }
 
-.app-sidebar-footer {
+/* --- account row + menu --- */
+.app-account-wrap {
   flex-shrink: 0;
-  border-top: 1px solid var(--sidebar-border);
-  padding: 0.7rem 0.7rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
-
 .app-account {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.35rem 0.5rem;
-  min-width: 0;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.app-account:hover {
+  background: var(--surface-2);
 }
 .app-account-avatar {
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--r-pill);
-  background: var(--brand-gradient);
-  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  color: var(--text);
   display: grid;
   place-items: center;
-  font-weight: 700;
-  font-size: 0.85rem;
+  font-size: var(--fs-meta);
+  font-weight: 600;
 }
 .app-account-meta {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -383,80 +468,79 @@ a:hover {
 }
 .app-account-email {
   color: var(--ink);
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: var(--fs-small);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.app-account-org {
+.app-account-role {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-meta);
+}
+.app-account-more {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+/* Popovers of the sidebar: .menu-pop (UI kit) + a fixed place. position: fixed,
+   so the sidebar's overflow: hidden (needed for the width transition) does not
+   clip them — also when collapsed. */
+.app-pop {
+  left: 12px;
+  width: 248px;
+}
+.app-pop--org {
+  top: 60px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+.app-pop--account {
+  bottom: 68px;
+}
+.app-pop-head {
+  margin-bottom: 4px;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-small);
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.app-pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 10px;
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+.app-pop-row .theme-toggle {
+  width: 116px;
+}
+
+/* --- collapsed: icon rail --- */
+.app-sidebar--collapsed .app-org-name,
+.app-sidebar--collapsed .app-org-chevron,
+.app-sidebar--collapsed .app-nav-section,
+.app-sidebar--collapsed .app-nav-label,
 .app-sidebar--collapsed .app-account-meta,
-.app-sidebar--collapsed .app-orgswitch,
-.app-sidebar--collapsed .app-signout-label {
+.app-sidebar--collapsed .app-account-more {
   display: none;
+}
+.app-sidebar--collapsed .app-org,
+.app-sidebar--collapsed .app-nav-item {
+  justify-content: center;
+  padding: 0;
 }
 .app-sidebar--collapsed .app-account {
   justify-content: center;
-  padding: 0.35rem 0;
-}
-
-.app-orgswitch {
-  width: 100%;
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  padding: 0.45rem 0.55rem;
-  font-size: 0.82rem;
-  font-family: inherit;
-}
-
-.app-footer-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-.app-signout,
-.app-collapse-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  background: var(--surface);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 0.5rem 0.55rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.app-signout {
-  flex: 1;
-}
-.app-signout:hover,
-.app-collapse-btn:hover {
-  background: var(--brand-50);
-  color: var(--brand-700);
-  border-color: var(--brand-200);
-}
-.app-collapse-btn svg {
-  width: 16px;
-  height: 16px;
-  transition: transform 0.18s ease;
-}
-.app-sidebar--collapsed .app-collapse-btn svg {
-  transform: rotate(180deg);
-}
-.app-sidebar--collapsed .app-footer-actions {
-  flex-direction: column;
+  padding: 6px 0;
 }
 
 /* theme toggle (auto / light / dark segmented control) */
@@ -465,7 +549,7 @@ a:hover {
   gap: 2px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-pill);
+  border-radius: var(--r);
   padding: 3px;
 }
 .theme-opt {
@@ -475,7 +559,7 @@ a:hover {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   padding: 0.35rem;
   cursor: pointer;
   transition:
@@ -483,19 +567,15 @@ a:hover {
     color 0.12s ease;
 }
 .theme-opt:hover {
-  color: var(--sidebar-text-strong);
+  color: var(--ink);
 }
 .theme-opt--active {
   background: var(--surface);
-  color: var(--brand-600);
-  box-shadow: var(--shadow-sm);
+  color: var(--primary);
 }
 .theme-opt svg {
   width: 16px;
   height: 16px;
-}
-.app-sidebar--collapsed .theme-toggle {
-  flex-direction: column;
 }
 
 .app-main {
@@ -587,40 +667,40 @@ main.centered {
 }
 
 label {
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: var(--fs-small);
+  font-weight: 500;
   color: var(--ink);
   display: block;
-  margin-bottom: 0.35rem;
+  margin-bottom: 6px;
 }
 
 /* pseudo-labels (spans above code blocks / read-only values) — same weight as real labels */
 .field-label {
   display: block;
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: var(--fs-small);
+  font-weight: 500;
   color: var(--ink);
 }
 
 /* field help text below a control */
 .hint {
-  font-size: 0.8rem;
+  font-size: var(--fs-small);
   color: var(--text-muted);
-  margin-top: 0.35rem;
+  margin-top: 6px;
 }
 /* panel intro text below an h2 */
 .help {
-  font-size: 0.9rem;
+  font-size: var(--fs-small);
   color: var(--text-muted);
   margin-bottom: 1.25rem;
 }
 
-/* checkboxes & radios: brand accent, uniform size, aligned rows */
+/* checkboxes & radios: accent colour, uniform size, aligned rows */
 input[type='checkbox'],
 input[type='radio'] {
-  accent-color: var(--brand-600);
-  width: 1.05rem;
-  height: 1.05rem;
+  accent-color: var(--primary);
+  width: 16px;
+  height: 16px;
   margin: 0;
   flex-shrink: 0;
   cursor: pointer;
@@ -635,21 +715,22 @@ input[type='radio']:focus-visible {
 label.check-row {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  font-size: 0.9rem;
+  gap: 8px;
+  font-size: var(--fs-body);
   font-weight: 400;
   color: var(--text);
-  margin-bottom: 0.4rem;
+  margin-bottom: 6px;
   cursor: pointer;
 }
 
 /* time/date pickers: same skin as text fields, natural width (business hours rows) */
 input[type='time'],
 input[type='date'] {
-  padding: 0.5rem 0.65rem;
+  height: 36px;
+  padding: 0 10px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
-  font-size: 0.9rem;
+  font-size: var(--fs-body);
   font-family: inherit;
   color: var(--ink);
   background: var(--surface);
@@ -657,7 +738,7 @@ input[type='date'] {
 input[type='time']:focus,
 input[type='date']:focus {
   outline: none;
-  border-color: var(--brand-500);
+  border-color: var(--primary);
   box-shadow: var(--ring);
 }
 
@@ -671,18 +752,36 @@ input[type='number'],
 select,
 textarea {
   width: 100%;
-  padding: 0.65rem 0.85rem;
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
-  font-size: 0.95rem;
+  font-size: var(--fs-body);
   font-family: inherit;
   color: var(--ink);
   background: var(--surface);
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+/* single-line controls: one height (36px) for fields, selects and buttons */
+input[type='text'],
+input[type='email'],
+input[type='password'],
+input[type='tel'],
+input[type='url'],
+input[type='search'],
+input[type='number'],
+select {
+  height: 36px;
+  padding: 0 10px;
+}
+select[multiple],
+select[size] {
+  height: auto;
+  padding: 6px 10px;
 }
 textarea {
+  padding: 8px 10px;
+  line-height: 1.55;
   resize: vertical;
 }
 input::placeholder,
@@ -693,8 +792,15 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--brand-500);
+  border-color: var(--primary);
   box-shadow: var(--ring);
+}
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  cursor: not-allowed;
 }
 input[type='color'] {
   padding: 0.2rem;
@@ -706,108 +812,125 @@ button {
   font-family: inherit;
 }
 
+/* Buttons: 36px high, radius 8, 14/500. No gradient, no shadow, no hover lift.
+   New code uses <Button> (components/ui/Button.tsx) = .btn + .btn--{variant}.
+   Legacy class names, replaced page by page in stages 4-7:
+   .primary = primary · .ghost = secondary (outlined) · .danger = destructive.
+   A class-less submit button is a secondary button. */
+.btn,
 button.primary,
 a.primary,
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  background: var(--brand-gradient);
-  color: #fff;
-  border: none;
-  border-radius: var(--r-pill);
-  padding: 0.65rem 1.3rem;
-  font-size: 0.92rem;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgb(11 184 186 / 0.22);
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
-}
-button.primary:hover,
-a.primary:hover,
-.btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 12px 30px rgb(11 184 186 / 0.3);
-}
-a.primary,
-a.primary:hover {
-  color: #fff;
-  text-decoration: none;
-}
-button.primary:active {
-  transform: translateY(0);
-}
-button.primary:disabled {
-  opacity: 0.55;
-  cursor: default;
-  transform: none;
-  box-shadow: none;
-}
-
+.btn-primary,
 button.ghost,
-a.ghost {
+a.ghost,
+button.danger,
+button[type='submit']:not([class]) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--brand-200);
-  border-radius: var(--r-pill);
-  padding: 0.55rem 1.1rem;
-  font-size: 0.88rem;
-  font-weight: 600;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  box-shadow: var(--shadow-sm);
   transition:
     background 0.12s ease,
-    border-color 0.12s ease,
-    transform 0.12s ease;
+    border-color 0.12s ease;
 }
-button.ghost:hover,
-a.ghost:hover {
-  background: var(--brand-50);
-  border-color: var(--brand-300);
-  transform: translateY(-1px);
-}
+a.btn,
+a.btn:hover,
+a.primary,
+a.primary:hover,
 a.ghost,
 a.ghost:hover {
   text-decoration: none;
 }
-/* compact ghost for icon-only actions (↑ ↓ ⧉ ✕ rows) */
-button.ghost.ghost--icon {
-  padding: 0.3rem 0.55rem;
-  font-size: 0.85rem;
+.btn:disabled,
+button.primary:disabled,
+button.ghost:disabled,
+button.danger:disabled,
+button[type='submit']:not([class]):disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn svg {
+  flex-shrink: 0;
 }
 
+.btn--primary,
+button.primary,
+a.primary,
+.btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.btn--primary:hover:not(:disabled),
+button.primary:hover:enabled,
+a.primary:hover,
+.btn-primary:hover {
+  background: var(--primary-strong);
+  color: var(--on-primary);
+}
+
+.btn--secondary,
+button.ghost,
+a.ghost,
+button[type='submit']:not([class]) {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.btn--secondary:hover:not(:disabled),
+button.ghost:hover:enabled,
+a.ghost:hover,
+button[type='submit']:not([class]):hover:enabled {
+  background: var(--surface-sunken);
+}
+/* compact secondary for icon-only actions (↑ ↓ ⧉ ✕ rows) */
+button.ghost.ghost--icon {
+  height: 32px;
+  padding: 0 8px;
+  font-size: var(--fs-small);
+}
+
+/* no border, no fill: tertiary actions (Verwerfen, toolbar and icon buttons) */
+.btn--ghost {
+  background: transparent;
+  color: var(--text);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.btn--danger,
 button.danger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  background: var(--danger);
-  color: #fff;
-  border: none;
-  border-radius: var(--r-pill);
-  padding: 0.6rem 1.2rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    filter 0.12s ease,
-    transform 0.12s ease;
+  background: var(--surface);
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
-button.danger:hover {
-  filter: brightness(0.94);
-  transform: translateY(-1px);
+.btn--danger:hover:not(:disabled),
+button.danger:hover:enabled {
+  background: var(--danger-tint);
 }
-button.danger:disabled {
-  opacity: 0.55;
-  cursor: default;
-  transform: none;
+
+/* sizes: 32px only inside toolbars, tables and cards; square icon-only */
+.btn--sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--fs-small);
+}
+.btn--icon {
+  width: 36px;
+  padding: 0;
+}
+.btn--icon.btn--sm {
+  width: 32px;
 }
 
 /* --- KB drag-and-drop uploader --- */
@@ -910,21 +1033,681 @@ button.danger:disabled {
   color: var(--danger);
 }
 
+/* Callouts (become <Callout> in stage 3): .error = danger, .notice = neutral info */
+.error,
+.notice {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+  font-size: var(--fs-small);
+}
 .error {
   background: var(--danger-tint);
   color: var(--danger);
-  border: 1px solid var(--danger-border);
-  border-radius: var(--r);
-  padding: 0.75rem 0.95rem;
-  font-size: 0.88rem;
+  border-color: var(--danger-border);
 }
 .notice {
-  background: var(--brand-50);
-  color: var(--brand-700);
-  border: 1px solid var(--brand-200);
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+/* ============================================================================
+   UI kit (components/ui) — redesign stage 3, docs/design-redesign.md §4
+   The building blocks every page is composed of. Buttons live with the form
+   controls above; page head and sub-navigation follow further down.
+   ========================================================================== */
+
+/* --- Callout: inline message box (replaces .notice / .error) --- */
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  font-size: var(--fs-small);
+  color: var(--ink);
+}
+.callout-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+.callout-body {
+  flex: 1;
+  min-width: 0;
+}
+.callout-title {
+  font-weight: 600;
+}
+/* a 32px icon button must not make the box taller */
+.callout-action {
+  flex-shrink: 0;
+  margin: -6px -8px -6px 0;
+}
+.callout--success {
+  background: var(--success-tint);
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+}
+.callout--success .callout-icon {
+  color: var(--success);
+}
+.callout--warn {
+  background: var(--warn-tint);
+  border-color: var(--warn-border);
+}
+.callout--warn .callout-icon {
+  color: var(--warn);
+}
+.callout--danger {
+  background: var(--danger-tint);
+  border-color: var(--danger-border);
+}
+.callout--danger .callout-icon {
+  color: var(--danger);
+}
+
+/* stack of URL-driven banners (DismissibleBanners) */
+.banners {
+  display: grid;
+  gap: 8px;
+}
+
+/* --- Field: label above, help or error below --- */
+.field {
+  display: flex;
+  flex-direction: column;
+}
+.field-help,
+.field-error {
+  margin-top: 6px;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.field-error {
+  color: var(--danger);
+}
+input[aria-invalid='true'],
+select[aria-invalid='true'],
+textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+/* forms never grow wider than this */
+.form-narrow {
+  max-width: 720px;
+}
+
+/* --- Switch: <input type="checkbox" class="switch"> — pure CSS --- */
+input[type='checkbox'].switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--r-full);
+  background: var(--switch-off);
+  transition: background 0.12s ease;
+}
+input[type='checkbox'].switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  transition: transform 0.12s ease;
+}
+input[type='checkbox'].switch:checked {
+  background: var(--primary);
+}
+input[type='checkbox'].switch:checked::after {
+  transform: translateX(16px);
+}
+input[type='checkbox'].switch:focus-visible {
+  border-radius: var(--r-full);
+}
+input[type='checkbox'].switch:disabled {
+  opacity: 0.5;
+}
+
+/* --- OptionGroup: 2-6 explained alternatives in one outlined group --- */
+.option-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-body);
+  font-weight: 400;
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+.option:last-child {
+  border-bottom: 0;
+}
+.option:hover,
+.option:has(input:checked),
+.option--selected {
+  background: var(--surface-sunken);
+  text-decoration: none;
+}
+.option:has(input:disabled) {
+  cursor: not-allowed;
+}
+.option input {
+  margin-top: 2px;
+}
+/* the radio dot of link-mode options */
+.option-mark {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1.5px solid var(--switch-off);
+  border-radius: var(--r-full);
+}
+.option--selected .option-mark {
+  border: 5px solid var(--primary);
+}
+.option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.option-title {
+  font-weight: 500;
+  color: var(--ink);
+}
+.option-help {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+
+/* --- SettingRow: label + help left, control right, line below --- */
+.setting-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.setting-row-text label,
+.setting-row-label {
+  display: block;
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--ink);
+}
+.setting-row-text .field-help {
+  margin-top: 0;
+}
+.setting-row-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.setting-row-control input:not([type='checkbox']):not([type='radio']),
+.setting-row-control select {
+  width: auto;
+  min-width: 88px;
+}
+.setting-row-control input[type='number'] {
+  width: 96px;
+}
+
+/* --- Section: heading + content, separated by space only (replaces .panel) --- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.section + .section {
+  margin-top: var(--space-8);
+}
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.section-head-text {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.section-head h2 {
+  font-size: var(--fs-heading);
+  line-height: var(--lh-heading);
+}
+.section-head .field-help {
+  margin-top: 2px;
+}
+.section-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- PropertyList: label/value rows for side rails --- */
+.props {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-small);
+}
+.prop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+.prop:has(select, input, button) {
+  min-height: 44px;
+}
+.prop dt {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.prop dd {
+  min-width: 0;
+  color: var(--ink);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.prop select {
+  width: auto;
+  min-width: 150px;
+  height: 32px;
+  font-size: var(--fs-small);
+  font-weight: 500;
+}
+
+/* --- Tabs: underlined page tabs (links, or buttons with role="tab") --- */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 24px;
+}
+/* standalone tabs (not on a page head's bottom line) bring their own line */
+.tabs--line {
+  border-bottom: 1px solid var(--border);
+}
+.tabs > a,
+.tabs > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tabs > a:hover,
+.tabs > button:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+.tabs > [aria-current='page'],
+.tabs > [aria-selected='true'] {
+  border-bottom-color: var(--primary);
+  color: var(--ink);
+  font-weight: 600;
+}
+.tabs-count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* --- Toolbar above a table: search first, filters next, extras at the end --- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: var(--space-4);
+}
+.toolbar input[type='search'] {
+  width: 280px;
+  max-width: 100%;
+}
+.toolbar select {
+  width: auto;
+}
+.toolbar-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* wide tables scroll inside their own box */
+.table-wrap {
+  overflow-x: auto;
+}
+/* table cells: icon/avatar + title + sub line; actions column on the right */
+.cell-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.cell-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--ink);
+}
+.cell-sub {
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--text-muted);
+}
+.cell-actions {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* --- EmptyState --- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 48px 24px;
+  text-align: center;
+}
+.empty-title {
+  font-size: var(--fs-heading);
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-text {
+  max-width: 28rem;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.empty-action {
+  margin-top: 10px;
+}
+
+/* --- Avatar --- */
+.avatar {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  background: var(--border);
+  color: var(--text);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+.avatar--md {
+  width: 36px;
+  height: 36px;
+  font-size: var(--fs-small);
+}
+
+/* --- Channel mark: the only spot of channel colour next to plain text --- */
+.ch-icon {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.ch-icon--md {
+  width: 32px;
+  height: 32px;
   border-radius: var(--r);
-  padding: 0.75rem 0.95rem;
-  font-size: 0.88rem;
+}
+.ch-icon--email {
+  background: var(--ch-email-tint);
+  color: var(--ch-email);
+}
+.ch-icon--form {
+  background: var(--ch-form-tint);
+  color: var(--ch-form);
+}
+.ch-icon--voice {
+  background: var(--ch-voice-tint);
+  color: var(--ch-voice);
+}
+.ch-icon--whatsapp {
+  background: var(--ch-whatsapp-tint);
+  color: var(--ch-whatsapp);
+}
+.ch-icon--chat {
+  background: var(--ch-chat-tint);
+  color: var(--ch-chat);
+}
+
+/* --- Menu: "⋯" popover; also the surface of the sidebar popovers --- */
+.menu {
+  display: inline-flex;
+}
+.menu-pop {
+  position: fixed;
+  z-index: 50;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+}
+.menu-pop[hidden] {
+  display: none;
+}
+.menu-pop form {
+  display: contents;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-body);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.menu-item:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.menu-item svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.menu-item--danger,
+.menu-item--danger svg {
+  color: var(--danger);
+}
+.menu-item--danger:hover {
+  background: var(--danger-tint);
+}
+.menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Drawer: create/edit panel from the right, opened by the URL --- */
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+  cursor: default;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  width: 460px;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: drawer-in 0.18s ease-out;
+}
+/* the panel itself takes focus when it has no field — no ring around it */
+.drawer:focus-visible {
+  box-shadow: var(--shadow-pop);
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.drawer-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 56px;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-head h2 {
+  font-size: var(--fs-heading);
+  line-height: var(--lh-heading);
+}
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.drawer-foot {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+.drawer-foot-note {
+  flex: 1;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+
+/* --- Page types (docs/design-redesign.md §5) ---
+   <div class="page"> <PageHeader/> <div class="page-body">…</div> </div>
+   Detail with rail:  .page > PageHeader + .page-split > (.page-body + .page-rail)
+   Form pages:        .page-body.form-narrow children + .save-bar */
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.app-main .page > .page-head {
+  margin: 0;
+}
+.page-body {
+  padding: 24px 32px 48px;
+}
+.page-split {
+  flex: 1;
+  display: flex;
+}
+.page-split > .page-body {
+  flex: 1;
+  min-width: 0;
+}
+.page-rail {
+  flex: 0 0 320px;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+}
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.rail-section:last-child {
+  border-bottom: 0;
+}
+.rail-section > h2,
+.rail-section > h3 {
+  font-size: var(--fs-small);
+  line-height: var(--lh-body);
+}
+/* save bar of a form page: stays at the bottom edge while the form scrolls */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 32px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 /* ============================================================================
@@ -940,6 +1723,22 @@ button.danger:disabled {
 /* wide variant for two-column editors (form builder) */
 .shell--wide {
   max-width: 84rem;
+}
+
+/* Page frame inside the app chrome (redesign stage 2): pages are left-aligned.
+   The page head spans the full width with a line below; everything under it
+   keeps a readable maximum. Bare pages (/, /widget-demo) keep the centred
+   .shell above. Goes away when pages move to .page (stages 4-6). */
+.app-main .shell {
+  max-width: none;
+  margin: 0;
+  padding: 0 32px 48px;
+}
+.app-main .shell > :not(.page-head) {
+  max-width: 72rem;
+}
+.app-main .shell--wide > :not(.page-head) {
+  max-width: 96rem;
 }
 .shell > header {
   display: flex;
@@ -968,37 +1767,144 @@ button.danger:disabled {
   background: var(--brand-50);
 }
 
+/* Interim: a flat outlined box. Panels dissolve into sections separated by
+   lines as pages move to the new page types (stages 4-6). */
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: 1.75rem;
-  margin-bottom: 1.5rem;
-  box-shadow: var(--shadow-card);
+  border-radius: var(--r-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-6);
 }
 .panel h2 {
-  font-size: 1.2rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
+  font-size: var(--fs-heading);
+  line-height: var(--lh-heading);
+  font-weight: 600;
+  margin-bottom: var(--space-3);
 }
 
 /* ============================================================================
    Settings page head + channel/integration tile gallery
    ========================================================================== */
 
+/* Page head. Legacy markup is <div class="page-head"><h1/><p/></div>; the
+   <PageHeader> component (components/ui) adds .page-head--bar with breadcrumb,
+   badges, actions and tabs. */
 .page-head {
   margin-bottom: 1.75rem;
 }
 .page-head h1 {
-  font-size: 1.6rem;
-  font-weight: 800;
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 .page-head p {
-  margin-top: 0.35rem;
-  font-size: 0.95rem;
+  margin-top: 2px;
+  font-size: var(--fs-small);
   color: var(--text-muted);
   max-width: 44rem;
+}
+/* legacy heads that put a badge row right under the title (ticket detail) */
+.page-head h1 + div {
+  margin-top: 8px;
+}
+.app-main .page-head {
+  margin: 0 -32px 24px;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
+}
+.page-head--bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+.page-head-main {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.page-head-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.page-head-crumbs a {
+  color: var(--text-muted);
+}
+.page-head-crumbs [aria-current] {
+  color: var(--ink);
+}
+.page-head-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* tabs sit on the head's bottom line */
+.page-head-tabs {
+  flex: 1 1 100%;
+  margin-bottom: -20px;
+}
+
+/* Sub-navigation: the one allowed second level next to page tabs. Used by the
+   Plattform (admin) area now, by Einstellungen from stage 6. */
+.with-subnav {
+  flex: 1;
+  display: flex;
+  min-height: 100vh;
+}
+.with-subnav-content {
+  flex: 1;
+  min-width: 0;
+}
+.subnav {
+  flex: 0 0 208px;
+  padding: 20px 12px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.subnav-title {
+  padding: 0 12px 8px;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.subnav-item {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.subnav-item:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+  text-decoration: none;
+}
+.subnav-item--active,
+.subnav-item--active:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .tile-grid {
@@ -1143,8 +2049,8 @@ button.danger:disabled {
   color: var(--warn);
 }
 .tile-status--empty {
-  background: var(--bg);
-  color: var(--text-subtle);
+  background: var(--surface-2);
+  color: var(--text-muted);
 }
 
 /* tab bar (knowledge base add-methods, and any in-panel tabs) */
@@ -1153,7 +2059,7 @@ button.danger:disabled {
   gap: 0.25rem;
   padding: 0.3rem;
   margin-bottom: 1.5rem;
-  background: var(--bg);
+  background: var(--surface-2); /* --bg is white now; the active tab needs a ground to sit on */
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   width: fit-content;
@@ -1246,26 +2152,33 @@ button.danger:disabled {
   color: var(--text);
 }
 
+/* Tables: quiet head (12/500, no caps), rows at least 56px, lines only */
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: var(--fs-small);
 }
 th,
 td {
   text-align: left;
-  padding: 0.7rem 0.7rem;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+}
+td {
+  height: 56px;
 }
 tr:last-child td {
   border-bottom: none;
 }
+tbody tr:hover td {
+  background: var(--surface-sunken);
+}
 th {
+  height: 36px;
   color: var(--text-muted);
-  font-weight: 700;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 500;
+  font-size: var(--fs-meta);
+  white-space: nowrap;
 }
 
 /* THE badge/status pill — one base, semantic variants. Replaces the former
@@ -1273,18 +2186,24 @@ th {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  background: var(--brand-50);
-  color: var(--brand-700);
-  border-radius: var(--r-pill);
-  padding: 0.15rem 0.65rem;
-  font-size: 0.72rem;
-  font-weight: 700;
+  gap: 6px;
+  height: 22px;
+  background: var(--surface-2); /* default = neutral */
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 0 8px;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
+}
+.badge--accent {
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 .badge--success {
   background: var(--success-tint);
-  color: var(--success-ink);
+  color: var(--success);
 }
 .badge--warn {
   background: var(--warn-tint);
@@ -1296,34 +2215,35 @@ th {
 }
 .badge--info {
   background: var(--info-tint);
-  color: var(--info-ink);
+  color: var(--info);
 }
 .badge--muted {
   background: var(--surface-2);
   color: var(--text-muted);
 }
 /* Channel badges (inbox): one fixed colour per channel TYPE so the source of a
-   conversation is recognisable at a glance, whatever the channel is named. */
+   conversation is recognisable at a glance, whatever the channel is named.
+   Same mapping as the channel tiles (.tile-icon--*): e-mail teal, chat orange. */
 .badge--channel-chat {
-  background: var(--brand-50);
-  color: var(--brand-700);
+  background: var(--ch-chat-tint);
+  color: var(--ch-chat);
 }
 .badge--channel-email {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--ch-email-tint);
+  color: var(--ch-email);
 }
 .badge--channel-whatsapp {
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--ch-whatsapp-tint);
+  color: var(--ch-whatsapp);
 }
 .badge--channel-voice {
-  background: #f5f3ff;
-  color: #6d28d9;
+  background: var(--ch-voice-tint);
+  color: var(--ch-voice);
 }
 /* Status 'An HubSpot gesendet' — HubSpot orange, distinct from every channel. */
 .badge--hubspot {
-  background: #fff1ec;
-  color: #b93815;
+  background: var(--hubspot-tint);
+  color: var(--hubspot);
 }
 .badge--dot::before {
   content: '';
@@ -1622,8 +2542,8 @@ code.invite-link {
   color: var(--text);
 }
 .inbox-msg-out .inbox-msg-bubble {
-  background: var(--brand-gradient);
-  color: #fff;
+  background: var(--primary);
+  color: var(--on-primary);
   border-bottom-right-radius: 4px;
 }
 .inbox-msg-meta {
@@ -1760,9 +2680,9 @@ code.invite-link {
 }
 /* HubSpot orange: the ticket is worked over there, not in this inbox. */
 .inbox-status-btn-active-hubspot_sent {
-  background: #fff1ec;
-  border-color: #ffd3c2;
-  color: #b93815;
+  background: var(--hubspot-tint);
+  border-color: var(--hubspot-border);
+  color: var(--hubspot);
 }
 .inbox-badges-row {
   display: flex;
@@ -1798,35 +2718,28 @@ code.invite-link {
    Responsive
    ========================================================================== */
 
+/* narrow windows: the sidebar is always the icon rail */
 @media (max-width: 1000px) {
   .app-sidebar {
     width: var(--sidebar-w-collapsed);
+    padding: 12px 8px;
   }
-  .app-sidebar .app-brand-wordmark,
-  .app-sidebar .app-nav-label,
+  .app-sidebar .app-org-name,
+  .app-sidebar .app-org-chevron,
   .app-sidebar .app-nav-section,
+  .app-sidebar .app-nav-label,
   .app-sidebar .app-account-meta,
-  .app-sidebar .app-orgswitch,
-  .app-sidebar .app-signout-label {
+  .app-sidebar .app-account-more {
     display: none;
   }
-  .app-sidebar .app-brand-icon {
-    display: block;
-  }
-  .app-sidebar .app-brand {
+  .app-sidebar .app-org,
+  .app-sidebar .app-nav-item {
     justify-content: center;
     padding: 0;
   }
-  .app-sidebar .app-nav-item {
-    justify-content: center;
-    padding: 0.58rem 0;
-  }
   .app-sidebar .app-account {
     justify-content: center;
-    padding: 0.35rem 0;
-  }
-  .app-sidebar .app-footer-actions {
-    flex-direction: column;
+    padding: 6px 0;
   }
 }
 
@@ -1849,6 +2762,46 @@ code.invite-link {
   }
   .shell {
     padding: 1.25rem 1rem 2rem;
+  }
+  .app-main .shell {
+    padding: 0 16px 32px;
+  }
+  .app-main .page-head {
+    margin: 0 -16px 20px;
+    padding: 16px;
+  }
+  /* sub-navigation moves above the content as a wrapping row */
+  .with-subnav {
+    flex-direction: column;
+    min-height: 0;
+  }
+  .subnav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .subnav-title {
+    display: none;
+  }
+  .page-body {
+    padding: 16px 16px 32px;
+  }
+  .page-split {
+    flex-direction: column;
+  }
+  .page-rail {
+    flex-basis: auto;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+  .save-bar {
+    padding: 12px 16px;
+  }
+  .drawer {
+    width: 100vw;
   }
 }
 

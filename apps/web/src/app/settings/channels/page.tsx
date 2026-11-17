@@ -6,7 +6,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { Channel, ChannelKind } from '@zendori/core';
-import { canViewArea, isAdminRole } from '@zendori/core';
+import { canEditArea, canViewArea, isAdminRole } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createTestChannel } from '@/app/inbox/actions';
@@ -18,6 +18,7 @@ import {
 import ChannelGallery, { type TileKey, type TileMeta } from '@/components/ChannelGallery';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import PageHeader from '@/components/ui/PageHeader';
 import { appUrl } from '@/lib/env';
 import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
 import {
@@ -246,13 +247,23 @@ export default async function ChannelsPage({
 
   return (
     <div className="shell">
-      <div className="page-head">
-        <h1>Kanäle</h1>
-        <p>
-          Alle Kanäle von {orgName} in einer Übersicht. Klicke einen Kanal an, um seine
-          Einstellungen zu bearbeiten — neue Kanäle legst du unten nach Typ an.
-        </p>
-      </div>
+      <PageHeader
+        title="Kanäle"
+        subtitle={
+          <>
+            Alle Kanäle von {orgName} in einer Übersicht. Klicke einen Kanal an, um seine
+            Einstellungen zu bearbeiten — neue Kanäle legst du unten nach Typ an.
+          </>
+        }
+        actions={
+          // former sidebar entry "Test-Channel" (same permission as the page itself)
+          canEditArea(access, 'inbox') ? (
+            <Link className="ghost" href={`/test-channel?org=${orgId}`}>
+              Testnachricht
+            </Link>
+          ) : null
+        }
+      />
 
       <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
 

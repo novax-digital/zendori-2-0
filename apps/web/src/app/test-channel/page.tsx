@@ -2,8 +2,9 @@ import Link from 'next/link';
 import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { ingestTestMessage } from '@/app/inbox/actions';
-import { canEditArea } from '@zendori/core';
+import { canEditArea, canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import PageHeader from '@/components/ui/PageHeader';
 
 
 
@@ -19,13 +20,18 @@ export default async function TestChannelPage({
 
   return (
     <div className="shell">
-      <div className="page-head">
-        <h1>Test-Channel</h1>
-        <p>
-          Speise eingehende Nachrichten manuell ein, als kämen sie über einen echten Kanal — sie
-          erscheinen sofort in der Inbox.
-        </p>
-      </div>
+      {/* reached from the Kanäle page head (no sidebar entry of its own); the
+          crumb only links back when the member may open Kanäle */}
+      <PageHeader
+        breadcrumb={[
+          canViewArea(access, 'channels')
+            ? { label: 'Kanäle', href: `/settings/channels?org=${orgId}` }
+            : { label: 'Kanäle' },
+          { label: 'Test-Channel' },
+        ]}
+        title="Test-Channel"
+        subtitle="Speise eingehende Nachrichten manuell ein, als kämen sie über einen echten Kanal — sie erscheinen sofort in der Inbox."
+      />
 
 
       {error ? (

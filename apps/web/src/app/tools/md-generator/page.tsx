@@ -5,6 +5,7 @@ import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import PageHeader from '@/components/ui/PageHeader';
 import MdGeneratorClient from './MdGeneratorClient';
 
 // The crawl fetches up to 12 pages with an internal ~45s wall budget — give the
@@ -30,13 +31,15 @@ export default async function MdGeneratorPage({
 
   return (
     <div className="shell">
-      <div className="page-head">
-        <h1>MD-Generator</h1>
-        <p>
-          Websites in saubere Markdown-Dateien verwandeln — zum Herunterladen oder direkt als
-          Quelle in die Wissensdatenbank.
-        </p>
-      </div>
+      {/* reached from the Wissensdatenbank page head (no sidebar entry of its own) */}
+      <PageHeader
+        breadcrumb={[
+          { label: 'Wissen', href: `/settings/knowledge?org=${orgId}` },
+          { label: 'MD-Generator' },
+        ]}
+        title="MD-Generator"
+        subtitle="Websites in saubere Markdown-Dateien verwandeln — zum Herunterladen oder direkt als Quelle in die Wissensdatenbank."
+      />
 
       <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
 

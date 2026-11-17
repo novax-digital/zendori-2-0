@@ -3,27 +3,11 @@
 import { useCallback, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
+import Callout from './ui/Callout';
+import Icon from './ui/Icon';
 
 const NOTICE_TTL_MS = 6_000;
 const ERROR_TTL_MS = 12_000;
-
-const rowStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  gap: '0.75rem',
-};
-
-const dismissStyle: CSSProperties = {
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  color: 'inherit',
-  font: 'inherit',
-  fontWeight: 700,
-  lineHeight: 1,
-  padding: '0 0.1rem',
-};
 
 /**
  * Notice/error banners that live in the URL (?notice=/?error=, written by the
@@ -78,32 +62,42 @@ export default function DismissibleBanners({
   if (!error && !notice) return null;
 
   return (
-    <div className={className} style={{ display: 'grid', gap: '0.5rem', ...style }}>
+    // `style` stays a prop: pages pass their own bottom margin until they move
+    // to the new page types (redesign stages 4-7).
+    <div className={`banners${className ? ` ${className}` : ''}`} style={style}>
       {error ? (
-        <p className="error" style={rowStyle}>
-          <span>{error}</span>
-          <button
-            type="button"
-            style={dismissStyle}
-            aria-label="Meldung ausblenden"
-            onClick={() => clearParams(['error'])}
-          >
-            ×
-          </button>
-        </p>
+        <Callout
+          tone="danger"
+          action={
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              aria-label="Meldung ausblenden"
+              onClick={() => clearParams(['error'])}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          }
+        >
+          {error}
+        </Callout>
       ) : null}
       {notice ? (
-        <p className="notice" style={rowStyle}>
-          <span>{notice}</span>
-          <button
-            type="button"
-            style={dismissStyle}
-            aria-label="Hinweis ausblenden"
-            onClick={() => clearParams(['notice'])}
-          >
-            ×
-          </button>
-        </p>
+        <Callout
+          tone="success"
+          action={
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              aria-label="Hinweis ausblenden"
+              onClick={() => clearParams(['notice'])}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          }
+        >
+          {notice}
+        </Callout>
       ) : null}
     </div>
   );
