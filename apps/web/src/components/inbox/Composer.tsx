@@ -3,14 +3,16 @@
 import { useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { sendReply } from '@/app/inbox/actions';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import type { CannedResponseItem } from '@/lib/inbox/types';
 
 function SendButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <button className="primary" type="submit" disabled={disabled || pending}>
+    <Button type="submit" variant="primary" disabled={disabled || pending}>
       {pending ? 'Senden…' : 'Senden'}
-    </button>
+    </Button>
   );
 }
 
@@ -23,6 +25,8 @@ type ComposerProps = {
   cannedResponses: CannedResponseItem[];
 };
 
+/** Reply box at the bottom of the thread: one outlined box with the text and
+ *  its bar (canned responses left, "Senden" right). Styles: app/styles/inbox.css. */
 export default function Composer({
   orgId,
   conversationId,
@@ -52,37 +56,40 @@ export default function Composer({
       <input type="hidden" name="filterStatus" value={filterStatus} />
       <input type="hidden" name="filterChannel" value={filterChannel} />
       <input type="hidden" name="filterQ" value={filterQ} />
-      {error ? <p className="error">{error}</p> : null}
-      {cannedResponses.length > 0 ? (
-        <select
-          className="inbox-canned-select"
-          value=""
-          aria-label="Textbaustein einfügen"
-          onChange={(event) => {
-            const canned = cannedResponses.find((item) => item.id === event.target.value);
-            if (canned) setContent(canned.content);
-          }}
-        >
-          <option value="" disabled>
-            Textbaustein einfügen …
-          </option>
-          {cannedResponses.map((item) => (
-            <option key={item.id} value={item.id}>
-              /{item.shortcut}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      <textarea
-        name="content"
-        value={content}
-        onChange={(event) => setContent(event.target.value)}
-        placeholder="Antwort schreiben …"
-        rows={3}
-        required
-      />
-      <div className="inbox-composer-row">
-        <SendButton disabled={content.trim().length === 0} />
+      {error ? <Callout tone="danger">{error}</Callout> : null}
+      <div className="inbox-composer-box">
+        <textarea
+          name="content"
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          placeholder="Antwort schreiben …"
+          aria-label="Antwort schreiben"
+          rows={3}
+          required
+        />
+        <div className="inbox-composer-bar">
+          {cannedResponses.length > 0 ? (
+            <select
+              className="inbox-canned"
+              value=""
+              aria-label="Textbaustein einfügen"
+              onChange={(event) => {
+                const canned = cannedResponses.find((item) => item.id === event.target.value);
+                if (canned) setContent(canned.content);
+              }}
+            >
+              <option value="" disabled>
+                Textbaustein einfügen …
+              </option>
+              {cannedResponses.map((item) => (
+                <option key={item.id} value={item.id}>
+                  /{item.shortcut}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <SendButton disabled={content.trim().length === 0} />
+        </div>
       </div>
     </form>
   );

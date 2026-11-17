@@ -1,10 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { ReactNode } from 'react';
 import { useFormStatus } from 'react-dom';
 import type { ConversationMode } from '@zendori/core';
 import { acceptDraft, discardDraft, markDraftEdited } from '@/app/inbox/actions';
+import Badge, { type BadgeTone } from '@/components/ui/Badge';
+import Button, { type ButtonVariant } from '@/components/ui/Button';
+import Icon from '@/components/ui/Icon';
 import type { AgentInfo, DraftItem } from '@/lib/inbox/types';
 
 // Fallback badge threshold when the channel has no assigned agent (0011: the
@@ -12,77 +15,13 @@ import type { AgentInfo, DraftItem } from '@/lib/inbox/types';
 // signals how reliable the draft is.
 const CONFIDENCE_REFERENCE = 0.7;
 
-type ConfidenceTone = { label: string; badgeClass: string };
+type ConfidenceTone = { label: string; tone: BadgeTone };
 
 function confidenceTone(confidence: number, reference: number): ConfidenceTone {
-  if (confidence >= reference) return { label: 'Hohe Sicherheit', badgeClass: 'badge badge--success' };
-  if (confidence >= 0.4) return { label: 'Mittlere Sicherheit', badgeClass: 'badge badge--warn' };
-  return { label: 'Niedrige Sicherheit', badgeClass: 'badge badge--danger' };
+  if (confidence >= reference) return { label: 'Hohe Sicherheit', tone: 'success' };
+  if (confidence >= 0.4) return { label: 'Mittlere Sicherheit', tone: 'warn' };
+  return { label: 'Niedrige Sicherheit', tone: 'danger' };
 }
-
-const cardStyle: CSSProperties = {
-  margin: '0 0.9rem 0',
-  padding: '0.75rem 0.85rem',
-  border: '1px solid var(--border)',
-  borderLeft: '3px solid var(--primary)',
-  borderRadius: 10,
-  background: 'var(--surface)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.6rem',
-};
-
-const headerStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.6rem',
-  flexWrap: 'wrap',
-};
-
-const titleStyle: CSSProperties = {
-  fontSize: '0.78rem',
-  fontWeight: 700,
-  textTransform: 'uppercase',
-  letterSpacing: '0.03em',
-  color: 'var(--text-muted)',
-};
-
-const bodyStyle: CSSProperties = {
-  fontSize: '0.9rem',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  maxHeight: '14rem',
-  overflowY: 'auto',
-};
-
-// global textarea skin applies; only the compact inbox font size stays
-const textareaStyle: CSSProperties = { fontSize: '0.9rem' };
-
-const sourcesStyle: CSSProperties = {
-  fontSize: '0.78rem',
-  color: 'var(--text-muted)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.3rem',
-  borderTop: '1px solid var(--border)',
-  paddingTop: '0.5rem',
-};
-
-const actionsStyle: CSSProperties = {
-  display: 'flex',
-  gap: '0.5rem',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-};
-
-const pausedHintStyle: CSSProperties = {
-  fontSize: '0.78rem',
-  color: 'var(--text-muted)',
-  background: 'var(--bg)',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  padding: '0.4rem 0.6rem',
-};
 
 type SuggestedReplyProps = {
   orgId: string;
@@ -99,15 +38,16 @@ type SuggestedReplyProps = {
   pausedHint?: string | null;
 };
 
-function ActionButton({ className, children }: { className: string; children: React.ReactNode }) {
+function ActionButton({ variant, children }: { variant: ButtonVariant; children: ReactNode }) {
   const { pending } = useFormStatus();
   return (
-    <button className={className} type="submit" disabled={pending}>
+    <Button type="submit" variant={variant} size="sm" disabled={pending}>
       {pending ? '…' : children}
-    </button>
+    </Button>
   );
 }
 
+/** The pending AI draft above the composer: one outlined block (styles: app/styles/inbox.css). */
 export default function SuggestedReply({
   orgId,
   conversationId,
@@ -136,25 +76,26 @@ export default function SuggestedReply({
   );
 
   return (
-    <div style={cardStyle} aria-label="KI-Antwortvorschlag">
+    <section className="inbox-draft" aria-label="KI-Antwortvorschlag">
+      <div className="inbox-draft-head">
+        <span className="inbox-draft-title">
+          <Icon name="ai" size={14} />
+          Antwortvorschlag
+        </span>
+        {agent ? <span className="muted small">{agent.name}</span> : null}
+        <Badge tone={tone.tone} title={`Sicherheit ${confidencePercent} %`}>
+          {tone.label} · {confidencePercent} %
+        </Badge>
+      </div>
       {mode === 'human' ? (
-        <div style={pausedHintStyle}>
+        <p className="muted small">
           {pausedHint ?? 'Bot pausiert — Konversation liegt beim Team.'} Dieser Vorschlag bleibt
           als Entwurf nutzbar.
-        </div>
+        </p>
       ) : null}
-      <div style={headerStyle}>
-        <span style={titleStyle}>KI-Vorschlag{agent ? ` — ${agent.name}` : ''}</span>
-        <span className={tone.badgeClass} title={`Sicherheit ${confidencePercent} %`}>
-          {tone.label} · {confidencePercent} %
-        </span>
-      </div>
 
       {editing ? (
-        <form
-          action={markDraftEdited}
-          style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
-        >
+        <form action={markDraftEdited} className="inbox-draft-form">
           {hiddenFields}
           <textarea
             name="content"
@@ -162,61 +103,60 @@ export default function SuggestedReply({
             onChange={(event) => setEditContent(event.target.value)}
             rows={5}
             required
-            style={textareaStyle}
             aria-label="Vorschlag bearbeiten"
           />
-          <div style={actionsStyle}>
-            <ActionButton className="primary">Bearbeitete Antwort senden</ActionButton>
-            <button
+          <div className="inbox-draft-actions">
+            <ActionButton variant="primary">Bearbeitete Antwort senden</ActionButton>
+            <Button
               type="button"
-              className="ghost"
+              size="sm"
               onClick={() => {
                 setEditing(false);
                 setEditContent(draft.content);
               }}
             >
               Abbrechen
-            </button>
+            </Button>
           </div>
         </form>
       ) : (
         <>
-          <div style={bodyStyle}>{draft.content}</div>
-          <div style={actionsStyle}>
+          <div className="inbox-draft-body">{draft.content}</div>
+          <div className="inbox-draft-actions">
             <form action={acceptDraft}>
               {hiddenFields}
-              <ActionButton className="primary">Übernehmen</ActionButton>
+              <ActionButton variant="primary">Übernehmen</ActionButton>
             </form>
-            <button type="button" className="ghost" onClick={() => setEditing(true)}>
+            <Button type="button" size="sm" onClick={() => setEditing(true)}>
               Bearbeiten
-            </button>
+            </Button>
             <form action={discardDraft}>
               {hiddenFields}
-              <ActionButton className="ghost">Verwerfen</ActionButton>
+              <ActionButton variant="ghost">Verwerfen</ActionButton>
             </form>
           </div>
         </>
       )}
 
       {draft.sources.length > 0 ? (
-        <div style={sourcesStyle}>
-          <span style={{ fontWeight: 600 }}>Quellen</span>
+        <div className="inbox-draft-sources">
+          <span className="strong">Quellen</span>
           {draft.sources.map((source, index) => (
-            <span key={`${source.source_id}-${index}`} style={{ wordBreak: 'break-word' }}>
-              {source.uri ? (
-                // manual entries store the literal marker 'text' as uri — show
-                // the same label the knowledge settings page uses
-                <span style={{ color: 'var(--text)' }}>
-                  {source.uri === 'text' ? 'Manueller Text' : source.uri}
-                </span>
-              ) : (
-                <span style={{ color: 'var(--text)' }}>Wissensdatenbank-Eintrag</span>
-              )}
+            <span key={`${source.source_id}-${index}`}>
+              <span className="inbox-draft-source-name">
+                {source.uri
+                  ? // manual entries store the literal marker 'text' as uri — show
+                    // the same label the knowledge settings page uses
+                    source.uri === 'text'
+                    ? 'Manueller Text'
+                    : source.uri
+                  : 'Wissensdatenbank-Eintrag'}
+              </span>
               {source.snippet ? <span> — {source.snippet}</span> : null}
             </span>
           ))}
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }

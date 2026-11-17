@@ -23,6 +23,7 @@ import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
 import SuggestedReply from '@/components/inbox/SuggestedReply';
 import { allowedChannelIds, canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import { EmptyState } from '@/components/ui/Layout';
 
 type InboxSearchParams = {
   org?: string;
@@ -149,7 +150,7 @@ export default async function InboxPage({
       <DismissibleBanners error={params.error} notice={params.notice} className="inbox-banners" />
 
       <div className="inbox-layout">
-        <section className="inbox-col" aria-label="Konversationsliste">
+        <section className="inbox-col inbox-col--list" aria-label="Konversationsliste">
           <FilterBar
             orgId={orgId}
             channels={channels}
@@ -165,7 +166,7 @@ export default async function InboxPage({
           />
         </section>
 
-        <section className="inbox-col" aria-label="Konversation">
+        <section className="inbox-col inbox-col--thread" aria-label="Konversation">
           {detail ? (
             <>
               <ConversationView
@@ -173,45 +174,63 @@ export default async function InboxPage({
                 orgId={orgId}
                 openTicket={openTicket}
                 canOpenTickets={canOpenTickets}
-              />
-              {detail.draft ? (
-                <SuggestedReply
-                  key={detail.draft.id}
-                  draft={detail.draft}
-                  agent={detail.agent}
-                  orgId={orgId}
-                  conversationId={detail.conversation.id}
-                  mode={detail.conversation.mode}
-                  pausedHint={handoffHint}
-                  filterStatus={filters.status}
-                  filterChannel={filters.channelId}
-                  filterQ={filters.q}
-                />
-              ) : handoffHint ? (
-                // handed off without a draft (e.g. reason='intake'): show the
-                // reason at conversation level instead of nothing
-                <div className="inbox-inline-hint">{handoffHint}</div>
-              ) : aiWorking && newestMessage ? (
-                <AiWorkingHint key={newestMessage.id} createdAt={newestMessage.created_at} />
-              ) : null}
-              <Composer
-                key={detail.conversation.id}
-                orgId={orgId}
-                conversationId={detail.conversation.id}
                 filterStatus={filters.status}
                 filterChannel={filters.channelId}
                 filterQ={filters.q}
-                cannedResponses={cannedResponses}
               />
+              <div className="inbox-reply">
+                {detail.draft ? (
+                  <SuggestedReply
+                    key={detail.draft.id}
+                    draft={detail.draft}
+                    agent={detail.agent}
+                    orgId={orgId}
+                    conversationId={detail.conversation.id}
+                    mode={detail.conversation.mode}
+                    pausedHint={handoffHint}
+                    filterStatus={filters.status}
+                    filterChannel={filters.channelId}
+                    filterQ={filters.q}
+                  />
+                ) : handoffHint ? (
+                  // handed off without a draft (e.g. reason='intake'): show the
+                  // reason at conversation level instead of nothing
+                  <div className="inbox-inline-hint">{handoffHint}</div>
+                ) : aiWorking && newestMessage ? (
+                  <AiWorkingHint key={newestMessage.id} createdAt={newestMessage.created_at} />
+                ) : null}
+                <Composer
+                  key={detail.conversation.id}
+                  orgId={orgId}
+                  conversationId={detail.conversation.id}
+                  filterStatus={filters.status}
+                  filterChannel={filters.channelId}
+                  filterQ={filters.q}
+                  cannedResponses={cannedResponses}
+                />
+              </div>
             </>
           ) : (
-            <div className="inbox-placeholder">
-              {selectedId ? 'Konversation wurde nicht gefunden.' : 'Wähle eine Konversation aus.'}
+            <div className="inbox-blank">
+              {selectedId ? (
+                <EmptyState
+                  title="Konversation nicht gefunden"
+                  text="Sie wurde gelöscht oder gehört zu einem Kanal, den du nicht sehen darfst."
+                />
+              ) : (
+                <EmptyState
+                  title="Keine Konversation ausgewählt"
+                  text="Wähle links eine Konversation aus."
+                />
+              )}
             </div>
           )}
         </section>
 
-        <aside className="inbox-col" aria-label="Kontext">
+        <aside className="inbox-col inbox-col--context" aria-label="Kontext">
+          <div className="inbox-head">
+            <h2>Details</h2>
+          </div>
           {detail ? (
             <ContextSidebar
               tickets={tickets}
@@ -226,7 +245,7 @@ export default async function InboxPage({
               filterQ={filters.q}
             />
           ) : (
-            <div className="inbox-placeholder">Keine Konversation ausgewählt.</div>
+            <p className="inbox-context-empty muted small">Keine Konversation ausgewählt.</p>
           )}
         </aside>
       </div>

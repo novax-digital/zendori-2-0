@@ -8,15 +8,17 @@ import {
   addNote,
   createTicketFromConversation,
   syncConversationTicketToHubspot,
-  requestDraft,
-  returnToBot,
   setConversationAssignee,
   setConversationStatus,
   syncToHubspot,
-  takeOverConversation,
   updateContact,
 } from '@/app/inbox/actions';
-import { channelBadgeClass } from '@/lib/inbox/channel-badge';
+import Badge, { type BadgeTone } from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import ChannelIcon from '@/components/ui/ChannelIcon';
+import { Field } from '@/components/ui/Field';
+import { Avatar, Property, PropertyList } from '@/components/ui/Layout';
+import { href } from '@/lib/href';
 import type { ConversationDetail, HubspotSidebarInfo, MemberOption } from '@/lib/inbox/types';
 
 const BASE_STATUS_OPTIONS: { value: ConversationStatus; label: string }[] = [
@@ -34,12 +36,12 @@ const HUBSPOT_STATUS_OPTION: { value: ConversationStatus; label: string } = {
   label: 'An HubSpot gesendet',
 };
 
-// urgent/high stand out; normal/low stay calm (uses existing tokens only)
-const PRIORITY_BADGE: Record<string, string> = {
-  urgent: 'badge--danger',
-  high: 'badge--warn',
-  normal: 'badge--muted',
-  low: 'badge--muted',
+// urgent/high stand out; normal/low stay calm
+const PRIORITY_TONE: Record<string, BadgeTone> = {
+  urgent: 'danger',
+  high: 'warn',
+  normal: 'muted',
+  low: 'muted',
 };
 
 const priorityLabels: Record<ConversationPriority, string> = {
@@ -111,261 +113,260 @@ export default function ContextSidebar({
     </>
   );
 
+  const contactLabel = contact?.name ?? contact?.email ?? 'Unbekannter Kontakt';
+  const statusOptions =
+    hubspot.active || conversation.status === 'hubspot_sent'
+      ? [...BASE_STATUS_OPTIONS, HUBSPOT_STATUS_OPTION]
+      : BASE_STATUS_OPTIONS;
+
   return (
-    <div className="inbox-sidebar">
-      <section>
+    <div className="inbox-context">
+      <section className="rail-section">
         <h3>Kontakt</h3>
         {contact ? (
           // keyed so server-side contact updates re-sync the uncontrolled inputs
           <form
             key={`${contact.id}-${contact.name ?? ''}-${contact.email ?? ''}-${contact.phone ?? ''}-${contact.callback_phone ?? ''}-${contact.company ?? ''}`}
             action={updateContact}
-            className="inbox-contact-form"
+            className="inbox-contact"
           >
             {hiddenFields}
             <input type="hidden" name="contactId" value={contact.id} />
-            <label>
-              Name
-              <input type="text" name="name" defaultValue={contact.name ?? ''} maxLength={200} />
-            </label>
-            <label>
-              Unternehmen
+            <div className="inbox-contact-head">
+              <Avatar name={contactLabel} size="md" />
+              <div className="inbox-contact-name">
+                <span className="strong truncate">{contactLabel}</span>
+                {contact.company ? (
+                  <span className="muted small truncate">{contact.company}</span>
+                ) : null}
+              </div>
+            </div>
+            <Field label="Name" htmlFor="inbox-contact-name">
               <input
+                id="inbox-contact-name"
+                type="text"
+                name="name"
+                defaultValue={contact.name ?? ''}
+                maxLength={200}
+              />
+            </Field>
+            <Field label="Unternehmen" htmlFor="inbox-contact-company">
+              <input
+                id="inbox-contact-company"
                 type="text"
                 name="company"
                 defaultValue={contact.company ?? ''}
                 maxLength={200}
               />
-            </label>
-            <label>
-              E-Mail
+            </Field>
+            <Field label="E-Mail" htmlFor="inbox-contact-email">
               <input
+                id="inbox-contact-email"
                 type="email"
                 name="email"
                 defaultValue={contact.email ?? ''}
                 maxLength={200}
               />
-            </label>
-            <label>
-              Telefon
-              <input type="text" name="phone" defaultValue={contact.phone ?? ''} maxLength={50} />
-            </label>
-            <label>
-              Rückrufnummer
+            </Field>
+            <Field label="Telefon" htmlFor="inbox-contact-phone">
               <input
+                id="inbox-contact-phone"
+                type="text"
+                name="phone"
+                defaultValue={contact.phone ?? ''}
+                maxLength={50}
+              />
+            </Field>
+            <Field label="Rückrufnummer" htmlFor="inbox-contact-callback">
+              <input
+                id="inbox-contact-callback"
                 type="text"
                 name="callbackPhone"
                 defaultValue={contact.callback_phone ?? ''}
                 maxLength={50}
                 placeholder="nur wenn abweichend von Telefon"
               />
-            </label>
-            <button className="ghost" type="submit">
+            </Field>
+            <Button type="submit" size="sm">
               Kontakt speichern
-            </button>
+            </Button>
           </form>
         ) : (
-          <p className="inbox-sidebar-empty">Kein Kontakt verknüpft.</p>
+          <p className="muted small">Kein Kontakt verknüpft.</p>
         )}
       </section>
 
-      <section>
-        <h3>Status</h3>
-        <form action={setConversationStatus} className="inbox-status-buttons">
-          {hiddenFields}
-          {(hubspot.active || conversation.status === 'hubspot_sent'
-            ? [...BASE_STATUS_OPTIONS, HUBSPOT_STATUS_OPTION]
-            : BASE_STATUS_OPTIONS
-          ).map((option) => {
-            const isActive = conversation.status === option.value;
-            return (
-              <button
-                key={option.value}
-                type="submit"
+      <section className="rail-section">
+        <h3>Konversation</h3>
+        <PropertyList>
+          <Property label="Status">
+            <form action={setConversationStatus}>
+              {hiddenFields}
+              {/* uncontrolled + keyed by the server value so realtime refreshes re-sync it */}
+              <select
+                key={conversation.status}
                 name="status"
-                value={option.value}
-                disabled={isActive}
-                className={
-                  isActive
-                    ? `inbox-status-btn inbox-status-btn-active-${option.value}`
-                    : 'inbox-status-btn'
-                }
+                defaultValue={conversation.status}
+                aria-label="Status"
+                onChange={(event) => {
+                  event.currentTarget.form?.requestSubmit();
+                }}
               >
-                {option.label}
-              </button>
-            );
-          })}
-        </form>
+                {statusOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </form>
+          </Property>
+          <Property label="Zuständig">
+            <form action={setConversationAssignee}>
+              {hiddenFields}
+              {/* uncontrolled + keyed by the server value so realtime refreshes re-sync it */}
+              <select
+                key={conversation.assignee_id ?? 'none'}
+                name="assigneeId"
+                defaultValue={conversation.assignee_id ?? ''}
+                aria-label="Zuständige Person"
+                onChange={(event) => {
+                  event.currentTarget.form?.requestSubmit();
+                }}
+              >
+                <option value="">Niemand</option>
+                {members.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.email ?? `${member.user_id.slice(0, 8)}…`}
+                  </option>
+                ))}
+              </select>
+            </form>
+          </Property>
+          <Property label="Priorität">
+            <Badge tone={PRIORITY_TONE[conversation.priority] ?? 'muted'}>
+              {priorityLabels[conversation.priority]}
+            </Badge>
+          </Property>
+          <Property label="Kanal">
+            {channel ? (
+              <span className="row row--end">
+                <ChannelIcon kind={channel.type} />
+                {channel.name}
+              </span>
+            ) : (
+              '—'
+            )}
+          </Property>
+          <Property label="Modus">
+            <Badge>{conversation.mode === 'bot' ? 'Bot' : 'Mensch'}</Badge>
+          </Property>
+          <Property label="Agent">
+            <span
+              title={
+                agent
+                  ? 'Der diesem Kanal zugewiesene KI-Agent'
+                  : 'Kein Agent zugewiesen — keine KI-Antworten auf diesem Kanal'
+              }
+            >
+              {agent ? `${agent.name}${agent.is_active ? '' : ' (pausiert)'}` : 'Kein Agent'}
+            </span>
+          </Property>
+        </PropertyList>
       </section>
 
-      <section>
+      <section className="rail-section">
         <h3>Tickets</h3>
         {tickets.length === 0 ? (
-          <p className="inbox-sidebar-empty">Kein Ticket zu dieser Konversation.</p>
+          <p className="muted small">Kein Ticket zu dieser Konversation.</p>
         ) : (
-          <div className="inbox-badges-row" style={{ flexWrap: 'wrap' }}>
+          <div>
             {tickets.map((ticket) => {
-              const label = `${ticket.display_id} · ${TICKET_STATUS_LABELS[ticket.status]}`;
               const title = [ticket.subject, TICKET_ORIGIN_LABELS[ticket.origin]]
                 .filter(Boolean)
                 .join(' — ');
-              const className =
-                ticket.status === 'resolved' ? 'badge badge--muted' : 'badge badge--info';
-              return canOpenTickets ? (
-                <Link
-                  key={ticket.id}
-                  className={className}
-                  href={`/tickets/${ticket.id}?org=${orgId}`}
-                  title={title}
-                  style={{ textDecoration: 'none' }}
-                >
-                  {label}
-                </Link>
-              ) : (
-                <span key={ticket.id} className={className} title={title}>
-                  {label}
-                </span>
+              return (
+                <div key={ticket.id} className="inbox-ticket" title={title}>
+                  {canOpenTickets ? (
+                    <Link
+                      className="inbox-ticket-id"
+                      href={href(`/tickets/${ticket.id}`, { org: orgId })}
+                    >
+                      {ticket.display_id}
+                    </Link>
+                  ) : (
+                    <span className="inbox-ticket-id">{ticket.display_id}</span>
+                  )}
+                  <Badge tone={ticket.status === 'resolved' ? 'muted' : 'info'}>
+                    {TICKET_STATUS_LABELS[ticket.status]}
+                  </Badge>
+                </div>
               );
             })}
           </div>
         )}
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+        <div className="row">
           {/* always offered (attach rule v2): a manual ticket is always a NEW one */}
           <form action={createTicketFromConversation}>
             {hiddenFields}
-            <button className="ghost" type="submit">
+            <Button type="submit" size="sm">
               Ticket anlegen
-            </button>
+            </Button>
           </form>
           {hubspot.connected ? (
             <form action={syncConversationTicketToHubspot}>
               {hiddenFields}
-              <button className="ghost" type="submit" title="Legt bei Bedarf ein Ticket an und schickt es an HubSpot (Ticket-Strom)">
+              <Button
+                type="submit"
+                size="sm"
+                variant="ghost"
+                title="Legt bei Bedarf ein Ticket an und schickt es an HubSpot (Ticket-Strom)"
+              >
                 Ticket an HubSpot senden
-              </button>
+              </Button>
             </form>
           ) : null}
         </div>
       </section>
 
-      <section>
-        <h3>Zuweisung</h3>
-        <form action={setConversationAssignee}>
-          {hiddenFields}
-          {/* uncontrolled + keyed by the server value so realtime refreshes re-sync it */}
-          <select
-            key={conversation.assignee_id ?? 'none'}
-            name="assigneeId"
-            defaultValue={conversation.assignee_id ?? ''}
-            aria-label="Zuständige Person"
-            onChange={(event) => {
-              event.currentTarget.form?.requestSubmit();
-            }}
-          >
-            <option value="">Niemand</option>
-            {members.map((member) => (
-              <option key={member.user_id} value={member.user_id}>
-                {member.email ?? `${member.user_id.slice(0, 8)}…`}
-              </option>
-            ))}
-          </select>
-        </form>
-      </section>
-
-      <section>
-        <h3>Priorität</h3>
-        <span className={`badge ${PRIORITY_BADGE[conversation.priority] ?? 'badge--muted'}`}>
-          {priorityLabels[conversation.priority]}
-        </span>
-      </section>
-
-      <section>
-        <h3>Kanal &amp; Modus</h3>
-        <div className="inbox-badges-row">
-          {channel ? <span className={channelBadgeClass(channel.type)}>{channel.name}</span> : null}
-          <span className="badge">
-            {conversation.mode === 'bot' ? 'Bot' : 'Mensch'}
-          </span>
-          <span
-            className="badge badge--muted"
-            title={
-              agent
-                ? 'Der diesem Kanal zugewiesene KI-Agent'
-                : 'Kein Agent zugewiesen — keine KI-Antworten auf diesem Kanal'
-            }
-          >
-            {agent ? `Agent: ${agent.name}${agent.is_active ? '' : ' (pausiert)'}` : 'Kein Agent'}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
-          {conversation.mode === 'bot' ? (
-            <form action={takeOverConversation}>
-              {hiddenFields}
-              <button className="primary" type="submit">
-                Übernehmen
-              </button>
-            </form>
-          ) : (
-            <>
-              <form action={returnToBot}>
-                {hiddenFields}
-                <button className="ghost" type="submit">
-                  An Bot zurückgeben
-                </button>
-              </form>
-              <form action={requestDraft}>
-                {hiddenFields}
-                <button className="ghost" type="submit">
-                  Entwurf anfordern
-                </button>
-              </form>
-            </>
-          )}
-        </div>
-      </section>
-
-      <section>
+      <section className="rail-section">
         <h3>HubSpot</h3>
         {!hubspot.connected ? (
-          <p className="inbox-sidebar-empty">
+          <p className="muted small">
             Nicht verbunden — unter Einstellungen → Integrationen einrichten.
           </p>
         ) : !hubspot.active ? (
-          <p className="inbox-sidebar-empty">Verbunden, aber deaktiviert — Sync ist pausiert.</p>
+          <p className="muted small">Verbunden, aber deaktiviert — Sync ist pausiert.</p>
         ) : null}
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div className="row">
           <form action={syncToHubspot}>
             {hiddenFields}
-            <button className="ghost" type="submit">
+            <Button type="submit" size="sm">
               An HubSpot senden
-            </button>
+            </Button>
           </form>
+          {hubspotTicketUrl ? (
+            <a className="small" href={hubspotTicketUrl} target="_blank" rel="noopener noreferrer">
+              In HubSpot öffnen
+            </a>
+          ) : null}
         </div>
-        {hubspotTicketUrl ? (
-          <a
-            href={hubspotTicketUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ display: 'inline-block', marginTop: '0.6rem', fontSize: '0.9rem' }}
-          >
-            In HubSpot öffnen
-          </a>
-        ) : null}
       </section>
 
-      <section>
+      <section className="rail-section">
         <h3>Interne Notizen</h3>
         {notes.length === 0 ? (
-          <p className="inbox-sidebar-empty">Noch keine Notizen.</p>
+          <p className="muted small">Noch keine Notizen.</p>
         ) : (
-          notes.map((note) => (
-            <div key={note.id} className="inbox-note">
-              <div>{note.content}</div>
-              <div className="inbox-note-meta">
-                {note.author_email ?? 'Unbekannt'} · {formatDateTime(note.created_at)}
+          <div className="inbox-notes">
+            {notes.map((note) => (
+              <div key={note.id} className="inbox-notecard">
+                <div>{note.content}</div>
+                <div className="inbox-notecard-meta">
+                  {note.author_email ?? 'Unbekannt'} · {formatDateTime(note.created_at)}
+                </div>
               </div>
-            </div>
-          ))
+            ))}
+          </div>
         )}
         <form action={addNote} className="inbox-note-form">
           {hiddenFields}
@@ -373,11 +374,12 @@ export default function ContextSidebar({
             name="content"
             rows={3}
             placeholder="Interne Notiz — für Kunden nicht sichtbar"
+            aria-label="Interne Notiz"
             required
           />
-          <button className="ghost" type="submit">
+          <Button type="submit" size="sm">
             Notiz speichern
-          </button>
+          </Button>
         </form>
       </section>
     </div>

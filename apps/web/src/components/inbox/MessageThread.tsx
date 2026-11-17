@@ -6,6 +6,7 @@ import type { MessageWithAttachments } from '@/lib/inbox/types';
 // the ticket detail can render the SAME transcript for its message range.
 // Rendered newest-first inside a column-reverse container so the latest
 // message is visible at the bottom without any client-side scroll script.
+// Styles: app/styles/inbox.css (.inbox-messages, .inbox-msg*, .inbox-attachment*).
 
 const senderLabels: Record<SenderType, string> = {
   contact: 'Kunde',
@@ -69,104 +70,81 @@ export default function MessageThread({
 }) {
   const newestFirst = [...messages].reverse();
   return (
-      <div className="inbox-messages">
-        {newestFirst.length === 0 ? (
-          <p className="inbox-messages-empty">{emptyText}</p>
-        ) : (
-          newestFirst.map((message) => (
-            <div
-              key={message.id}
-              className={
-                message.direction === 'in' ? 'inbox-msg inbox-msg-in' : 'inbox-msg inbox-msg-out'
-              }
-            >
-              <div className="inbox-msg-bubble">{message.content}</div>
-              {message.attachments.length > 0 ? (
-                <div
-                  style={{
-                    marginTop: '0.35rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.2rem',
-                  }}
-                >
-                  {message.attachments.map((attachment) =>
-                    attachment.mime.startsWith('audio/') && attachment.url ? (
-                      <span
-                        key={attachment.id}
-                        style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
-                      >
-                        <audio controls preload="none" src={attachment.url} style={{ width: '100%' }}>
-                          <a href={attachment.url} target="_blank" rel="noreferrer">
-                            {attachment.filename}
-                          </a>
-                        </audio>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          🎧 {attachment.filename} ({formatBytes(attachment.size)})
-                        </span>
-                      </span>
-                    ) : INLINE_RENDERABLE_MIMES.has(attachment.mime) && attachment.url ? (
-                      // Raster images render as a thumbnail (0025). The URL is only
-                      // signed without a download disposition for this exact
-                      // allowlist of types, so nothing here can execute.
-                      <span
-                        key={attachment.id}
-                        style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
-                      >
+    <div className="inbox-messages">
+      {newestFirst.length === 0 ? (
+        <p className="inbox-messages-empty">{emptyText}</p>
+      ) : (
+        newestFirst.map((message) => (
+          <div
+            key={message.id}
+            className={[
+              'inbox-msg',
+              message.direction === 'in' ? 'inbox-msg-in' : 'inbox-msg-out',
+              // system lines (call summaries, automatic notices) are no chat bubble
+              message.sender_type === 'system' ? 'inbox-msg--system' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            <div className="inbox-msg-bubble">{message.content}</div>
+            {message.attachments.length > 0 ? (
+              <div className="inbox-attachments">
+                {message.attachments.map((attachment) =>
+                  attachment.mime.startsWith('audio/') && attachment.url ? (
+                    <span key={attachment.id} className="inbox-attachment">
+                      <audio controls preload="none" src={attachment.url}>
                         <a href={attachment.url} target="_blank" rel="noreferrer">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={attachment.url}
-                            alt={attachment.filename}
-                            loading="lazy"
-                            style={{
-                              maxWidth: '100%',
-                              maxHeight: '240px',
-                              borderRadius: '6px',
-                              display: 'block',
-                            }}
-                          />
+                          {attachment.filename}
                         </a>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          🖼 {attachment.filename} ({formatBytes(attachment.size)})
-                        </span>
+                      </audio>
+                      <span className="inbox-attachment-meta">
+                        {attachment.filename} ({formatBytes(attachment.size)})
                       </span>
-                    ) : (
-                      <span
-                        key={attachment.id}
-                        style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}
-                      >
-                        📎{' '}
+                    </span>
+                  ) : INLINE_RENDERABLE_MIMES.has(attachment.mime) && attachment.url ? (
+                    // Raster images render as a thumbnail (0025). The URL is only
+                    // signed without a download disposition for this exact
+                    // allowlist of types, so nothing here can execute.
+                    <span key={attachment.id} className="inbox-attachment">
+                      <a href={attachment.url} target="_blank" rel="noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={attachment.url} alt={attachment.filename} loading="lazy" />
+                      </a>
+                      <span className="inbox-attachment-meta">
+                        {attachment.filename} ({formatBytes(attachment.size)})
+                      </span>
+                    </span>
+                  ) : (
+                    <span key={attachment.id} className="inbox-attachment">
+                      <span>
                         {attachment.url ? (
                           <a href={attachment.url} target="_blank" rel="noreferrer" download>
                             {attachment.filename}
                           </a>
                         ) : (
-                          <span>{attachment.filename}</span>
+                          attachment.filename
                         )}{' '}
-                        <span style={{ color: 'var(--text-muted)' }}>
+                        <span className="inbox-attachment-meta">
                           ({formatBytes(attachment.size)})
                         </span>
                       </span>
-                    )
-                  )}
-                </div>
-              ) : null}
-              <div className="inbox-msg-meta">
-                {senderLabels[message.sender_type]} · {formatTimestamp(message.created_at)}
-                {message.direction === 'out' && isDeliveryFailed(message.metadata) ? (
-                  <span
-                    style={{ color: 'var(--danger)', fontWeight: 600 }}
-                    title={deliveryErrorText(message.metadata)}
-                  >
-                    {' '}
-                    · Zustellung fehlgeschlagen
-                  </span>
-                ) : null}
+                    </span>
+                  )
+                )}
               </div>
+            ) : null}
+            <div className="inbox-msg-meta">
+              {senderLabels[message.sender_type]} · {formatTimestamp(message.created_at)}
+              {message.direction === 'out' && isDeliveryFailed(message.metadata) ? (
+                <span className="inbox-msg-failed" title={deliveryErrorText(message.metadata)}>
+                  {' '}
+                  · Zustellung fehlgeschlagen
+                </span>
+              ) : null}
             </div>
-          ))
-        )}
-      </div>
+          </div>
+        ))
+      )}
+    </div>
   );
 }
