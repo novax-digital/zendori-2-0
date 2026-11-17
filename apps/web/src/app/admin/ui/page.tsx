@@ -12,10 +12,13 @@ import Drawer from '@/components/ui/Drawer';
 import { Field, OptionGroup, SettingRow } from '@/components/ui/Field';
 import {
   Avatar,
+  CodeBlock,
   EmptyState,
   Property,
   PropertyList,
   Section,
+  Stat,
+  Stats,
   Tabs,
 } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
@@ -171,6 +174,19 @@ export default async function UiKitPage({
                     Minuten
                   </SettingRow>
                 </div>
+              </div>
+            </Section>
+
+            <Section title="Kennzahlen und Code" help="Kennzahlen als eine Zeile mit Linien. Alles, was kopiert wird, steht im Code-Block.">
+              <Stats>
+                <Stat label="Konversationen" value="1.204" note="diesen Monat" />
+                <Stat label="Autopilot-Quote" value="62 %" />
+                <Stat label="Offene Tickets" value="4" note="2 warten auf Rückruf" />
+              </Stats>
+              <CodeBlock>{'<script src="https://app.zendori.ai/widget.js" data-zendori-token="…" async></script>'}</CodeBlock>
+              <div className="row">
+                <button type="button" role="switch" aria-checked="true" aria-label="Kanal aktiv" className="switch-btn" />
+                <span className="muted small">Schalter als Absende-Button (ein Klick schaltet um)</span>
               </div>
             </Section>
 

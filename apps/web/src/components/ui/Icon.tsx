@@ -59,6 +59,7 @@ const ICONS = {
   // controls
   chevronDown: <path d="m6 9 6 6 6-6" />,
   chevronRight: <path d="m9 6 6 6-6 6" />,
+  chevronUp: <path d="m6 15 6-6 6 6" />,
   check: <path d="m5 12 5 5 9-10" />,
   more: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
   plus: <path d="M12 5v14M5 12h14" />,
@@ -81,6 +82,17 @@ const ICONS = {
       <path d="M10 11v6M14 11v6" />
     </>
   ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </>
+  ),
+  paperclip: (
+    <path d="M20 11.5 12.5 19a5 5 0 0 1-7-7l8-8a3.4 3.4 0 0 1 4.8 4.8l-8 8a1.7 1.7 0 0 1-2.4-2.4L15 7.5" />
+  ),
+  play: <path d="M8 5.5v13l10-6.5-10-6.5Z" />,
+  stop: <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />,
   external: <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />,
   collapse: (
     <>
@@ -157,6 +169,7 @@ export type IconName = keyof typeof ICONS;
 const STROKE: Partial<Record<IconName, number>> = {
   chevronDown: 2,
   chevronRight: 2,
+  chevronUp: 2,
   check: 2,
   plus: 2,
   close: 2,

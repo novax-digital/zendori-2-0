@@ -30,10 +30,8 @@ export default function PageHeader({
   /** Page tabs (the one allowed second navigation level). */
   tabs?: ReactNode;
 }) {
-  // A <div>, not a <header>: the legacy rule `.shell > header a` (bare pages)
-  // would otherwise restyle every link in here.
   return (
-    <div className="page-head page-head--bar">
+    <div className="page-head">
       <div className="page-head-main">
         {breadcrumb && breadcrumb.length > 0 ? (
           <nav className="page-head-crumbs" aria-label="Pfad">

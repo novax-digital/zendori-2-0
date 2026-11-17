@@ -2,8 +2,9 @@
    Zendori app design system — "Ruhige Arbeitsfläche" (docs/design-redesign.md)
    Inter · flat surfaces separated by 1px lines · dark teal accent (#0b7480)
    · slate neutrals · radii 6/8/12 · shadows only for overlays
-   Stage 1 of the redesign: tokens + base elements. Rules further down that
-   still use the legacy tokens are migrated page by page in stages 2-7.
+
+   This file: tokens, base elements, the app shell (sidebar) and the UI kit
+   (components/ui). Styles of a single area live in app/styles/<area>.css.
    ========================================================================== */
 
 *,
@@ -63,7 +64,6 @@
   --ch-chat-tint: #ffedd5;
   --hubspot: #b93815; /* 'An HubSpot gesendet' — HubSpot orange */
   --hubspot-tint: #fff1ec;
-  --hubspot-border: #ffd3c2;
 
   /* --- type scale (weights: 400, 500, 600 only) --- */
   --fs-title: 20px; /* page title, 600 */
@@ -105,28 +105,6 @@
   --sidebar-text: #475569; /* idle nav + sub-nav labels */
   --sidebar-w: 224px;
   --sidebar-w-collapsed: 56px;
-
-  /* --- legacy names, still referenced by rules that are not migrated yet.
-         Remove in stage 8 (docs/design-redesign.md). --- */
-  --brand-50: #e8fffb;
-  --brand-100: #c8fff6;
-  --brand-200: #8df4eb;
-  --brand-300: #47e3dc;
-  --brand-400: #18d0cc;
-  --brand-500: #0bb8ba;
-  --brand-600: #0895a1;
-  --brand-700: #0b7480;
-  --brand-800: #105e69;
-  --brand-900: #124f58;
-  --blue-600: #2563eb;
-  --brand-gradient: var(--primary); /* was the teal→blue gradient */
-  --success-ink: var(--success);
-  --info-ink: var(--info);
-  --r-xl: var(--r-lg);
-  --r-pill: var(--r);
-  --shadow-sm: none;
-  --shadow-card: none;
-  --shadow-soft: var(--shadow-pop);
 }
 
 /* ---------------------------------------------------------------------------
@@ -184,7 +162,6 @@
   --ch-chat-tint: rgb(249 115 22 / 0.18);
   --hubspot: #fdba9f;
   --hubspot-tint: rgb(255 122 89 / 0.18);
-  --hubspot-border: rgb(255 122 89 / 0.45);
 
   /* depth */
   --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.06), 0 12px 32px rgb(0 0 0 / 0.5);
@@ -194,21 +171,6 @@
 
   /* sidebar */
   --sidebar-text: #93a3b8;
-
-  /* legacy accent tints (active/selected backgrounds) → dark teal wash */
-  --brand-50: rgba(20, 212, 208, 0.13);
-  --brand-100: rgba(20, 212, 208, 0.2);
-  --brand-200: #1c5f63;
-  --brand-500: #16cfca;
-  --brand-600: #2ad6d0;
-  --brand-700: #5eead4;
-}
-
-/* Class-level dark tweaks for a few hard-coded light values. */
-:root[data-theme='dark'] .inbox-note {
-  background: rgba(202, 138, 4, 0.13);
-  border-color: rgba(202, 138, 4, 0.35);
-  color: #fde68a;
 }
 
 html {
@@ -671,19 +633,6 @@ label {
   color: var(--ink);
 }
 
-/* field help text below a control */
-.hint {
-  font-size: var(--fs-small);
-  color: var(--text-muted);
-  margin-top: 6px;
-}
-/* panel intro text below an h2 */
-.help {
-  font-size: var(--fs-small);
-  color: var(--text-muted);
-  margin-bottom: 1.25rem;
-}
-
 /* checkboxes & radios: accent colour, uniform size, aligned rows */
 input[type='checkbox'],
 input[type='radio'] {
@@ -801,19 +750,9 @@ button {
   font-family: inherit;
 }
 
-/* Buttons: 36px high, radius 8, 14/500. No gradient, no shadow, no hover lift.
-   New code uses <Button> (components/ui/Button.tsx) = .btn + .btn--{variant}.
-   Legacy class names, replaced page by page in stages 4-7:
-   .primary = primary · .ghost = secondary (outlined) · .danger = destructive.
-   A class-less submit button is a secondary button. */
-.btn,
-button.primary,
-a.primary,
-.btn-primary,
-button.ghost,
-a.ghost,
-button.danger,
-button[type='submit']:not([class]) {
+/* Buttons (components/ui/Button.tsx): .btn + .btn--{variant}. 36px high,
+   radius 8, 14/500. No gradient, no shadow, no hover lift. */
+.btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -832,18 +771,10 @@ button[type='submit']:not([class]) {
     border-color 0.12s ease;
 }
 a.btn,
-a.btn:hover,
-a.primary,
-a.primary:hover,
-a.ghost,
-a.ghost:hover {
+a.btn:hover {
   text-decoration: none;
 }
-.btn:disabled,
-button.primary:disabled,
-button.ghost:disabled,
-button.danger:disabled,
-button[type='submit']:not([class]):disabled {
+.btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -851,40 +782,22 @@ button[type='submit']:not([class]):disabled {
   flex-shrink: 0;
 }
 
-.btn--primary,
-button.primary,
-a.primary,
-.btn-primary {
+.btn--primary {
   background: var(--primary);
   color: var(--on-primary);
 }
-.btn--primary:hover:not(:disabled),
-button.primary:hover:enabled,
-a.primary:hover,
-.btn-primary:hover {
+.btn--primary:hover:not(:disabled) {
   background: var(--primary-strong);
   color: var(--on-primary);
 }
 
-.btn--secondary,
-button.ghost,
-a.ghost,
-button[type='submit']:not([class]) {
+.btn--secondary {
   background: var(--surface);
   color: var(--ink);
   border-color: var(--border-strong);
 }
-.btn--secondary:hover:not(:disabled),
-button.ghost:hover:enabled,
-a.ghost:hover,
-button[type='submit']:not([class]):hover:enabled {
+.btn--secondary:hover:not(:disabled) {
   background: var(--surface-sunken);
-}
-/* compact secondary for icon-only actions (↑ ↓ ⧉ ✕ rows) */
-button.ghost.ghost--icon {
-  height: 32px;
-  padding: 0 8px;
-  font-size: var(--fs-small);
 }
 
 /* no border, no fill: tertiary actions (Verwerfen, toolbar and icon buttons) */
@@ -897,14 +810,12 @@ button.ghost.ghost--icon {
   color: var(--ink);
 }
 
-.btn--danger,
-button.danger {
+.btn--danger {
   background: var(--surface);
   color: var(--danger);
   border-color: var(--danger-border);
 }
-.btn--danger:hover:not(:disabled),
-button.danger:hover:enabled {
+.btn--danger:hover:not(:disabled) {
   background: var(--danger-tint);
 }
 
@@ -920,124 +831,6 @@ button.danger:hover:enabled {
 }
 .btn--icon.btn--sm {
   width: 32px;
-}
-
-/* --- KB drag-and-drop uploader --- */
-.kb-dropzone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  text-align: center;
-  padding: 1.5rem 1rem;
-  border: 1.5px dashed var(--brand-200);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition:
-    background 0.14s ease,
-    border-color 0.14s ease;
-}
-.kb-dropzone:hover {
-  border-color: var(--brand-300);
-  background: var(--brand-50);
-}
-.kb-dropzone--active {
-  border-color: var(--brand-400, var(--brand-300));
-  background: var(--brand-50);
-  border-style: solid;
-}
-.kb-dropzone svg {
-  color: var(--brand-600);
-}
-.kb-dropzone-title {
-  font-size: 0.92rem;
-  font-weight: 500;
-  color: var(--ink);
-}
-.kb-dropzone-link {
-  color: var(--brand-600);
-  font-weight: 600;
-}
-.kb-dropzone-hint {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.kb-filelist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.kb-fileitem {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  font-size: 0.88rem;
-}
-.kb-fileitem-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink);
-}
-.kb-fileitem-size {
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-.kb-fileitem-size--bad {
-  color: var(--danger);
-  font-weight: 600;
-}
-.kb-fileitem-remove {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
-}
-.kb-fileitem-remove:hover {
-  background: var(--danger-tint);
-  color: var(--danger);
-}
-
-/* Callouts (become <Callout> in stage 3): .error = danger, .notice = neutral info */
-.error,
-.notice {
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 12px 14px;
-  font-size: var(--fs-small);
-}
-.error {
-  background: var(--danger-tint);
-  color: var(--danger);
-  border-color: var(--danger-border);
-}
-.notice {
-  background: var(--surface-sunken);
-  color: var(--text);
 }
 
 /* ============================================================================
@@ -1097,10 +890,32 @@ button.danger:hover:enabled {
   color: var(--danger);
 }
 
-/* stack of URL-driven banners (DismissibleBanners) */
-.banners {
+/* Messages at the top of a page body. .banners = the stack DismissibleBanners
+   renders (also usable for static Callouts); .page-notices wraps banners plus
+   further notes; .page-notice is one Callout that needs air below. */
+.banners,
+.page-notices {
   display: grid;
   gap: 8px;
+  margin-bottom: var(--space-6);
+}
+.banners:empty,
+.page-notices:empty {
+  display: none;
+}
+.page-notices > .banners,
+.drawer-body .banners,
+.stack > .banners {
+  margin-bottom: 0;
+}
+.page-body > .callout,
+.page-notice {
+  margin-bottom: var(--space-6);
+}
+/* a muted footnote under a table or a list of sections */
+.page-note {
+  max-width: 44rem;
+  margin-top: var(--space-4);
 }
 
 /* --- Field: label above, help or error below --- */
@@ -1260,7 +1075,8 @@ input[type='checkbox'].switch:disabled {
   width: auto;
   min-width: 88px;
 }
-.setting-row-control input[type='number'] {
+/* .setting-row prefix: must outweigh the :not():not() rule above */
+.setting-row .setting-row-control input[type='number'] {
   width: 96px;
 }
 
@@ -1624,6 +1440,10 @@ input[type='checkbox'].switch:disabled {
   flex-direction: column;
   gap: var(--space-6);
 }
+/* children keep their height; the body scrolls instead of squashing them */
+.drawer-body > * {
+  flex-shrink: 0;
+}
 .drawer-foot {
   flex-shrink: 0;
   display: flex;
@@ -1768,6 +1588,132 @@ input[type='checkbox'].switch:disabled {
   margin-bottom: 12px;
 }
 
+/* --- Switch as a submit button: one click posts a form with the opposite
+   state (e.g. channel on/off). Same look as input.switch, state via aria-checked. --- */
+.switch-btn {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--switch-off);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.switch-btn::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  transition: transform 0.12s ease;
+}
+.switch-btn[aria-checked='true'] {
+  background: var(--primary);
+}
+.switch-btn[aria-checked='true']::after {
+  transform: translateX(16px);
+}
+.switch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Small form helpers --- */
+/* a <fieldset> without the browser's frame (give it a legend, visible or .sr-only) */
+.fieldset-plain {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+/* …that only exists to disable a group of fields and must not affect layout */
+.fieldset-plain--contents {
+  display: contents;
+}
+/* a field whose control should not span the form (start number, time zone) */
+.field--short input,
+.field--short select {
+  max-width: 20rem;
+}
+/* several short Fields side by side; they wrap when the row gets narrow */
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+/* a <button> that reads as an inline text link */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* a <form> that wraps several Sections keeps the section rhythm around it */
+.section + .section-group,
+.section-group + .section {
+  margin-top: var(--space-8);
+}
+/* stacked Sections inside a drawer: the drawer body already spaces its children */
+.drawer-body > .section + .section {
+  margin-top: 0;
+}
+/* one muted line of consequence text inside a Menu (what a delete removes) */
+.menu-note {
+  max-width: 260px;
+  padding: 6px 10px 8px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--text-muted);
+}
+
+/* --- Numbers in tables --- */
+/* numeric cells (amounts, quantities) */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* <tfoot><tr class="table-sum">: the sum row, a line above, values in ink */
+.table-sum th,
+.table-sum td {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--ink);
+}
+/* a short, right-aligned number field for table cells; .num-cell keeps its unit beside it */
+input.num-input {
+  width: 7rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+input.num-input--sm {
+  width: 5rem;
+}
+.num-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* buttons and a menu side by side in a table's action cell — they never wrap */
+.cell-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* --- Page types (docs/design-redesign.md §5) ---
    <div class="page"> <PageHeader/> <div class="page-body">…</div> </div>
    Detail with rail:  .page > PageHeader + .page-split > (.page-body + .page-rail)
@@ -1777,12 +1723,6 @@ input[type='checkbox'].switch:disabled {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-}
-.page > .page-head,
-.app-main .page > .page-head {
-  margin: 0;
-  padding: 20px 32px;
-  border-bottom: 1px solid var(--border);
 }
 .page-body {
   padding: 24px 32px 48px;
@@ -1801,7 +1741,15 @@ input[type='checkbox'].switch:disabled {
   padding: 0 32px;
   border-bottom: 1px solid var(--border);
 }
-.app-main .page-head:has(+ .page-tabs) {
+/* a <form> that continues the page column below the head (forms must not nest
+   with the forms inside the head's menu); --tabs: it starts with .page-tabs */
+.page-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.page-head:has(+ .page-tabs),
+.page-head:has(+ .page-form--tabs) {
   padding-bottom: 8px;
   border-bottom: 0;
 }
@@ -1841,87 +1789,16 @@ input[type='checkbox'].switch:disabled {
 }
 
 /* ============================================================================
-   Content pages (.shell) & panels
+   Page head (components/ui/PageHeader) and sub-navigation
    ========================================================================== */
 
-.shell {
-  width: 100%;
-  max-width: 64rem;
-  margin: 0 auto;
-  padding: 2rem 2rem 3rem;
-}
-/* wide variant for two-column editors (form builder) */
-.shell--wide {
-  max-width: 84rem;
-}
-
-/* Page frame inside the app chrome (redesign stage 2): pages are left-aligned.
-   The page head spans the full width with a line below; everything under it
-   keeps a readable maximum. Bare pages (/, /widget-demo) keep the centred
-   .shell above. Goes away when pages move to .page (stages 4-6). */
-.app-main .shell {
-  max-width: none;
-  margin: 0;
-  padding: 0 32px 48px;
-}
-.app-main .shell > :not(.page-head) {
-  max-width: 72rem;
-}
-.app-main .shell--wide > :not(.page-head) {
-  max-width: 96rem;
-}
-.shell > header {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 1rem;
-  margin-bottom: 1.5rem;
-}
-.shell > header .brand {
-  display: none;
-}
-.shell > header a {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 0.4rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-.shell > header a:hover {
-  color: var(--brand-700);
-  text-decoration: none;
-  border-color: var(--brand-200);
-  background: var(--brand-50);
-}
-
-/* Interim: a flat outlined box. Panels dissolve into sections separated by
-   lines as pages move to the new page types (stages 4-6). */
-.panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: var(--space-6);
-  margin-bottom: var(--space-6);
-}
-.panel h2 {
-  font-size: var(--fs-heading);
-  line-height: var(--lh-heading);
-  font-weight: 600;
-  margin-bottom: var(--space-3);
-}
-
-/* ============================================================================
-   Settings page head + channel/integration tile gallery
-   ========================================================================== */
-
-/* Page head. Legacy markup is <div class="page-head"><h1/><p/></div>; the
-   <PageHeader> component (components/ui) adds .page-head--bar with breadcrumb,
-   badges, actions and tabs. */
 .page-head {
-  margin-bottom: 1.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
 }
 .page-head h1 {
   font-size: var(--fs-title);
@@ -1934,21 +1811,6 @@ input[type='checkbox'].switch:disabled {
   font-size: var(--fs-small);
   color: var(--text-muted);
   max-width: 44rem;
-}
-/* legacy heads that put a badge row right under the title (ticket detail) */
-.page-head h1 + div {
-  margin-top: 8px;
-}
-.app-main .page-head {
-  margin: 0 -32px 24px;
-  padding: 20px 32px;
-  border-bottom: 1px solid var(--border);
-}
-.page-head--bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 16px;
 }
 .page-head-main {
   flex: 1 1 320px;
@@ -1987,8 +1849,8 @@ input[type='checkbox'].switch:disabled {
   margin-bottom: -20px;
 }
 
-/* Sub-navigation: the one allowed second level next to page tabs. Used by the
-   Plattform (admin) area now, by Einstellungen from stage 6. */
+/* Sub-navigation: the one allowed second level next to page tabs
+   (Einstellungen, Plattform). */
 .with-subnav {
   flex: 1;
   display: flex;
@@ -2035,251 +1897,6 @@ input[type='checkbox'].switch:disabled {
   background: var(--surface-2);
   color: var(--ink);
   font-weight: 600;
-}
-
-.tile-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  gap: 0.9rem;
-  margin-bottom: 1.75rem;
-}
-
-.channel-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  text-align: left;
-  background: var(--surface);
-  border: 1.5px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 1.1rem 1.15rem 1.2rem;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.12s ease;
-}
-.channel-tile:hover {
-  border-color: var(--brand-300);
-  box-shadow: var(--shadow-card);
-}
-.channel-tile:focus-visible {
-  outline: 2px solid var(--brand-500);
-  outline-offset: 2px;
-}
-.channel-tile--selected {
-  border-color: var(--brand-500);
-  box-shadow: 0 0 0 3px var(--brand-100);
-}
-.channel-tile--off {
-  opacity: 0.72;
-}
-.channel-tile--off:hover {
-  opacity: 1;
-}
-
-.tile-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.tile-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 11px;
-  flex-shrink: 0;
-}
-.tile-icon svg {
-  width: 22px;
-  height: 22px;
-}
-/* per-channel accents — transparent tints adapt to light & dark surfaces */
-.tile-icon--form {
-  background: color-mix(in srgb, #2563eb 14%, transparent);
-  color: #2563eb;
-}
-.tile-icon--webform {
-  background: color-mix(in srgb, #0ea5e9 14%, transparent);
-  color: #0284c7;
-}
-.tile-icon--email {
-  background: color-mix(in srgb, var(--brand-600) 16%, transparent);
-  color: var(--brand-600);
-}
-.tile-icon--whatsapp {
-  background: color-mix(in srgb, #16a34a 15%, transparent);
-  color: #16a34a;
-}
-.tile-icon--voice {
-  background: color-mix(in srgb, #7c3aed 15%, transparent);
-  color: #7c3aed;
-}
-.tile-icon--chat {
-  background: color-mix(in srgb, #ea580c 14%, transparent);
-  color: #ea580c;
-}
-.tile-icon--test {
-  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
-  color: var(--text-muted);
-}
-.tile-icon--hubspot {
-  background: color-mix(in srgb, #ff7a59 16%, transparent);
-  color: #e8623b;
-}
-.tile-icon--agent {
-  background: color-mix(in srgb, var(--brand-500) 16%, transparent);
-  color: var(--brand-600);
-}
-.tile-icon--new {
-  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-  color: var(--text-muted);
-}
-.channel-tile--new {
-  border-style: dashed;
-}
-
-.tile-name {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text);
-}
-.tile-desc {
-  font-size: 0.82rem;
-  line-height: 1.4;
-  color: var(--text-muted);
-}
-
-.tile-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0.15rem 0.65rem;
-  border-radius: var(--r-pill);
-  white-space: nowrap;
-}
-.tile-status::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.tile-status--active {
-  background: var(--success-tint);
-  color: var(--success-ink);
-}
-.tile-status--inactive {
-  background: var(--warn-tint);
-  color: var(--warn);
-}
-.tile-status--empty {
-  background: var(--surface-2);
-  color: var(--text-muted);
-}
-
-/* tab bar (knowledge base add-methods, and any in-panel tabs) */
-.tabbar {
-  display: flex;
-  gap: 0.25rem;
-  padding: 0.3rem;
-  margin-bottom: 1.5rem;
-  background: var(--surface-2); /* --bg is white now; the active tab needs a ground to sit on */
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  width: fit-content;
-  max-width: 100%;
-  overflow-x: auto;
-}
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  font-weight: 600;
-  padding: 0.45rem 1rem;
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-.tab:hover {
-  color: var(--text);
-}
-.tab--active {
-  background: var(--surface);
-  color: var(--brand-700);
-  box-shadow: var(--shadow-sm);
-}
-.tab svg {
-  width: 17px;
-  height: 17px;
-}
-
-/* config panel: one row per configured channel instance */
-.chan-instance {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.chan-instance:last-of-type {
-  border-bottom: none;
-}
-.chan-instance-name {
-  font-size: 0.92rem;
-  font-weight: 600;
-}
-.chan-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0.32rem 0.7rem;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
-}
-.chan-toggle::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.chan-toggle--active {
-  color: var(--success-ink);
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  background: var(--success-tint);
-}
-.chan-toggle--active:hover {
-  border-color: var(--success);
-}
-.chan-toggle--inactive {
-  color: var(--text-muted);
-}
-.chan-toggle--inactive:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
 }
 
 /* Tables: quiet head (12/500, no caps), rows at least 56px, lines only */
@@ -2383,25 +2000,6 @@ th {
   background: currentColor;
 }
 
-/* chan-instance row acting as a section header above a form (voice/chat panels) */
-.chan-instance.chan-instance--header {
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 1rem;
-}
-
-
-code.invite-link {
-  display: block;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  padding: 0.65rem 0.8rem;
-  font-size: 0.8rem;
-  color: var(--ink);
-  word-break: break-all;
-  margin-top: 0.5rem;
-}
-
 /* ============================================================================
    Responsive
    ========================================================================== */
@@ -2433,16 +2031,6 @@ code.invite-link {
 }
 
 @media (max-width: 900px) {
-  .shell {
-    padding: 1.25rem 1rem 2rem;
-  }
-  .app-main .shell {
-    padding: 0 16px 32px;
-  }
-  .app-main .page-head {
-    margin: 0 -16px 20px;
-    padding: 16px;
-  }
   /* sub-navigation moves above the content as a wrapping row */
   .with-subnav {
     flex-direction: column;
@@ -2459,8 +2047,7 @@ code.invite-link {
   .subnav-title {
     display: none;
   }
-  .page > .page-head,
-  .app-main .page > .page-head {
+  .page-head {
     padding: 16px;
   }
   .page-tabs {
@@ -2494,46 +2081,8 @@ code.invite-link {
   }
 }
 
-/* Collapsible channel settings (Kanäle page, 2026-07-24): the heavy per-channel
-   settings and create forms hide behind a details/summary so the page stays
-   scannable with many channels. */
-.chan-settings {
-  margin: 0.5rem 0 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 0.55rem 0.9rem;
-  background: var(--bg);
-}
-.chan-settings summary {
-  cursor: pointer;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  user-select: none;
-}
-.chan-settings summary:hover {
-  color: var(--text);
-}
-.chan-settings[open] {
-  background: var(--surface);
-  padding-bottom: 1rem;
-}
-.chan-settings[open] summary {
-  margin-bottom: 0.5rem;
-  color: var(--text);
-}
-
-/* --- Tickets (Phase 11) ----------------------------------------------------- */
+/* ticket numbers, addresses, ids */
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
-}
-.ticket-transcript {
-  max-height: 60vh;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-}
-.ticket-transcript .inbox-messages {
-  flex: 1;
 }
