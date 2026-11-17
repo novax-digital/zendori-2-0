@@ -1,8 +1,10 @@
 # App-Redesign „Ruhige Arbeitsfläche" — Vorschlag und Umsetzungsplan
 
-Stand: 2026-11-17. Status: **Freigegeben, Umsetzung läuft.** Stufe 1 (Tokens und Grundelemente),
-Stufe 2 (Rahmen) und Stufe 3 (Bausteine) sind umgesetzt, aber nicht committet. Stufen 4 bis 8
-stehen aus. Alle Bausteine sind in der App unter `/admin/ui` zu sehen (nur Plattform-Admins).
+Stand: 2026-11-17. Status: **Alle acht Stufen sind umgesetzt.** Committet auf dem Branch
+`redesign/ruhige-arbeitsflaeche` (nicht gepusht), mit Ausnahme von fünf Seiten, die zusätzlich
+noch nicht committete Feature-Arbeit tragen (Abschnitt 11). Kein Bildschirm wurde mit Login und
+echten Daten geprüft; siehe dort. Alle Bausteine sind in der App unter `/admin/ui` zu sehen
+(nur Plattform-Admins).
 
 Visuelle Vorlage (Design-Canvas, 7 Boards): https://claude.ai/artifact/E3EmFgPweATuMTpDdr3ppr
 Der Canvas ist privat. Wer ihn nicht öffnen kann, arbeitet nach diesem Dokument: Alle Werte
@@ -157,7 +159,9 @@ Bildschirm prüfen:
 
 ## 4. Bausteine
 
-CSS bleibt in `globals.css` (kein Tailwind, keine neue Abhängigkeit). Dazu kommen kleine
+CSS: `globals.css` enthält Tokens, Grundelemente, Sidebar und den Baukasten; was nur ein
+Bereich braucht, steht in `app/styles/<bereich>.css` (in `app/layout.tsx` nach `globals.css`
+importiert). Kein Tailwind, keine neue Abhängigkeit. Dazu kommen kleine
 React-Komponenten unter `apps/web/src/components/ui/`, damit die Inline-Styles verschwinden.
 Alle außer `Drawer` und `Menu` sind reine Server-Komponenten ohne State.
 
@@ -205,9 +209,17 @@ Jede Datei beginnt mit einem Kommentar samt Anwendungsbeispiel. Lebende Referenz
 | `Icon.tsx` | `Icon`, `IconName` | Das eine Icon-Set. Neue Icons hier ergänzen, nirgends sonst SVG einbetten. |
 | `useDismiss.ts` | `useDismiss` | Schließt ein Popover bei Klick daneben und Escape. |
 
-Nur CSS, ohne Komponente: `input.switch`, `.toolbar` (+ `.toolbar-end`), `.table-wrap`, `.cell-*`,
-`.form-narrow`, `.tabs--line`, `.banners`, die Seitentypen `.page`, `.page-body`, `.page-split`,
-`.page-rail`, `.rail-section`, `.save-bar`.
+Seit Stufe 8 dazu: `AuthCard.tsx` (Login, Onboarding, Einladung, Organisations-Auswahl),
+in `Layout.tsx` `Stats`/`Stat` und `CodeBlock`, in `lib/href.ts` der Helfer `href()`.
+
+Nur CSS, ohne Komponente: `input.switch`, `.switch-btn` (Schalter als Absende-Button),
+`.toolbar` (+ `.toolbar-end`), `.table-wrap`, `.cell-*`, `.cell-buttons`, `.table--compact`,
+`.table-sum`, `.num`, `input.num-input`, `.form-narrow`, `.field--short`, `.field-row`,
+`.fieldset-plain`, `.link-button`, `.tabs--line`, `.banners`, `.page-notices`, `.page-notice`,
+`.page-note`, `.menu-note`, `.steps`, `.disclosure`, die Layout-Helfer `.row`, `.stack--sm`,
+`.stack--lg`, `.muted`, `.small`, `.grow`, `.truncate`, `.sr-only` und die Seitentypen `.page`,
+`.page-body`, `.page-split`, `.page-rail`, `.rail-section`, `.page-form`, `.page-tabs`,
+`.save-bar`.
 
 Regeln für die Stufen 4 bis 7:
 
@@ -249,8 +261,10 @@ Hauptspalte plus Seitenleiste (320, Linie links, `PropertyList`) für Objekte mi
 Seiten-Tabs plus Formular (höchstens 720 breit) für Objekte mit vielen Einstellungen. Formulare
 enden in einer Speichern-Leiste, die unten kleben bleibt (`position: sticky; bottom: 0`, Linie oben).
 
-**D · Einstellungen** (`/settings/organization` und Geschwister, `/admin/*`). Kopf, dann links
-`SubNav`, rechts Inhalt (höchstens 720 breit) aus Abschnitten und Einstellungs-Zeilen.
+**D · Einstellungen** (`/settings/organization` und Geschwister, `/admin/*`). Links über die
+volle Höhe die `SubNav`, rechts eine normale Seite vom Typ B oder C mit eigenem `PageHeader`.
+(Abweichung vom Canvas-Board, das einen gemeinsamen Kopf „Einstellungen" über beidem zeigt:
+so sind Einstellungen und Plattform gleich gebaut und jede Seite bleibt eine normale Seite.)
 
 Gerüste mit den echten Bausteinen (alle drei stehen so auf `/admin/ui`):
 
@@ -323,8 +337,7 @@ So umgesetzt in Stufe 2:
 - `/tools/md-generator` markiert „Wissen" als aktiv, `/test-channel` markiert „Kanäle". Beide
   Seiten haben einen Pfad im Seitenkopf als Rückweg.
 - `app/admin/layout.tsx` rendert die `SubNav` und prüft `requirePlatformAdmin()` selbst.
-- **Zähler an Inbox und Tickets sind nicht umgesetzt.** Sie brauchen eine eigene Abfrage und eine
-  Entscheidung, was gezählt wird (siehe Abschnitt 10, Punkt 4).
+- Die Zähler an Inbox und Tickets kamen nach Stufe 3 dazu (Abschnitt 10, Punkt 4).
 - `PageHeader` ist ein `<div>`, kein `<header>`: Die Alt-Regel `.shell > header a` (Seiten ohne
   Rahmen: `/`, `/widget-demo`) würde sonst jeden Link darin umfärben.
 - Der Seitenrahmen alter Seiten hängt an `.app-main .shell` (linksbündig, Kopf über die volle
@@ -409,6 +422,88 @@ Messbare Ziele nach Stufe 8:
    erscheinen Notizen im Verlauf. Das wäre ein eigenes kleines Feature.
 3. **Startseite „Übersicht".** Nicht Teil dieses Plans. Eine Seite mit offenen Konversationen,
    wartenden Tickets und Autopilot-Quote ließe sich mit denselben Bausteinen später ergänzen.
-4. **Zähler in der Sidebar.** Offen: Was zählt die Zahl an Inbox und Tickets? Vorschlag: Inbox =
-   Konversationen mit Status „wartend" (die eine Warteschlange für Menschen), Tickets = offen plus
-   in Arbeit. Umsetzung als kleine Client-Abfrage in der Sidebar, am besten zusammen mit Stufe 7.
+4. **Zähler in der Sidebar.** Umgesetzt wie vorgeschlagen: Inbox = Konversationen mit Status
+   „wartend", Tickets = offen plus in Arbeit. Aktualisiert bei jeder Navigation, bei Fensterfokus
+   und einmal pro Minute.
+
+## 11. Umsetzungsstand (2026-11-17)
+
+**Messwerte**
+
+| Ziel aus Abschnitt 8 | Ergebnis |
+| --- | --- |
+| Inline-Styles unter 30 (vorher 482) | 8: sieben auf den öffentlichen Seiten `/f/[token]` und `/demo` (bewusst unangetastet), einer als Laufzeitwert im `Menu` |
+| nur noch die Schriftgrößen aus Abschnitt 3 | in `globals.css` erfüllt |
+| kein `className="panel"` | erfüllt, ebenso `shell`, `tabbar`, Kacheln, alte Button-Klassen |
+| ein `PageHeader`, höchstens ein Primär-Button je Ansicht | erfüllt bis auf zwei Stellen (siehe unten) |
+| `globals.css` | 2709 → 2150 Zeilen, dazu 8 Bereichs-Dateien mit zusammen rund 1050 Zeilen |
+
+`pnpm typecheck`, `pnpm lint`, `pnpm test` und `next build` (59 Routen) sind grün. Der
+Branch-Stand kompiliert auch für sich allein, ohne die offene Feature-Arbeit.
+
+**Commits auf `redesign/ruhige-arbeitsflaeche`:** Stufen 1 bis 3, Sidebar-Zähler,
+Baukasten-Ergänzungen, Seiten außerhalb des Rahmens, Stufe 8 (Aufräumen), dann je ein Commit für
+Tickets-Liste, Kanäle, Agenten, Wissen, Formulare und Team, Einstellungen, Plattform, Inbox.
+
+**Noch nicht committet (Redesign fertig, aber vermischt mit offener Feature-Arbeit):**
+
+| Datei | trägt außerdem |
+| --- | --- |
+| `app/tickets/[ticketId]/page.tsx`, `lib/tickets/queries.ts`, `lib/tickets/types.ts` | Ticket-Vorgeschichte |
+| `app/settings/phone-numbers/page.tsx` | Status `failed` (0033); committet ist die Fassung ohne ihn |
+| `app/admin/phone-numbers/**` | Nummernbestellung (0033) |
+| `app/admin/demo/**`, Eintrag „Demo-Anrufe" in `app/admin/layout.tsx`, `/demo` in `AppShell.tsx` | Demo-Anruf (0032) |
+
+Folge: Im Branch-Stand allein zeigen Ticket-Detail und Plattform-Telefonnummern noch ihr altes
+Markup, für das es kein CSS mehr gibt. **Den Branch erst zusammenführen, wenn die Feature-Arbeit
+mitcommittet ist.** In der Arbeitskopie ist alles vollständig.
+
+**Bewusste Verhaltensänderungen** (alle Actions, Feldnamen und Rechteprüfungen sind unverändert)
+
+- Überall: Anlegen und Bearbeiten im Drawer (`?panel=…`); ein Eingabefehler führt zurück in den
+  offenen Drawer. Löschen liegt im „⋯"-Menü und ist zweistufig. Meldungen aus `?notice=` und
+  `?error=` blenden sich auf allen Seiten selbst aus.
+- Tickets: Primär-Button „Als erledigt markieren" im Kopf der Detailseite; Link „Zurücksetzen" bei
+  aktivem Filter; Zähler an den Status-Tabs (bei Suche ausgeblendet); der Verlauf steht in der
+  Seite statt in einem Kasten mit eigener Scroll-Leiste.
+- Inbox: Status und Kanalfilter senden beim Ändern ab; „Übernehmen", „Zurückgeben" und „Entwurf
+  anfordern" stehen im Kopf des Verlaufs; Zeilen zeigen „Bot" oder „Mensch"; Systemnachrichten
+  sind umrandet statt gefüllt; unter 1100 px rückt die Kontext-Spalte unter den Verlauf.
+- Kanäle: Kanaltyp wird im Drawer gewählt; Detailseite mit Tabs je Kanalart; die zwei
+  Voice-Häkchen sind Schalter; „Neuer Kanal" sehen auch Mitglieder ohne Recht (mit Hinweis).
+- Agenten: Typ, Modus und Eskalationsziel als Auswahlgruppen statt Auswahllisten; Hilfetexte
+  gekürzt, Wegbeschreibungen sind Links.
+- Wissen: neue Route `/settings/knowledge/[kbId]`; Aktionen an Quellen und „In Wissensdatenbank
+  speichern" des MD-Generators landen auf der Seite dieser Wissensdatenbank statt auf der Liste.
+- Formulare und Team: Formular löschen über Menü und Drawer mit Namensbestätigung; „Feld
+  duplizieren" steht im geöffneten Feld; Mitglied entfernen ist zweistufig.
+- Einstellungen: Unternavigation statt Tabs; Textbausteine zeigen Anlegen, Bearbeiten und Löschen
+  nur mit Bearbeiten-Recht; Eskalations-Keywords bleiben ein Textfeld mit Kommas.
+- Plattform: Rollen heißen einheitlich Inhaber, Admin, Mitarbeiter; ein Demo-Anruf öffnet seine
+  Details mit Transkript im Drawer.
+- Sidebar: Zähler an Inbox (wartend) und Tickets (offen plus in Arbeit).
+
+**Zwei Stellen mit mehr als einem gefüllten Button:** In der Inbox können „Übernehmen" am
+Antwortvorschlag und „Senden" gleichzeitig sichtbar sein. Auf „Preise & Pakete" ist dafür kein
+Button primär, weil jeder Block seinen eigenen Speichern-Button hat.
+
+**Nicht geprüft**
+
+- Keine Seite wurde mit Login und echten Daten in der laufenden App gesehen (kein Testzugang).
+  Geprüft wurde so: Die echten Seiten-Komponenten wurden je Bereich mit Beispieldaten in Chrome
+  gerendert, hell und dunkel, mit geöffneten Drawern und Menüs. Die Login-Seite lief in der echten
+  App.
+- Keine Server-Action wurde ausgeführt. Ungetestet sind damit vor allem die neuen Rücksprünge in
+  den Drawer nach einem Fehler und die neuen Ziele nach dem Speichern (Wissen, Kanal-Tabs).
+- Fensterbreiten unter 900 px nur stichprobenhaft.
+
+**Offen für den Owner**
+
+1. Feature-Arbeit committen, damit die fünf gemischten Seiten folgen können.
+2. Platzhalter mit Kundennamen („z. B. Kontaktformular strong-energy.eu" und ähnliche) neutral
+   fassen? Im Onboarding ist das schon geschehen.
+3. „Neue Wissensdatenbank", „Quelle hinzufügen" und „Neuer Kanal" für Mitglieder ohne
+   Bearbeiten-Recht ausblenden? Heute sichtbar, die Action lehnt ab.
+4. Soll die Agent-Auswahl am Kanal beim Ändern sofort speichern?
+5. Inbox-Liste ist 280 bis 320 px breit statt 300, damit fünf Status-Tabs in eine Zeile passen.
+6. Weiterhin offen aus Abschnitt 10: Notizen im Verlauf, Startseite „Übersicht".
