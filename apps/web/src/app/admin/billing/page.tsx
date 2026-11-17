@@ -13,6 +13,11 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import Button from '@/components/ui/Button';
+import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
+import AdminUnavailable from '../_components/AdminUnavailable';
 
 type OrgRow = { id: string; name: string };
 
@@ -25,16 +30,7 @@ export default async function AdminBillingPage({
   const { month, error, notice } = await searchParams;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Abrechnung</h1>
-        </div>
-        <p className="error">Service-Role ist serverseitig nicht konfiguriert.</p>
-      </div>
-    );
-  }
+  if (!admin) return <AdminUnavailable title="Abrechnung" />;
 
   const months = recentMonths(new Date(), 12);
   const period = parseMonthKey(month, currentMonth(new Date()));
@@ -67,80 +63,84 @@ export default async function AdminBillingPage({
   const totalMargin = Math.round((totalPrice - totalCost) * 100) / 100;
 
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>Abrechnung</h1>
-        <p>
-          Monatssumme aller Kunden (Verbrauch + Paketgebühren). „Kosten" = unser Einkauf, „Preis" =
-          Kundenbetrag. Preislisten und Pakete verwaltest du unter{' '}
-          <Link href="/admin/pricing">Preise & Pakete</Link>.
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Abrechnung"
+        subtitle="Monatssumme aller Kunden aus Verbrauch und Paketgebühren."
+      />
 
-      {error ? <p className="error" style={{ marginBottom: '1rem' }}>{error}</p> : null}
-      {notice ? <p className="notice" style={{ marginBottom: '1rem' }}>{notice}</p> : null}
+      <div className="page-body">
+        <DismissibleBanners error={error} notice={notice} />
 
-      <div className="panel">
-        <form method="get" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <div>
-            <label htmlFor="month">Abrechnungsmonat</label>
-            <select id="month" name="month" defaultValue={period.key}>
-              {months.map((m) => (
-                <option key={m.key} value={m.key}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="ghost" type="submit">Anzeigen</button>
+        <form method="get" className="toolbar">
+          <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
+            {months.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <Button type="submit">Anzeigen</Button>
         </form>
-      </div>
 
-      <div className="panel">
-        <h2>{period.label}</h2>
-        {rows.length === 0 ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Noch keine Organisationen vorhanden.
-          </p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Kunde</th>
-                <th>Paket</th>
-                <th style={{ textAlign: 'right' }}>Kosten</th>
-                <th style={{ textAlign: 'right' }}>Preis</th>
-                <th style={{ textAlign: 'right' }}>Marge</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.org.id}>
-                  <td>
-                    <Link href={`/admin/billing/${r.org.id}?month=${period.key}`} style={{ fontWeight: 600 }}>
-                      {r.org.name}
-                    </Link>
-                  </td>
-                  <td style={{ color: 'var(--text-muted)' }}>{r.packageName ?? '—'}</td>
-                  <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatEur(r.costEur)}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(r.priceEur)}</td>
-                  <td style={{ textAlign: 'right' }}>{formatEur(r.marginEur)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th>Summe</th>
-                <th></th>
-                <th style={{ textAlign: 'right' }}>{formatEur(totalCost)}</th>
-                <th style={{ textAlign: 'right' }}>{formatEur(totalPrice)}</th>
-                <th style={{ textAlign: 'right' }}>{formatEur(totalMargin)}</th>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </div>
+        <Section
+          title={period.label}
+          help="„Preis“ ist der Kundenbetrag, „Kosten“ unser Einkauf."
+        >
+          <Stats>
+            <Stat label="Preis" value={formatEur(totalPrice)} />
+            <Stat label="Kosten" value={formatEur(totalCost)} />
+            <Stat label="Marge" value={formatEur(totalMargin)} />
+          </Stats>
+        </Section>
 
+        <Section title="Kunden">
+          {rows.length === 0 ? (
+            <EmptyState title="Noch keine Organisationen" />
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Kunde</th>
+                    <th>Paket</th>
+                    <th className="right">Kosten</th>
+                    <th className="right">Preis</th>
+                    <th className="right">Marge</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.org.id}>
+                      <td>
+                        <Link
+                          href={`/admin/billing/${r.org.id}?month=${period.key}`}
+                          className="cell-title"
+                        >
+                          {r.org.name}
+                        </Link>
+                      </td>
+                      <td className="muted">{r.packageName ?? 'Kein Paket'}</td>
+                      <td className="right muted">{formatEur(r.costEur)}</td>
+                      <td className="right strong">{formatEur(r.priceEur)}</td>
+                      <td className="right">{formatEur(r.marginEur)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="table-sum">
+                    <th scope="row">Summe</th>
+                    <td />
+                    <td className="right">{formatEur(totalCost)}</td>
+                    <td className="right">{formatEur(totalPrice)}</td>
+                    <td className="right">{formatEur(totalMargin)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }

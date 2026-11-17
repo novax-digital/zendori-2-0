@@ -24,33 +24,33 @@ function billingUrl(message?: { error?: string; notice?: string }): string {
   return qs ? `/admin/billing?${qs}` : '/admin/billing';
 }
 
-function orgBillingUrl(orgId: string, message?: { error?: string; notice?: string }): string {
-  const params = new URLSearchParams();
-  if (message?.error) params.set('error', message.error);
-  if (message?.notice) params.set('notice', message.notice);
-  const qs = params.toString();
-  return qs ? `/admin/billing/${orgId}?${qs}` : `/admin/billing/${orgId}`;
-}
-
 /**
  * The assign/remove forms live on TWO admin pages since the unification
  * (Organisationen-Detailseite + Abrechnungs-Detailseite). `returnTo=org` sends
  * the redirect back to where the form was submitted; the value is a fixed enum,
  * never a path from the client.
+ *
+ * Both pages show the form in the "Plan zuweisen" drawer (?panel=plan,
+ * admin/_components/PlanDrawer.tsx): an error keeps that drawer open, a
+ * success closes it.
  */
 function subscriptionReturnUrl(
   formData: FormData,
   orgId: string,
   message?: { error?: string; notice?: string }
 ): string {
-  if (textField(formData.get('returnTo')) === 'org') {
-    const params = new URLSearchParams();
-    if (message?.error) params.set('error', message.error);
-    if (message?.notice) params.set('notice', message.notice);
-    const qs = params.toString();
-    return qs ? `/admin/users/${orgId}?${qs}` : `/admin/users/${orgId}`;
+  const params = new URLSearchParams();
+  if (message?.error) {
+    params.set('panel', 'plan');
+    params.set('error', message.error);
   }
-  return orgBillingUrl(orgId, message);
+  if (message?.notice) params.set('notice', message.notice);
+  const qs = params.toString();
+  const path =
+    textField(formData.get('returnTo')) === 'org'
+      ? `/admin/users/${orgId}`
+      : `/admin/billing/${orgId}`;
+  return qs ? `${path}?${qs}` : path;
 }
 
 // --- assign a package/price list to a customer -------------------------------

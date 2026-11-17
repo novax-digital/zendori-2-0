@@ -30,16 +30,22 @@ function slugify(name: string): string {
   );
 }
 
-function usersUrl(message?: { error?: string; notice?: string }): string {
+type Message = { error?: string; notice?: string };
+
+// Create forms live in drawers (?panel=…): an error redirects back WITH the
+// panel so the drawer stays open, a success without it.
+function usersUrl(message?: Message, panel?: 'new'): string {
   const params = new URLSearchParams();
+  if (panel) params.set('panel', panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   const qs = params.toString();
   return qs ? `/admin/users?${qs}` : '/admin/users';
 }
 
-function orgUrl(orgId: string, message?: { error?: string; notice?: string }): string {
+function orgUrl(orgId: string, message?: Message, panel?: 'member'): string {
   const params = new URLSearchParams();
+  if (panel) params.set('panel', panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   const qs = params.toString();
@@ -68,12 +74,12 @@ export async function createCustomer(formData: FormData): Promise<void> {
     email: textField(formData.get('email')),
   });
   if (!parsed.success) {
-    redirect(usersUrl({ error: 'Bitte Firmenname und eine gültige E-Mail angeben.' }));
+    redirect(usersUrl({ error: 'Bitte Firmenname und eine gültige E-Mail angeben.' }, 'new'));
   }
   const { orgName, email } = parsed.data;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(usersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(usersUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }, 'new'));
 
   // 1) create (or find) the auth user first — fail early, no orphan org
   let userId: string;
@@ -81,7 +87,7 @@ export async function createCustomer(formData: FormData): Promise<void> {
   try {
     ({ userId, created } = await ensureAuthUser(admin, email));
   } catch {
-    redirect(usersUrl({ error: 'Konto konnte nicht angelegt werden.' }));
+    redirect(usersUrl({ error: 'Konto konnte nicht angelegt werden.' }, 'new'));
   }
 
   // 2) create the organization (its org_settings row is created by the trigger)
@@ -101,7 +107,7 @@ export async function createCustomer(formData: FormData): Promise<void> {
   }
   if (!orgId) {
     if (created) await admin.auth.admin.deleteUser(userId); // roll back the just-created account
-    redirect(usersUrl({ error: 'Organisation konnte nicht angelegt werden.' }));
+    redirect(usersUrl({ error: 'Organisation konnte nicht angelegt werden.' }, 'new'));
   }
 
   // 3) assign the user as owner
@@ -111,7 +117,7 @@ export async function createCustomer(formData: FormData): Promise<void> {
   if (memberError) {
     await admin.from('organizations').delete().eq('id', orgId); // avoid an ownerless org
     if (created) await admin.auth.admin.deleteUser(userId);
-    redirect(usersUrl({ error: 'Owner konnte nicht zugewiesen werden.' }));
+    redirect(usersUrl({ error: 'Owner konnte nicht zugewiesen werden.' }, 'new'));
   }
 
   // 4) invitation mail (best-effort: membership stands; team page can resend)
@@ -155,12 +161,12 @@ export async function addMember(formData: FormData): Promise<void> {
     role: textField(formData.get('role')),
   });
   if (!parsed.success) {
-    redirect(orgUrl(orgIdRaw, { error: 'Bitte gültige E-Mail und Rolle angeben.' }));
+    redirect(orgUrl(orgIdRaw, { error: 'Bitte gültige E-Mail und Rolle angeben.' }, 'member'));
   }
   const { orgId, email, role } = parsed.data;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(orgUrl(orgId, { error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(orgUrl(orgId, { error: 'Service-Role ist serverseitig nicht konfiguriert.' }, 'member'));
 
   const { data: orgRow } = await admin
     .from('organizations')
@@ -175,7 +181,7 @@ export async function addMember(formData: FormData): Promise<void> {
   try {
     ({ userId, created } = await ensureAuthUser(admin, email));
   } catch {
-    redirect(orgUrl(orgId, { error: 'Konto konnte nicht angelegt werden.' }));
+    redirect(orgUrl(orgId, { error: 'Konto konnte nicht angelegt werden.' }, 'member'));
   }
 
   const { data: existing } = await admin
@@ -184,14 +190,14 @@ export async function addMember(formData: FormData): Promise<void> {
     .eq('org_id', orgId)
     .eq('user_id', userId)
     .maybeSingle();
-  if (existing) redirect(orgUrl(orgId, { error: 'Diese E-Mail-Adresse ist bereits im Team.' }));
+  if (existing) redirect(orgUrl(orgId, { error: 'Diese E-Mail-Adresse ist bereits im Team.' }, 'member'));
 
   const { error: memberError } = await admin
     .from('org_members')
     .insert({ org_id: orgId, user_id: userId, role });
   if (memberError) {
     if (created) await admin.auth.admin.deleteUser(userId); // roll back the just-created account
-    redirect(orgUrl(orgId, { error: 'Mitglied konnte nicht hinzugefügt werden.' }));
+    redirect(orgUrl(orgId, { error: 'Mitglied konnte nicht hinzugefügt werden.' }, 'member'));
   }
 
   let mailNote = '';

@@ -1,7 +1,6 @@
 // Per-customer billing drill-down (platform admin): the combined invoice (usage
 // priced through the org's tier + package fees + setup), package assignment, and
 // the most recent measured transactions. Service-role reads behind requirePlatformAdmin.
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -15,7 +14,14 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
-import { assignPackage, removeSubscription } from '../actions';
+import { href } from '@/lib/href';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import Button from '@/components/ui/Button';
+import { EmptyState, Section } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
+import AdminUnavailable from '../../_components/AdminUnavailable';
+import PlanDrawer from '../../_components/PlanDrawer';
+import PlanSummary from '../../_components/PlanSummary';
 
 const STEP_LABELS: Record<string, string> = {
   classify: 'Klassifikation',
@@ -50,23 +56,14 @@ export default async function AdminOrgBillingPage({
   searchParams,
 }: {
   params: Promise<{ orgId: string }>;
-  searchParams: Promise<{ month?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ month?: string; error?: string; notice?: string; panel?: string }>;
 }) {
   await requirePlatformAdmin();
   const { orgId } = await params;
-  const { month, error, notice } = await searchParams;
+  const { month, error, notice, panel } = await searchParams;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Abrechnung</h1>
-        </div>
-        <p className="error">Service-Role ist serverseitig nicht konfiguriert.</p>
-      </div>
-    );
-  }
+  if (!admin) return <AdminUnavailable title="Abrechnung" />;
 
   const { data: orgRow } = await admin
     .from('organizations')
@@ -118,175 +115,151 @@ export default async function AdminOrgBillingPage({
     .sort((a, b) => Date.parse(b.when) - Date.parse(a.when))
     .slice(0, 30);
 
+  const base = `/admin/billing/${orgId}`;
+  // The assignment form lives in a drawer (?panel=plan); its errors show inside.
+  const planning = panel === 'plan';
+  const closeHref = href(base, { month });
+
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>{org.name} — Abrechnung</h1>
-        <p>
-          <Link href={`/admin/billing?month=${period.key}`}>← Zurück zur Übersicht</Link>
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Abrechnung', href: `/admin/billing?month=${period.key}` },
+          { label: org.name },
+        ]}
+        title={org.name}
+        subtitle="Rechnung, Plan und letzte Vorgänge dieses Kunden."
+      />
 
-      {error ? <p className="error" style={{ marginBottom: '1rem' }}>{error}</p> : null}
-      {notice ? <p className="notice" style={{ marginBottom: '1rem' }}>{notice}</p> : null}
+      <div className="page-split">
+        <div className="page-body">
+          <DismissibleBanners
+            error={planning ? undefined : error}
+            notice={notice}
+          />
 
-      <div className="panel">
-        <form method="get" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <div>
-            <label htmlFor="month">Abrechnungsmonat</label>
-            <select id="month" name="month" defaultValue={period.key}>
+          <form method="get" className="toolbar">
+            <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
               {months.map((m) => (
-                <option key={m.key} value={m.key}>{m.label}</option>
+                <option key={m.key} value={m.key}>
+                  {m.label}
+                </option>
               ))}
             </select>
-          </div>
-          <button className="ghost" type="submit">Anzeigen</button>
-        </form>
-      </div>
-
-      <div className="panel">
-        <h2>Rechnung — {period.label}</h2>
-        {invoice.packageName ? (
-          <p className="help">
-            Paket: <strong>{invoice.packageName}</strong> ·{' '}
-            {invoice.interval === 'yearly' ? 'jährliche' : 'monatliche'} Laufzeit
-          </p>
-        ) : (
-          <p className="help">Kein Paket zugewiesen — nur Verbrauch wird berechnet.</p>
-        )}
-        <table>
-          <thead>
-            <tr>
-              <th>Position</th>
-              <th style={{ textAlign: 'right' }}>Menge</th>
-              <th style={{ textAlign: 'right' }}>Kosten</th>
-              <th style={{ textAlign: 'right' }}>Preis</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoice.recurring.map((line, i) => (
-              <tr key={`rec-${i}`}>
-                <td>{line.label}</td>
-                <td></td>
-                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>—</td>
-                <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.amountEur)}</td>
-              </tr>
-            ))}
-            {invoice.usage.lines.map((line) => (
-              <tr key={line.category}>
-                <td>{line.label}</td>
-                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                  {formatQuantity(line.quantity, line.unit)}
-                </td>
-                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatEur(costEur(line.costUsd))}</td>
-                <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatEur(line.priceEur)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <th>Summe</th>
-              <th></th>
-              <th style={{ textAlign: 'right' }}>{formatEur(costEur(invoice.usage.totalCostUsd))}</th>
-              <th style={{ textAlign: 'right' }}>{formatEur(invoice.grandTotalEur)}</th>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      <div className="panel">
-        <h2>Paket zuweisen</h2>
-        <p className="help">
-          Weist dem Kunden ein Paket zu (setzt dessen Kanal-Kontingente). Die Preisliste bestimmt
-          die Verbrauchspreise; optional eine andere Liste für bessere Konditionen wählen.
-        </p>
-        <form className="stack" action={assignPackage} style={{ maxWidth: '26rem' }}>
-          <input type="hidden" name="orgId" value={orgId} />
-          <div>
-            <label htmlFor="packageId">Paket</label>
-            <select id="packageId" name="packageId" defaultValue={sub?.packageId ?? ''}>
-              <option value="">— kein Paket —</option>
-              {packages.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="priceTierId">Preisliste (optional, bessere Konditionen)</label>
-            <select id="priceTierId" name="priceTierId" defaultValue={sub?.priceTierId ?? ''}>
-              <option value="">— aus Paket übernehmen —</option>
-              {tiers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="interval">Laufzeit</label>
-            <select id="interval" name="interval" defaultValue={sub?.interval ?? 'monthly'}>
-              <option value="monthly">Monatlich</option>
-              <option value="yearly">Jährlich</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="setupFeeEur">Setup-Gebühr-Override (€, optional)</label>
-            <input
-              id="setupFeeEur"
-              name="setupFeeEur"
-              type="text"
-              inputMode="decimal"
-              placeholder="aus Paket"
-              defaultValue={sub?.setupFeeEur != null ? String(sub.setupFeeEur) : ''}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="primary" type="submit">Zuweisen / Speichern</button>
-          </div>
-        </form>
-        {sub ? (
-          <form action={removeSubscription} style={{ marginTop: '0.75rem' }}>
-            <input type="hidden" name="orgId" value={orgId} />
-            <button className="ghost" type="submit">Zuweisung entfernen</button>
+            <Button type="submit">Anzeigen</Button>
           </form>
-        ) : null}
+
+          <Section
+            title={`Rechnung ${period.label}`}
+            help={
+              invoice.packageName ? (
+                <>
+                  Paket <strong>{invoice.packageName}</strong>,{' '}
+                  {invoice.interval === 'yearly' ? 'jährliche' : 'monatliche'} Laufzeit.
+                </>
+              ) : (
+                'Kein Paket zugewiesen, nur der Verbrauch wird berechnet.'
+              )
+            }
+          >
+            <div className="table-wrap">
+              <table className="table--compact">
+                <thead>
+                  <tr>
+                    <th>Position</th>
+                    <th className="right">Menge</th>
+                    <th className="right">Kosten</th>
+                    <th className="right">Preis</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoice.recurring.map((line, i) => (
+                    <tr key={`rec-${i}`}>
+                      <td>{line.label}</td>
+                      <td />
+                      <td className="right muted">—</td>
+                      <td className="right strong">{formatEur(line.amountEur)}</td>
+                    </tr>
+                  ))}
+                  {invoice.usage.lines.map((line) => (
+                    <tr key={line.category}>
+                      <td>{line.label}</td>
+                      <td className="right muted">{formatQuantity(line.quantity, line.unit)}</td>
+                      <td className="right muted">{formatEur(costEur(line.costUsd))}</td>
+                      <td className="right strong">{formatEur(line.priceEur)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="table-sum">
+                    <th scope="row">Summe</th>
+                    <td />
+                    <td className="right">{formatEur(costEur(invoice.usage.totalCostUsd))}</td>
+                    <td className="right">{formatEur(invoice.grandTotalEur)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Section>
+
+          <Section
+            title="Letzte Vorgänge"
+            help="WhatsApp-, E-Mail- und Rufnummern-Kosten werden aus Mengen × Preistabelle berechnet und erscheinen nur in der Rechnung, nicht als Einzelvorgang."
+          >
+            {txns.length === 0 ? (
+              <EmptyState
+                title="Keine Vorgänge"
+                text={`In ${period.label} wurden noch keine kostenpflichtigen Vorgänge erfasst.`}
+              />
+            ) : (
+              <div className="table-wrap">
+                <table className="table--compact">
+                  <thead>
+                    <tr>
+                      <th>Zeitpunkt</th>
+                      <th>Vorgang</th>
+                      <th>Quelle</th>
+                      <th className="right">Kosten</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {txns.map((t, i) => (
+                      <tr key={`${t.when}-${i}`}>
+                        <td className="muted nowrap">{formatDateTime(t.when)}</td>
+                        <td>{t.label}</td>
+                        <td className="muted">{t.source}</td>
+                        {/* Unrounded: a single Haiku call is worth ~0,1–0,3 Cent, and
+                            cent-rounding rendered every KI row as a misleading 0,00 €. */}
+                        <td className="right">{formatEurCost(t.costUsd * catalog.ctx.usdToEur)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </div>
+
+        <aside className="page-rail" aria-label="Plan">
+          <PlanSummary
+            subscription={sub}
+            packageName={sub?.packageId ? catalog.packages.get(sub.packageId)?.name : undefined}
+            tierName={sub?.priceTierId ? catalog.tiers.get(sub.priceTierId)?.name : undefined}
+            changeHref={href(base, { month, panel: 'plan' })}
+          />
+        </aside>
       </div>
 
-      <div className="panel">
-        <h2>Letzte Vorgänge</h2>
-        {txns.length === 0 ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            In {period.label} wurden noch keine kostenpflichtigen Vorgänge erfasst.
-          </p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Zeitpunkt</th>
-                <th>Vorgang</th>
-                <th>Quelle</th>
-                <th style={{ textAlign: 'right' }}>Kosten</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txns.map((t, i) => (
-                <tr key={`${t.when}-${i}`}>
-                  <td style={{ color: 'var(--text-muted)' }}>{formatDateTime(t.when)}</td>
-                  <td>{t.label}</td>
-                  <td style={{ color: 'var(--text-muted)' }}>{t.source}</td>
-                  {/* Unrounded: a single Haiku call is worth ~0,1–0,3 Cent, and
-                      cent-rounding rendered every KI row as a misleading 0,00 €. */}
-                  <td style={{ textAlign: 'right' }}>
-                    {formatEurCost(t.costUsd * catalog.ctx.usdToEur)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <p className="help" style={{ marginTop: '0.75rem' }}>
-          WhatsApp-, E-Mail- und Rufnummern-Kosten werden aus Mengen × Preistabelle berechnet und
-          erscheinen nur in der Rechnung, nicht als Einzelvorgang.
-        </p>
-      </div>
+      {planning ? (
+        <PlanDrawer
+          orgId={orgId}
+          closeHref={closeHref}
+          subscription={sub}
+          packages={packages}
+          tiers={tiers}
+          error={error}
+        />
+      ) : null}
     </div>
   );
 }

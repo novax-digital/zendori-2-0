@@ -1,40 +1,39 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { Channel, ChannelKind } from '@zendori/core';
+import { ORG_ROLE_LABELS, type Channel, type ChannelKind, type OrgRole } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { CHANNEL_KIND_LABELS, countChannelsByKind } from '@/lib/channel-limits';
 import { loadBillingCatalog } from '@/lib/billing';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Drawer from '@/components/ui/Drawer';
+import { Field } from '@/components/ui/Field';
+import { Section } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
+import AdminUnavailable from '../../_components/AdminUnavailable';
+import PlanDrawer from '../../_components/PlanDrawer';
+import PlanSummary from '../../_components/PlanSummary';
 import { addMember } from '../actions';
-import { assignPackage, removeSubscription } from '../../billing/actions';
 
 type MemberRow = { user_id: string; role: string; created_at: string };
 
 const KIND_ORDER: ChannelKind[] = ['form', 'email', 'whatsapp', 'voice', 'chat', 'test'];
-
 
 export default async function AdminOrgPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgId: string }>;
-  searchParams: Promise<{ error?: string; notice?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string; panel?: string }>;
 }) {
   await requirePlatformAdmin();
   const { orgId } = await params;
-  const { error, notice } = await searchParams;
+  const { error, notice, panel } = await searchParams;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Nutzer</h1>
-        </div>
-        <p className="error">Service-Role ist serverseitig nicht konfiguriert.</p>
-      </div>
-    );
-  }
+  if (!admin) return <AdminUnavailable title="Nutzer" />;
 
   const { data: orgRow } = await admin
     .from('organizations')
@@ -80,185 +79,160 @@ export default async function AdminOrgPage({
     })
   );
 
+  const base = `/admin/users/${org.id}`;
+  // Both forms live in drawers (?panel=member | plan); their errors show inside.
+  const inviting = panel === 'member';
+  const planning = panel === 'plan';
+
   return (
-    <div className="shell">
-      <div className="page-head">
-        <p style={{ marginBottom: '0.35rem' }}>
-          <Link href="/admin/users" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Nutzer
-          </Link>
-          <span style={{ color: 'var(--text-subtle)' }}> / {org.name}</span>
-        </p>
-        <h1>{org.name}</h1>
-        <p>
-          Team dieser Organisation. Hier legst du weitere Zugänge an (Owner oder Agent).
-        </p>
-      </div>
-
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
-
-      <div className="panel">
-        <h2>Mitglieder</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Mitglied</th>
-              <th>Rolle</th>
-              <th>Dabei seit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((m) => (
-              <tr key={m.user_id}>
-                <td style={{ wordBreak: 'break-all' }}>
-                  {emailByUserId.get(m.user_id) ?? `${m.user_id.slice(0, 8)}…`}
-                </td>
-                <td>
-                  <span className="badge">{m.role === 'owner' ? 'Owner' : 'Agent'}</span>
-                </td>
-                <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  {new Date(m.created_at).toLocaleDateString('de-DE')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="panel">
-        <h2>Plan</h2>
-        <p className="help">
-          Der Plan bestimmt Paketgebühren, Verbrauchspreise und die Kanal-Kontingente dieser
-          Organisation. Kontingente werden beim Zuweisen aus dem Plan übernommen — Kanalarten
-          ohne Eintrag im Plan sind unbegrenzt. Pläne pflegst du unter{' '}
-          <Link href="/admin/pricing">Preise &amp; Pakete</Link>.
-        </p>
-        <form className="stack" action={assignPackage} style={{ maxWidth: '26rem' }}>
-          <input type="hidden" name="orgId" value={org.id} />
-          <input type="hidden" name="returnTo" value="org" />
-          <div>
-            <label htmlFor="packageId">Plan</label>
-            <select id="packageId" name="packageId" defaultValue={sub?.packageId ?? ''}>
-              <option value="">— kein Plan —</option>
-              {packages.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="priceTierId">Preisliste (optional, bessere Konditionen)</label>
-            <select id="priceTierId" name="priceTierId" defaultValue={sub?.priceTierId ?? ''}>
-              <option value="">— aus Plan übernehmen —</option>
-              {tiers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="interval">Laufzeit</label>
-            <select id="interval" name="interval" defaultValue={sub?.interval ?? 'monthly'}>
-              <option value="monthly">Monatlich</option>
-              <option value="yearly">Jährlich</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="setupFeeEur">Setup-Gebühr-Override (€, optional)</label>
-            <input
-              id="setupFeeEur"
-              name="setupFeeEur"
-              type="text"
-              inputMode="decimal"
-              placeholder="aus Plan"
-              defaultValue={sub?.setupFeeEur != null ? String(sub.setupFeeEur) : ''}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="primary" type="submit">
-              {sub?.packageId ? 'Plan aktualisieren' : 'Plan zuweisen'}
-            </button>
-          </div>
-        </form>
-        {sub ? (
-          <form action={removeSubscription} style={{ marginTop: '0.75rem' }}>
-            <input type="hidden" name="orgId" value={org.id} />
-            <input type="hidden" name="returnTo" value="org" />
-            <button className="ghost" type="submit">Zuweisung entfernen</button>
-          </form>
-        ) : null}
-      </div>
-
-      <div className="panel">
-        <h2>Wirksame Kanal-Kontingente</h2>
-        <p className="help">
-          {currentPackage
-            ? `Aus dem Plan „${currentPackage.name}" übernommen — hier nur zur Kontrolle.`
-            : 'Kein Plan zugewiesen. Ohne Plan gelten keine Kontingent-Grenzen.'}
-        </p>
-        <table style={{ maxWidth: '30rem' }}>
-          <thead>
-            <tr>
-              <th>Kanalart</th>
-              <th style={{ textAlign: 'right' }}>Vorhanden</th>
-              <th style={{ textAlign: 'right' }}>Kontingent</th>
-            </tr>
-          </thead>
-          <tbody>
-            {KIND_ORDER.map((kind) => (
-              <tr key={kind}>
-                <td>{CHANNEL_KIND_LABELS[kind]}</td>
-                <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                  {counts.get(kind) ?? 0}
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  {limits.has(kind) ? String(limits.get(kind)) : 'unbegrenzt'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="panel">
-        <h2>Mitglied hinzufügen</h2>
-        <p className="help">
-          Fügt ein Konto per E-Mail-Einladung hinzu — das Mitglied legt sein Passwort selbst fest.
-          Granulare Mitarbeiter-Rechte verwaltet der Kunde unter Einstellungen → Team.
-        </p>
-        <form className="stack" action={addMember} style={{ maxWidth: '28rem' }}>
-          <input type="hidden" name="orgId" value={org.id} />
-          <div>
-            <label htmlFor="mem-email">E-Mail</label>
-            <input
-              id="mem-email"
-              name="email"
-              type="email"
-              required
-              autoComplete="off"
-              placeholder="mitarbeiter@kunde.de"
-            />
-          </div>
-          <div>
-            <label htmlFor="mem-role">Rolle</label>
-            <select id="mem-role" name="role" defaultValue="agent">
-              <option value="agent">Mitarbeiter</option>
-              <option value="admin">Admin</option>
-              <option value="owner">Inhaber</option>
-            </select>
-          </div>
-          <button className="primary" type="submit">
+    <div className="page">
+      <PageHeader
+        breadcrumb={[{ label: 'Nutzer', href: '/admin/users' }, { label: org.name }]}
+        title={org.name}
+        subtitle="Team, Plan und Kanal-Kontingente dieser Organisation."
+        actions={
+          <Button href={`${base}?panel=member`} variant="primary" icon="plus" scroll={false}>
             Mitglied einladen
-          </button>
-        </form>
+          </Button>
+        }
+      />
+
+      <div className="page-split">
+        <div className="page-body">
+          <DismissibleBanners
+            error={inviting || planning ? undefined : error}
+            notice={notice}
+          />
+
+          <Section
+            title="Mitglieder"
+            help="Granulare Mitarbeiter-Rechte verwaltet der Kunde selbst in seinen Team-Einstellungen."
+          >
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Mitglied</th>
+                    <th>Rolle</th>
+                    <th>Dabei seit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((m) => (
+                    <tr key={m.user_id}>
+                      <td className="admin-break">
+                        {emailByUserId.get(m.user_id) ?? `${m.user_id.slice(0, 8)}…`}
+                      </td>
+                      <td>
+                        <Badge>{ORG_ROLE_LABELS[m.role as OrgRole] ?? m.role}</Badge>
+                      </td>
+                      <td className="muted">
+                        {new Date(m.created_at).toLocaleDateString('de-DE')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+
+          <Section
+            title="Wirksame Kanal-Kontingente"
+            help={
+              currentPackage
+                ? `Aus dem Plan „${currentPackage.name}" übernommen, hier nur zur Kontrolle.`
+                : 'Kein Plan zugewiesen. Ohne Plan gelten keine Kontingent-Grenzen.'
+            }
+          >
+            <div className="table-wrap form-narrow">
+              <table className="table--compact">
+                <thead>
+                  <tr>
+                    <th>Kanalart</th>
+                    <th className="right">Vorhanden</th>
+                    <th className="right">Kontingent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {KIND_ORDER.map((kind) => (
+                    <tr key={kind}>
+                      <td>{CHANNEL_KIND_LABELS[kind]}</td>
+                      <td className="right muted">{counts.get(kind) ?? 0}</td>
+                      <td className="right">
+                        {limits.has(kind) ? String(limits.get(kind)) : 'unbegrenzt'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        </div>
+
+        <aside className="page-rail" aria-label="Plan">
+          <PlanSummary
+            subscription={sub}
+            packageName={currentPackage?.name}
+            tierName={sub?.priceTierId ? catalog.tiers.get(sub.priceTierId)?.name : undefined}
+            changeHref={`${base}?panel=plan`}
+          />
+        </aside>
       </div>
+
+      {inviting ? (
+        <Drawer
+          title="Mitglied einladen"
+          closeHref={base}
+          footer={
+            <>
+              <Button href={base} scroll={false}>
+                Abbrechen
+              </Button>
+              <Button type="submit" form="new-member" variant="primary">
+                Mitglied einladen
+              </Button>
+            </>
+          }
+        >
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <form id="new-member" action={addMember} className="stack">
+            <input type="hidden" name="orgId" value={org.id} />
+            <Field
+              label="E-Mail"
+              htmlFor="mem-email"
+              help="Das Mitglied erhält eine Einladung und legt sein Passwort selbst fest."
+            >
+              <input
+                id="mem-email"
+                name="email"
+                type="email"
+                required
+                autoComplete="off"
+                placeholder="mitarbeiter@kunde.de"
+              />
+            </Field>
+            <Field label="Rolle" htmlFor="mem-role">
+              <select id="mem-role" name="role" defaultValue="agent">
+                <option value="agent">Mitarbeiter</option>
+                <option value="admin">Admin</option>
+                <option value="owner">Inhaber</option>
+              </select>
+            </Field>
+          </form>
+        </Drawer>
+      ) : null}
+
+      {planning ? (
+        <PlanDrawer
+          orgId={org.id}
+          closeHref={base}
+          returnTo="org"
+          subscription={sub}
+          packages={packages}
+          tiers={tiers}
+          error={error}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,31 +1,32 @@
 import Link from 'next/link';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Drawer from '@/components/ui/Drawer';
+import { Field } from '@/components/ui/Field';
+import { EmptyState } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
+import AdminUnavailable from '../_components/AdminUnavailable';
 import { createCustomer } from './actions';
 
 type OrgRow = { id: string; name: string; slug: string; created_at: string };
 type MemberRow = { org_id: string; user_id: string; role: string };
 
+const BASE = '/admin/users';
 
 export default async function AdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; notice?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string; panel?: string }>;
 }) {
   await requirePlatformAdmin();
-  const { error, notice } = await searchParams;
+  const { error, notice, panel } = await searchParams;
 
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    return (
-      <div className="shell">
-        <div className="page-head">
-          <h1>Nutzer</h1>
-        </div>
-        <p className="error">Service-Role ist serverseitig nicht konfiguriert.</p>
-      </div>
-    );
-  }
+  if (!admin) return <AdminUnavailable title="Nutzer" />;
 
   const { data: orgData } = await admin
     .from('organizations')
@@ -62,102 +63,111 @@ export default async function AdminUsersPage({
 
   const ownerLabel = (orgId: string): string => {
     const ids = ownersByOrg.get(orgId) ?? [];
-    if (ids.length === 0) return '— kein Owner —';
+    if (ids.length === 0) return 'Kein Inhaber';
     return ids.map((id) => emailByUserId.get(id) ?? `${id.slice(0, 8)}…`).join(', ');
   };
 
+  // The create form lives in a drawer (?panel=new); its errors show inside it.
+  const creating = panel === 'new';
+
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>Nutzer</h1>
-        <p>
-          Alle Kunden-Organisationen und ihre Owner. Klicke eine Organisation an, um ihr Team zu
-          sehen und Zugänge anzulegen.
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Nutzer"
+        subtitle="Alle Kunden-Organisationen und ihre Inhaber."
+        actions={
+          <Button href={`${BASE}?panel=new`} variant="primary" icon="plus" scroll={false}>
+            Neuer Kunde
+          </Button>
+        }
+      />
 
-      {error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {notice}
-        </p>
-      ) : null}
+      <div className="page-body">
+        <DismissibleBanners
+          error={creating ? undefined : error}
+          notice={notice}
+        />
 
-      <div className="panel">
-        <h2>Organisationen</h2>
         {orgs.length === 0 ? (
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Noch keine Organisationen vorhanden. Lege unten den ersten Kunden an.
-          </p>
+          <EmptyState
+            title="Noch keine Organisationen"
+            text="Ein Kunde ist eine Organisation mit einem Inhaber-Konto."
+          />
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Organisation</th>
-                <th>Owner</th>
-                <th>Mitglieder</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orgs.map((org) => (
-                <tr key={org.id}>
-                  <td>
-                    <Link href={`/admin/users/${org.id}`} style={{ fontWeight: 600 }}>
-                      {org.name}
-                    </Link>
-                  </td>
-                  <td style={{ color: 'var(--text-muted)', wordBreak: 'break-all' }}>
-                    {ownerLabel(org.id)}
-                  </td>
-                  <td>
-                    <span className="badge">{countByOrg.get(org.id) ?? 0}</span>
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Organisation</th>
+                  <th>Inhaber</th>
+                  <th className="right">Mitglieder</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {orgs.map((org) => (
+                  <tr key={org.id}>
+                    <td>
+                      <Link href={`${BASE}/${org.id}`} className="cell-title">
+                        {org.name}
+                      </Link>
+                    </td>
+                    <td className="muted admin-break">{ownerLabel(org.id)}</td>
+                    <td className="right">
+                      <Badge>{countByOrg.get(org.id) ?? 0}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      <div className="panel">
-        <h2>Neuen Kunden anlegen</h2>
-        <p className="help">
-          Erstellt eine neue Organisation samt Owner-Konto. Der Inhaber erhält eine
-          Einladungs-E-Mail und legt sein Passwort selbst fest.
-        </p>
-        <form className="stack" action={createCustomer} style={{ maxWidth: '28rem' }}>
-          <div>
-            <label htmlFor="orgName">Firmenname</label>
-            <input
-              id="orgName"
-              name="orgName"
-              type="text"
-              required
-              minLength={2}
-              maxLength={120}
-              placeholder="z. B. Strong Energy GmbH"
-            />
-          </div>
-          <div>
-            <label htmlFor="cust-email">Owner-E-Mail</label>
-            <input
-              id="cust-email"
-              name="email"
-              type="email"
-              required
-              autoComplete="off"
-              placeholder="inhaber@kunde.de"
-            />
-          </div>
-          <button className="primary" type="submit">
-            Kunde anlegen & einladen
-          </button>
-        </form>
-      </div>
+      {creating ? (
+        <Drawer
+          title="Neuer Kunde"
+          closeHref={BASE}
+          footer={
+            <>
+              <Button href={BASE} scroll={false}>
+                Abbrechen
+              </Button>
+              <Button type="submit" form="new-customer" variant="primary">
+                Kunde anlegen und einladen
+              </Button>
+            </>
+          }
+        >
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <form id="new-customer" action={createCustomer} className="stack">
+            <Field label="Firmenname" htmlFor="orgName">
+              <input
+                id="orgName"
+                name="orgName"
+                type="text"
+                required
+                minLength={2}
+                maxLength={120}
+                placeholder="z. B. Strong Energy GmbH"
+              />
+            </Field>
+            <Field
+              label="E-Mail des Inhabers"
+              htmlFor="cust-email"
+              help="Legt die Organisation samt Inhaber-Konto an. Der Inhaber erhält eine Einladung und legt sein Passwort selbst fest."
+            >
+              <input
+                id="cust-email"
+                name="email"
+                type="email"
+                required
+                autoComplete="off"
+                placeholder="inhaber@kunde.de"
+              />
+            </Field>
+          </form>
+        </Drawer>
+      ) : null}
     </div>
   );
 }

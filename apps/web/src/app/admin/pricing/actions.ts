@@ -22,8 +22,14 @@ function parseDecimal(value: string): number {
   return Number(value.replace(',', '.'));
 }
 
-function pricingUrl(message?: { error?: string; notice?: string }): string {
+// "Neue Preisliste" / "Neues Paket" live in drawers (?panel=list | package):
+// an error redirects back WITH the panel so the drawer stays open.
+function pricingUrl(
+  message?: { error?: string; notice?: string },
+  panel?: 'list' | 'package'
+): string {
   const params = new URLSearchParams();
+  if (panel) params.set('panel', panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   const qs = params.toString();
@@ -73,14 +79,14 @@ export async function createPriceList(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
   const name = textField(formData.get('name'));
   if (name.length < 2 || name.length > 80) {
-    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }, 'list'));
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }, 'list'));
 
   const { error } = await admin.from('price_tiers').insert({ name, updated_by: userId });
-  if (error) redirect(pricingUrl({ error: 'Preisliste konnte nicht angelegt werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Preisliste konnte nicht angelegt werden.' }, 'list'));
 
   revalidatePath('/admin/pricing');
   redirect(pricingUrl({ notice: `Preisliste „${name}" angelegt.` }));
@@ -159,14 +165,14 @@ export async function createPackage(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
   const name = textField(formData.get('name'));
   if (name.length < 2 || name.length > 80) {
-    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }));
+    redirect(pricingUrl({ error: 'Name muss 2–80 Zeichen lang sein.' }, 'package'));
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }));
+  if (!admin) redirect(pricingUrl({ error: 'Service-Role ist serverseitig nicht konfiguriert.' }, 'package'));
 
   const { error } = await admin.from('packages').insert({ name, updated_by: userId });
-  if (error) redirect(pricingUrl({ error: 'Paket konnte nicht angelegt werden.' }));
+  if (error) redirect(pricingUrl({ error: 'Paket konnte nicht angelegt werden.' }, 'package'));
 
   revalidatePath('/admin/pricing');
   redirect(pricingUrl({ notice: `Paket „${name}" angelegt.` }));
