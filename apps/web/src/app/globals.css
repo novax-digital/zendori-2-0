@@ -422,6 +422,14 @@ a:focus-visible {
   flex: 1;
   min-width: 0;
 }
+/* what is waiting for a human (Inbox: pending, Tickets: open + in progress) */
+.app-nav-count {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 
 /* --- account row + menu --- */
 .app-account-wrap {
@@ -529,6 +537,7 @@ a:focus-visible {
 .app-sidebar--collapsed .app-org-chevron,
 .app-sidebar--collapsed .app-nav-section,
 .app-sidebar--collapsed .app-nav-label,
+.app-sidebar--collapsed .app-nav-count,
 .app-sidebar--collapsed .app-account-meta,
 .app-sidebar--collapsed .app-account-more {
   display: none;
@@ -2728,6 +2737,7 @@ code.invite-link {
   .app-sidebar .app-org-chevron,
   .app-sidebar .app-nav-section,
   .app-sidebar .app-nav-label,
+  .app-sidebar .app-nav-count,
   .app-sidebar .app-account-meta,
   .app-sidebar .app-account-more {
     display: none;

@@ -118,6 +118,60 @@ function navItemVisible(access: MemberAccess | null, href: string): boolean {
 type OrgOption = { id: string; name: string };
 
 /**
+ * Sidebar counters (docs/design-redesign.md §10.4): what is waiting for a
+ * human. Inbox = conversations with status 'pending' (THE queue, CLAUDE.md §6),
+ * Tickets = open + in progress. Read with the member's own session, so RLS
+ * decides what is counted. Refreshed on every navigation, when the window gets
+ * focus and once a minute while the tab is visible — no realtime channel.
+ */
+const NAV_COUNT_HINT: Record<string, string> = {
+  '/inbox': 'wartend',
+  '/tickets': 'offen oder in Arbeit',
+};
+const NAV_COUNT_REFRESH_MS = 60_000;
+
+function useNavCounts(orgId: string, routeKey: string): Record<string, number> {
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!orgId) return;
+    const supabase = createSupabaseBrowserClient();
+    let active = true;
+    const load = async () => {
+      const [pending, tickets] = await Promise.all([
+        supabase
+          .from('conversations')
+          .select('id', { count: 'exact', head: true })
+          .eq('org_id', orgId)
+          .eq('status', 'pending'),
+        supabase
+          .from('tickets')
+          .select('id', { count: 'exact', head: true })
+          .eq('org_id', orgId)
+          .in('status', ['open', 'in_progress']),
+      ]);
+      if (!active) return;
+      // an error (no access, table missing) simply shows no counter
+      setCounts({
+        '/inbox': pending.error ? 0 : (pending.count ?? 0),
+        '/tickets': tickets.error ? 0 : (tickets.count ?? 0),
+      });
+    };
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void load();
+    }, NAV_COUNT_REFRESH_MS);
+    const onFocus = () => void load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [orgId, routeKey]);
+  return counts;
+}
+
+/**
  * Sidebar head: logo mark + name of the active organisation. With several
  * memberships it is a button that opens the organisation list; with one it is
  * a plain link to the inbox.
@@ -378,6 +432,7 @@ function Sidebar() {
   const activeOrgId = (org && orgs.some((o) => o.id === org) ? org : orgs[0]?.id) ?? '';
   const activeOrgName = orgs.find((o) => o.id === activeOrgId)?.name ?? 'Zendori';
   const adminActive = pathname.startsWith('/admin');
+  const counts = useNavCounts(activeOrgId, `${pathname}?${searchParams.toString()}`);
 
   return (
     <aside className={`app-sidebar${collapsed ? ' app-sidebar--collapsed' : ''}`}>
@@ -396,20 +451,28 @@ function Sidebar() {
           return (
             <div className="app-nav-group" key={section.title ?? `sec-${i}`}>
               {section.title ? <div className="app-nav-section">{section.title}</div> : null}
-              {items.map((item) => (
-                <Link
-                  key={item.href}
-                  href={withOrg(item.href)}
-                  className={`app-nav-item${isActive(item.href) ? ' app-nav-item--active' : ''}`}
-                  title={item.label}
-                  aria-current={isActive(item.href) ? 'page' : undefined}
-                >
-                  <span className="app-nav-icon">
-                    <Icon name={item.icon} />
-                  </span>
-                  <span className="app-nav-label">{item.label}</span>
-                </Link>
-              ))}
+              {items.map((item) => {
+                const count = counts[item.href] ?? 0;
+                const hint = count > 0 ? `${count} ${NAV_COUNT_HINT[item.href] ?? ''}`.trim() : '';
+                return (
+                  <Link
+                    key={item.href}
+                    href={withOrg(item.href)}
+                    className={`app-nav-item${isActive(item.href) ? ' app-nav-item--active' : ''}`}
+                    title={hint ? `${item.label}: ${hint}` : item.label}
+                    aria-label={hint ? `${item.label}, ${hint}` : undefined}
+                    aria-current={isActive(item.href) ? 'page' : undefined}
+                  >
+                    <span className="app-nav-icon">
+                      <Icon name={item.icon} />
+                    </span>
+                    <span className="app-nav-label">{item.label}</span>
+                    {count > 0 ? (
+                      <span className="app-nav-count">{count > 99 ? '99+' : count}</span>
+                    ) : null}
+                  </Link>
+                );
+              })}
             </div>
           );
         })}
