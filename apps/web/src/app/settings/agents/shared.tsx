@@ -3,6 +3,7 @@ import { sanitizeIntakeFields } from '@zendori/core';
 import type { AgentKind, AgentMode, ChannelType, IntakeField } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
+import { Field } from '@/components/ui/Field';
 
 export type AgentRow = {
   id: string;
@@ -31,6 +32,13 @@ export const channelTypeLabels: Record<ChannelType, string> = {
   whatsapp: 'WhatsApp',
   voice: 'Telefon',
 };
+
+/** Placeholder of the identity textarea (create drawer and detail page). */
+export const IDENTITY_PLACEHOLDER =
+  'Wer ist dieser Agent, wie spricht er, was darf er (nicht)?\nz. B. „Du bist Lisa, die freundliche Support-Assistentin von Strong Energy. Du duzt Kunden, hältst dich kurz und verweist bei Vertragsfragen immer an das Team."';
+
+/** Help text below the identity textarea. */
+export const IDENTITY_HELP = 'Fließt in jede Antwort dieses Agenten ein: Rolle, Tonfall, Regeln.';
 
 export async function listAgents(orgId: string): Promise<AgentRow[]> {
   const supabase = await createSupabaseServerClient();
@@ -97,8 +105,7 @@ export function AgentFields({
 }) {
   return (
     <>
-      <div>
-        <label htmlFor={`${idPrefix}-name`}>Name</label>
+      <Field label="Name" htmlFor={`${idPrefix}-name`}>
         <input
           id={`${idPrefix}-name`}
           name="name"
@@ -110,9 +117,8 @@ export function AgentFields({
           disabled={disabled}
           placeholder="z. B. Chat-Agent, Telefon-Annahme"
         />
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-identity`}>Identität (System-Prompt)</label>
+      </Field>
+      <Field label="Identität (System-Prompt)" htmlFor={`${idPrefix}-identity`} help={IDENTITY_HELP}>
         <textarea
           id={`${idPrefix}-identity`}
           name="identity"
@@ -120,12 +126,9 @@ export function AgentFields({
           maxLength={8000}
           defaultValue={agent?.identity ?? ''}
           disabled={disabled}
-          placeholder={
-            'Wer ist dieser Agent, wie spricht er, was darf er (nicht)?\nz. B. „Du bist Lisa, die freundliche Support-Assistentin von Strong Energy. Du duzt Kunden, hältst dich kurz und verweist bei Vertragsfragen immer an das Team."'
-          }
+          placeholder={IDENTITY_PLACEHOLDER}
         />
-        <p className="hint">Fließt in jede Antwort dieses Agenten ein — Rolle, Tonfall, Regeln.</p>
-      </div>
+      </Field>
       {/* kind/mode/threshold interplay lives in the client component (0015) */}
       <AgentBehaviorFields
         idPrefix={idPrefix}

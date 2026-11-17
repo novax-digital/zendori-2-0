@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import Button from './ui/Button';
 
 // Voice selection with an inline preview: the xAI voices with German labels and
 // a play button per selection. Samples are pre-generated WAVs under
@@ -54,7 +55,7 @@ export default function VoicePicker({
   }
 
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+    <div className="agents-voice-picker">
       <select
         id={id}
         name={name}
@@ -64,7 +65,6 @@ export default function VoicePicker({
           setPlaying(false);
           setVoice(e.target.value);
         }}
-        style={{ flex: 1 }}
       >
         {XAI_VOICES.map((v) => (
           <option key={v.id} value={v.id}>
@@ -73,17 +73,15 @@ export default function VoicePicker({
         ))}
         {!known ? <option value={voice}>{voice} (eigene Stimme)</option> : null}
       </select>
-      <button
+      <Button
         type="button"
-        className="ghost"
         onClick={togglePlay}
         disabled={!hasSample}
         title={hasSample ? 'Hörprobe abspielen' : 'Für diese Stimme ist noch keine Hörprobe hinterlegt.'}
         aria-label={playing ? 'Hörprobe stoppen' : 'Hörprobe abspielen'}
-        style={{ whiteSpace: 'nowrap' }}
       >
-        {playing ? '◼ Stopp' : '▶ Anhören'}
-      </button>
+        {playing ? 'Stopp' : 'Anhören'}
+      </Button>
     </div>
   );
 }

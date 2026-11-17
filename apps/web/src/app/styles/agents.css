@@ -1,3 +1,31 @@
-/* Agenten — page-specific styles (redesign stages 4-7).
+/* Agenten — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx). */
+
+/* AgentBehaviorFields wraps its sections in one element (it listens to their
+   radios there) — keep the section rhythm across that wrapper. */
+.agents-behavior + .section {
+  margin-top: var(--space-8);
+}
+
+/* warning marker on an in-form tab (e.g. no knowledge base linked) */
+.agents-tab-warn {
+  display: inline-flex;
+  color: var(--warn);
+}
+
+/* VoicePicker: the select takes the room, the preview button keeps its size */
+.agents-voice-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agents-voice-picker select {
+  flex: 1;
+  min-width: 0;
+}
+
+.agents-greeting-text {
+  display: block;
+  margin-top: 4px;
+}

@@ -1,12 +1,15 @@
-// Agent DETAIL page (two-level layout, owner 2026-07-24): the tabbed editor
-// (Identität / Verhalten / Kanäle / Wissen) for ONE agent, plus the two-step
-// delete zone. All tab contents stay mounted inside the ONE update form
-// (EditTabs hides them visually) so every field submits regardless of tab.
+// Agent DETAIL page (two-level layout, owner 2026-07-24; redesign stage 5 =
+// page type "Detail mit Tabs"): the tabbed editor (Identität / Verhalten /
+// Kanäle / Wissen) for ONE agent. All tab contents stay mounted inside the ONE
+// update form (EditTabs hides them) so every field submits regardless of tab.
+// The delete form lives in the page head's menu — outside the update form,
+// because forms must not be nested.
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { canViewArea, isAdminRole, sanitizeIntakeFields, type Channel } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
+import { href } from '@/lib/href';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
@@ -14,8 +17,18 @@ import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import EditTabs from '@/components/EditTabs';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import ChannelIcon from '@/components/ui/ChannelIcon';
+import { Field, SettingRow } from '@/components/ui/Field';
+import { Section } from '@/components/ui/Layout';
+import Menu from '@/components/ui/Menu';
+import PageHeader from '@/components/ui/PageHeader';
 import { deleteAgent, updateAgent } from '../actions';
 import {
+  IDENTITY_HELP,
+  IDENTITY_PLACEHOLDER,
   MODE_LABELS,
   agentLacksKb,
   channelTypeLabels,
@@ -74,8 +87,7 @@ export default async function AgentDetailPage({
 
   const identityTab: ReactNode = (
     <div className="stack">
-      <div>
-        <label htmlFor="agent-name">Name</label>
+      <Field label="Name" htmlFor="agent-name">
         <input
           id="agent-name"
           name="name"
@@ -86,9 +98,8 @@ export default async function AgentDetailPage({
           defaultValue={agent.name}
           disabled={disabled}
         />
-      </div>
-      <div>
-        <label htmlFor="agent-identity">Identität (System-Prompt)</label>
+      </Field>
+      <Field label="Identität (System-Prompt)" htmlFor="agent-identity" help={IDENTITY_HELP}>
         <textarea
           id="agent-identity"
           name="identity"
@@ -96,17 +107,14 @@ export default async function AgentDetailPage({
           maxLength={8000}
           defaultValue={agent.identity ?? ''}
           disabled={disabled}
-          placeholder={
-            'Wer ist dieser Agent, wie spricht er, was darf er (nicht)?\nz. B. „Du bist Lisa, die freundliche Support-Assistentin von Strong Energy. Du duzt Kunden, hältst dich kurz und verweist bei Vertragsfragen immer an das Team."'
-          }
+          placeholder={IDENTITY_PLACEHOLDER}
         />
-        <p className="hint">Fließt in jede Antwort dieses Agenten ein — Rolle, Tonfall, Regeln.</p>
-      </div>
+      </Field>
     </div>
   );
 
   const behaviorTab: ReactNode = (
-    <div className="stack">
+    <>
       <AgentBehaviorFields
         idPrefix="agent"
         kindFixed={agent.kind}
@@ -115,148 +123,205 @@ export default async function AgentDetailPage({
         defaultHandoffEnabled={agent.handoff_enabled}
         defaultEscalationTarget={agent.escalation_target === 'ticket' ? 'ticket' : 'human'}
         defaultIntakeFields={agent.intake_fields}
+        handoffSettingsHref={href('/settings/ai', { org: orgId })}
         disabled={disabled}
       />
-      <label className="check-row">
-        <input type="checkbox" name="isActive" defaultChecked={agent.is_active} disabled={disabled} />
-        Agent aktiv (pausiert = verhält sich wie „kein Agent")
-      </label>
-    </div>
+      <Section title="Status">
+        <SettingRow
+          label="Agent aktiv"
+          htmlFor="agent-active"
+          help="Pausiert verhält er sich wie „kein Agent“: Seine Kanäle bekommen keine KI-Antworten."
+        >
+          <input
+            id="agent-active"
+            type="checkbox"
+            className="switch"
+            name="isActive"
+            defaultChecked={agent.is_active}
+            disabled={disabled}
+          />
+        </SettingRow>
+      </Section>
+    </>
   );
 
   const eligible = channels.filter((c: Channel) =>
     agent.kind === 'voice' ? c.type === 'voice' : c.type !== 'voice'
   );
+  const assignedCount = eligible.filter((c: Channel) => c.agent_id === agent.id).length;
   const channelsTab: ReactNode = (
-    <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-      <p className="help" style={{ marginBottom: '0.75rem' }}>
-        Der Agent bedient die angehakten Kanäle. Ein Kanal kann nur einen Agenten haben — Anhaken
-        zieht ihn ggf. von einem anderen Agenten ab. Kanäle ohne Agent bekommen keine KI-Antworten.
-        {agent.kind === 'voice'
-          ? ' Ein Voice-Agent kann nur Voice-Kanäle bedienen.'
-          : ' Ein Text-Agent bedient alle Kanäle außer Telefon.'}
-      </p>
+    <Section
+      title="Kanäle"
+      help={`Der Agent bedient die angehakten Kanäle. Ein Kanal hat nur einen Agenten: Anhaken zieht ihn von einem anderen Agenten ab. ${
+        agent.kind === 'voice'
+          ? 'Ein Voice-Agent bedient nur Telefon-Kanäle.'
+          : 'Ein Text-Agent bedient alle Kanäle außer Telefon.'
+      }`}
+    >
       {eligible.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          {agent.kind === 'voice'
-            ? 'Noch kein Voice-Kanal vorhanden — Nummern beantragst du unter Einstellungen → Telefonnummern.'
-            : 'Noch keine passenden Kanäle vorhanden.'}
+        <p className="muted small">
+          {agent.kind === 'voice' ? (
+            <>
+              Noch kein Telefon-Kanal vorhanden.{' '}
+              <Link href={href('/settings/phone-numbers', { org: orgId })}>
+                Telefonnummer beantragen
+              </Link>
+            </>
+          ) : (
+            <>
+              Noch keine passenden Kanäle vorhanden.{' '}
+              <Link href={href('/settings/channels', { org: orgId })}>Kanäle öffnen</Link>
+            </>
+          )}
         </p>
       ) : (
-        eligible.map((channel: Channel) => (
-          <label key={channel.id} className="check-row">
-            {/* render-time truth: only these may be detached by an uncheck */}
-            {channel.agent_id === agent.id ? (
-              <input type="hidden" name="renderedAssigned" value={channel.id} />
-            ) : null}
-            <input
-              type="checkbox"
-              name="channels"
-              value={channel.id}
-              defaultChecked={channel.agent_id === agent.id}
-              disabled={disabled}
-            />
-            {channel.name}
-            <span style={{ color: 'var(--text-subtle)', fontSize: '0.8rem' }}>
-              ({channelTypeLabels[channel.type]}
-              {channel.agent_id && channel.agent_id !== agent.id ? ' · anderer Agent' : ''})
-            </span>
-          </label>
-        ))
+        <fieldset className="fieldset-plain">
+          <legend className="sr-only">Kanäle dieses Agenten</legend>
+          {eligible.map((channel: Channel) => (
+            <label key={channel.id} className="check-row">
+              {/* render-time truth: only these may be detached by an uncheck */}
+              {channel.agent_id === agent.id ? (
+                <input type="hidden" name="renderedAssigned" value={channel.id} />
+              ) : null}
+              <input
+                type="checkbox"
+                name="channels"
+                value={channel.id}
+                defaultChecked={channel.agent_id === agent.id}
+                disabled={disabled}
+              />
+              <ChannelIcon kind={channel.type} />
+              {channel.name}
+              <span className="muted small">
+                {channelTypeLabels[channel.type]}
+                {channel.agent_id && channel.agent_id !== agent.id ? ' · anderer Agent' : ''}
+              </span>
+            </label>
+          ))}
+        </fieldset>
       )}
-    </fieldset>
+    </Section>
   );
 
   const knowledgeTab: ReactNode = (
-    <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-      <p className="help" style={{ marginBottom: '0.75rem' }}>
-        Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung kennt er
-        keine Inhalte und übergibt inhaltliche Fragen an das Team.
-      </p>
+    <Section
+      title="Wissen"
+      help="Der Agent beantwortet Fragen nur aus den angehakten Datenbanken. Ohne Verknüpfung kennt er keine Inhalte und übergibt inhaltliche Fragen an das Team."
+    >
       {lacksKb ? (
-        <p className="notice" style={{ marginBottom: '0.75rem' }}>
-          Dieser Agent ist mit keiner Wissensdatenbank verknüpft — er kann inhaltliche Fragen nicht
-          beantworten. Hake unten mindestens eine Datenbank an.
-        </p>
+        <Callout tone="warn" title="Keine Wissensdatenbank verknüpft">
+          Dieser Agent kann inhaltliche Fragen nicht beantworten. Hake mindestens eine Datenbank an.
+        </Callout>
       ) : null}
       {kbs.length === 0 ? (
-        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-          Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen → Wissensdatenbank.
+        <p className="muted small">
+          Noch keine Wissensdatenbank vorhanden.{' '}
+          <Link href={href('/settings/knowledge', { org: orgId })}>Wissensdatenbank anlegen</Link>
         </p>
       ) : (
-        kbs.map((kb) => {
-          const isLinked = linkedKbs.has(kb.id);
-          return (
-            <label key={kb.id} className="check-row">
-              {isLinked ? <input type="hidden" name="renderedLinkedKbs" value={kb.id} /> : null}
-              <input
-                type="checkbox"
-                name="kbs"
-                value={kb.id}
-                defaultChecked={isLinked}
-                disabled={disabled}
-              />
-              {kb.name}
-            </label>
-          );
-        })
+        <fieldset className="fieldset-plain">
+          <legend className="sr-only">Wissensdatenbanken dieses Agenten</legend>
+          {kbs.map((kb) => {
+            const isLinked = linkedKbs.has(kb.id);
+            return (
+              <label key={kb.id} className="check-row">
+                {isLinked ? <input type="hidden" name="renderedLinkedKbs" value={kb.id} /> : null}
+                <input
+                  type="checkbox"
+                  name="kbs"
+                  value={kb.id}
+                  defaultChecked={isLinked}
+                  disabled={disabled}
+                />
+                {kb.name}
+              </label>
+            );
+          })}
+        </fieldset>
       )}
-    </fieldset>
+    </Section>
   );
 
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>{agent.name}</h1>
-        <p>
-          <Link href={`/settings/agents?org=${orgId}`}>← Alle Agenten</Link>
-          <span style={{ color: 'var(--text-muted)' }}>
-            {' '}· {agent.kind === 'voice' ? 'Voice · ' : ''}
-            {MODE_LABELS[agent.mode]} ·{' '}
-            {agent.is_active ? 'Aktiv' : 'Pausiert'}
-          </span>
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Agenten', href: href('/settings/agents', { org: orgId }) },
+          { label: agent.name },
+        ]}
+        title={agent.name}
+        badges={
+          <>
+            {agent.is_active ? (
+              <Badge tone="success" dot>
+                Aktiv
+              </Badge>
+            ) : (
+              <Badge tone="muted" dot>
+                Pausiert
+              </Badge>
+            )}
+            <Badge>{agent.kind === 'voice' ? 'Voice' : 'Text'}</Badge>
+            <Badge>{MODE_LABELS[agent.mode]}</Badge>
+            {agent.escalation_target === 'ticket' ? (
+              <Badge tone="muted" title="Eskalation als Ticket, kein Mensch live">
+                Ticket-Eskalation
+              </Badge>
+            ) : null}
+          </>
+        }
+        actions={
+          isOwner ? (
+            <Menu label="Weitere Aktionen">
+              <form action={deleteAgent}>
+                <input type="hidden" name="org" value={orgId} />
+                <input type="hidden" name="agentId" value={agent.id} />
+                <ConfirmDeleteButton inMenu label="Agent löschen" confirmLabel="Endgültig löschen" />
+              </form>
+              <p className="menu-note">Zugewiesene Kanäle laufen danach ohne KI-Antworten weiter.</p>
+            </Menu>
+          ) : null
+        }
+      />
 
-      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
-      {!isOwner ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          Nur Inhaber und Admins können Agenten ändern. Die Werte werden schreibgeschützt angezeigt.
-        </p>
-      ) : null}
-
-      <div className="panel">
-        <form className="stack" action={updateAgent} style={{ maxWidth: '40rem' }}>
-          <input type="hidden" name="org" value={orgId} />
-          <input type="hidden" name="agentId" value={agent.id} />
-          <EditTabs
-            sections={[
-              { key: 'identity', label: 'Identität', content: identityTab },
-              { key: 'behavior', label: 'Verhalten', content: behaviorTab },
-              { key: 'channels', label: 'Kanäle', content: channelsTab },
-              { key: 'knowledge', label: 'Wissen', warn: lacksKb, content: knowledgeTab },
-            ]}
-          />
-          {isOwner ? (
-            <button className="primary" type="submit">
-              Agent speichern
-            </button>
-          ) : null}
-        </form>
+      <form className="page-form page-form--tabs" action={updateAgent}>
+        <input type="hidden" name="org" value={orgId} />
+        <input type="hidden" name="agentId" value={agent.id} />
+        <EditTabs
+          label="Bereiche des Agenten"
+          before={
+            <>
+              <DismissibleBanners error={error} notice={notice} />
+              {!isOwner ? (
+                <Callout>
+                  Nur Inhaber und Admins können Agenten ändern. Die Werte werden schreibgeschützt
+                  angezeigt.
+                </Callout>
+              ) : null}
+            </>
+          }
+          sections={[
+            { key: 'identity', label: 'Identität', content: identityTab },
+            { key: 'behavior', label: 'Verhalten', content: behaviorTab },
+            { key: 'channels', label: 'Kanäle', count: assignedCount, content: channelsTab },
+            {
+              key: 'knowledge',
+              label: 'Wissen',
+              count: linkedKbs.size,
+              warn: lacksKb,
+              warnLabel: 'Keine Wissensdatenbank verknüpft',
+              content: knowledgeTab,
+            },
+          ]}
+        />
         {isOwner ? (
-          <form
-            action={deleteAgent}
-            style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border)' }}
-          >
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="agentId" value={agent.id} />
-            <ConfirmDeleteButton label="Agent löschen" confirmLabel="Endgültig löschen" />
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.4rem' }}>
-              Zugewiesene Kanäle laufen danach ohne KI-Antworten weiter.
-            </p>
-          </form>
+          <div className="save-bar">
+            <Button type="submit" variant="primary">
+              Agent speichern
+            </Button>
+          </div>
         ) : null}
-      </div>
+      </form>
     </div>
   );
 }

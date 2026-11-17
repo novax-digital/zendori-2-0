@@ -1,7 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import type { AgentKind, AgentMode, EscalationTarget, IntakeField } from '@zendori/core';
+import { OptionGroup, SettingRow, type Option } from './ui/Field';
+import { Section } from './ui/Layout';
 
 // Kind/mode/threshold interplay for the agent forms (0015):
 //   · Voice agents offer only "Reine Annahme" and "Autopilot" — no drafts on a
@@ -13,24 +16,61 @@ import type { AgentKind, AgentMode, EscalationTarget, IntakeField } from '@zendo
 //     gates draft_only handoffs).
 // Kind is chosen at creation and immutable afterwards (DB guard) — the edit
 // form shows it as static text.
+//
+// Redesign stage 5: the choices are OptionGroups (kit) instead of selects. The
+// kit renders plain, uncontrolled radios, so this component observes them
+// through the bubbling change event of its root element and keeps `kind` and
+// `mode` in state exactly as before.
 
-const MODE_OPTIONS: Record<AgentKind, { value: AgentMode; label: string }[]> = {
+const KIND_OPTIONS: Option[] = [
+  { value: 'text', title: 'Text-Agent', help: 'Bedient Chat, E-Mail und WhatsApp.' },
+  { value: 'voice', title: 'Voice-Agent', help: 'Bedient Telefon-Kanäle.' },
+];
+
+const MODE_OPTIONS: Record<AgentKind, (Option & { value: AgentMode })[]> = {
   text: [
-    { value: 'draft_only', label: 'Nur Entwürfe — Vorschläge, ein Mensch prüft und sendet' },
-    { value: 'autopilot', label: 'Autopilot — antwortet selbst, wenn er sicher genug ist' },
-    { value: 'intake_only', label: 'Reine Annahme — nimmt das Anliegen auf, antwortet nicht' },
+    {
+      value: 'draft_only',
+      title: 'Nur Entwürfe',
+      help: 'Der Agent schlägt Antworten vor, ein Mensch prüft und sendet sie.',
+    },
+    {
+      value: 'autopilot',
+      title: 'Autopilot',
+      help: 'Der Agent antwortet selbst, wenn er sicher genug ist.',
+    },
+    {
+      value: 'intake_only',
+      title: 'Reine Annahme',
+      help: 'Der Agent nimmt das Anliegen auf und antwortet nicht.',
+    },
   ],
   voice: [
     {
       value: 'intake_only',
-      label: 'Reine Annahme — nimmt das Anliegen am Telefon auf und leitet es weiter',
+      title: 'Reine Annahme',
+      help: 'Der Agent nimmt das Anliegen am Telefon auf und leitet es weiter.',
     },
     {
       value: 'autopilot',
-      label: 'Autopilot — führt das Gespräch und beantwortet Fragen aus der Wissensdatenbank',
+      title: 'Autopilot',
+      help: 'Der Agent führt das Gespräch und beantwortet Fragen aus der Wissensdatenbank.',
     },
   ],
 };
+
+const TARGET_OPTIONS: Option[] = [
+  {
+    value: 'human',
+    title: 'An einen Menschen übergeben',
+    help: 'Die Konversation wartet in der Inbox, bis ein Mitarbeiter übernimmt oder an den Bot zurückgibt. Telefon: Weiterleitung oder Rückruf.',
+  },
+  {
+    value: 'ticket',
+    title: 'Als Ticket aufnehmen',
+    help: 'Der Agent bleibt im Gespräch, der Kunde bekommt eine Bestätigung mit Ticketnummer. Telefon: nimmt einen Rückruf auf, leitet nie weiter.',
+  },
+];
 
 // Voice intake-field checkboxes (0027) in canonical order. Defined locally
 // instead of importing INTAKE_FIELDS: this is a client component, and a VALUE
@@ -51,10 +91,11 @@ export default function AgentBehaviorFields({
   defaultHandoffEnabled,
   defaultEscalationTarget,
   defaultIntakeFields,
+  handoffSettingsHref,
   disabled,
 }: {
   idPrefix: string;
-  /** Set on edit forms: kind is immutable, shown as static text. Absent = create form with kind select. */
+  /** Set on edit forms: kind is immutable, shown as static text. Absent = create form with kind choice. */
   kindFixed?: AgentKind;
   defaultMode?: AgentMode;
   defaultThreshold?: number;
@@ -64,6 +105,8 @@ export default function AgentBehaviorFields({
   defaultEscalationTarget?: EscalationTarget;
   /** 0027: fields a voice agent asks the caller for during ticket intake. */
   defaultIntakeFields?: IntakeField[];
+  /** Link to the org-wide handoff rules (Einstellungen → Übergabe und Zeiten). */
+  handoffSettingsHref?: string;
   disabled: boolean;
 }) {
   const [kind, setKind] = useState<AgentKind>(kindFixed ?? 'text');
@@ -77,176 +120,152 @@ export default function AgentBehaviorFields({
   const [mode, setMode] = useState<AgentMode>(effectiveDefault);
   const showThreshold = kind === 'text' || mode === 'autopilot';
 
+  // The radios of the kit's OptionGroup are uncontrolled — follow them here.
+  function onChoice(event: FormEvent<HTMLDivElement>): void {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== 'radio') return;
+    if (target.name === 'kind') {
+      const nextKind: AgentKind = target.value === 'voice' ? 'voice' : 'text';
+      setKind(nextKind);
+      // reset an invalid mode when the kind flips
+      if (!MODE_OPTIONS[nextKind].some((o) => o.value === mode)) {
+        setMode(nextKind === 'voice' ? 'intake_only' : 'draft_only');
+      }
+    } else if (target.name === 'mode') {
+      setMode(target.value as AgentMode);
+    }
+  }
+
   return (
-    <>
-      <div>
-        <label htmlFor={`${idPrefix}-kind`}>Typ</label>
-        {kindFixed ? (
-          <>
-            {/* kind is immutable after creation — display only, not posted */}
-            <p style={{ margin: '0.2rem 0 0', fontWeight: 600 }}>
-              {kindFixed === 'voice' ? 'Voice-Agent (Telefon)' : 'Text-Agent (Chat, E-Mail, WhatsApp)'}
-            </p>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-              Der Typ ist nach dem Anlegen fest.
-            </p>
-          </>
-        ) : (
-          <>
-            <select
-              id={`${idPrefix}-kind`}
-              name="kind"
-              value={kind}
-              disabled={disabled}
-              onChange={(e) => {
-                const nextKind = e.target.value === 'voice' ? 'voice' : 'text';
-                setKind(nextKind);
-                // reset an invalid mode when the kind flips
-                if (!MODE_OPTIONS[nextKind].some((o) => o.value === mode)) {
-                  setMode(nextKind === 'voice' ? 'intake_only' : 'draft_only');
-                }
-              }}
-            >
-              <option value="text">Text-Agent — bedient Chat, E-Mail und WhatsApp</option>
-              <option value="voice">Voice-Agent — bedient Telefon-Kanäle</option>
-            </select>
-            <p className="hint">
-              Ein Voice-Agent kann nur Voice-Kanälen zugewiesen werden, ein Text-Agent allen
-              anderen. Der Typ ist nach dem Anlegen fest.
-            </p>
-          </>
-        )}
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-mode`}>Verhalten</label>
-        <select
-          id={`${idPrefix}-mode`}
+    <div className="agents-behavior" onChange={onChoice}>
+      {kindFixed ? null : (
+        <Section title="Typ" help="Der Typ ist nach dem Anlegen fest.">
+          <OptionGroup label="Typ" name="kind" value={kind} options={KIND_OPTIONS} disabled={disabled} />
+        </Section>
+      )}
+
+      <Section title="Antwortmodus" help="Was der Agent mit einer eingehenden Nachricht tut.">
+        {/* remount per kind: the option set changes and the default must apply again */}
+        <OptionGroup
+          key={kind}
+          label="Antwortmodus"
           name="mode"
           value={mode}
+          options={options}
           disabled={disabled}
-          onChange={(e) => setMode(e.target.value as AgentMode)}
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      {kind === 'voice' ? (
-        <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-          <label>Abgefragte Angaben bei der Anliegen-Aufnahme</label>
-          {/* render-time truth: a stale form without the checkboxes must not wipe the selection */}
-          <input type="hidden" name="intakeFieldsRendered" value="1" />
-          {INTAKE_FIELD_OPTIONS.map((option) => (
-            <label
-              key={option.value}
-              htmlFor={`${idPrefix}-intake-${option.value}`}
-              className="check-row"
+        />
+        <div>
+          {kindFixed ? (
+            // kind is immutable after creation — display only, not posted
+            <SettingRow label="Typ" help="Der Typ ist nach dem Anlegen fest.">
+              <span className="strong">
+                {kindFixed === 'voice' ? 'Voice-Agent (Telefon)' : 'Text-Agent (Chat, E-Mail, WhatsApp)'}
+              </span>
+            </SettingRow>
+          ) : null}
+          {showThreshold ? (
+            <SettingRow
+              label="Sicherheits-Schwellwert (0–1)"
+              htmlFor={`${idPrefix}-threshold`}
+              help={
+                kind === 'voice'
+                  ? 'Der Agent schätzt im Gespräch selbst ein, wie sicher er ist. Unter diesem Wert antwortet er nicht inhaltlich, sondern eskaliert. Höher ist vorsichtiger, 0 eskaliert nie wegen Unsicherheit.'
+                  : 'Unter diesem Wert eskaliert der Agent, auch im Modus „Nur Entwürfe". Im Autopilot bestimmt er außerdem, ab welcher Sicherheit automatisch gesendet wird.'
+              }
             >
+              {/* render-time truth: a form without the field must not reset the stored value */}
+              <input type="hidden" name="thresholdRendered" value="1" />
               <input
-                id={`${idPrefix}-intake-${option.value}`}
-                name="intakeFields"
-                type="checkbox"
-                value={option.value}
-                defaultChecked={intakeDefaults.has(option.value)}
+                id={`${idPrefix}-threshold`}
+                name="confidenceThreshold"
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                defaultValue={defaultThreshold ?? 0.7}
                 disabled={disabled}
               />
-              {option.label}
-            </label>
-          ))}
-          <p className="hint">
-            Bevor der Agent ein Anliegen als Ticket aufnimmt, erfragt er die angehakten Angaben
-            (die Rückrufnummer nur, falls sie von der Anrufnummer abweicht). Nicht Angehaktes wird
-            nicht aktiv erfragt — nennt der Anrufer es von selbst, wird es trotzdem gespeichert.
-          </p>
-        </fieldset>
+            </SettingRow>
+          ) : null}
+        </div>
+      </Section>
+
+      {kind === 'voice' ? (
+        <Section
+          title="Anliegen-Aufnahme"
+          help="Diese Angaben erfragt der Agent, bevor er ein Anliegen als Ticket aufnimmt."
+        >
+          <fieldset className="fieldset-plain">
+            <legend className="sr-only">Abgefragte Angaben bei der Anliegen-Aufnahme</legend>
+            {/* render-time truth: a stale form without the checkboxes must not wipe the selection */}
+            <input type="hidden" name="intakeFieldsRendered" value="1" />
+            {INTAKE_FIELD_OPTIONS.map((option) => (
+              <label
+                key={option.value}
+                htmlFor={`${idPrefix}-intake-${option.value}`}
+                className="check-row"
+              >
+                <input
+                  id={`${idPrefix}-intake-${option.value}`}
+                  name="intakeFields"
+                  type="checkbox"
+                  value={option.value}
+                  defaultChecked={intakeDefaults.has(option.value)}
+                  disabled={disabled}
+                />
+                {option.label}
+              </label>
+            ))}
+            <p className="field-help">
+              Die Rückrufnummer erfragt er nur, wenn sie von der Anrufnummer abweicht. Nicht
+              Angehaktes wird nicht aktiv erfragt, aber gespeichert, wenn der Anrufer es von selbst
+              nennt.
+            </p>
+          </fieldset>
+        </Section>
       ) : null}
-      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-        <label>Wenn der Agent nicht weiterkommt</label>
+
+      <Section
+        title="Wenn der Agent nicht weiterkommt"
+        help="Eskalations-Begriffe und der ausdrückliche Wunsch nach einem Menschen eskalieren immer."
+      >
         {/* render-time truth (0027 pattern): a stale form must not reset the target */}
         <input type="hidden" name="escalationTargetRendered" value="1" />
-        <label htmlFor={`${idPrefix}-target-human`} className="check-row">
-          <input
-            id={`${idPrefix}-target-human`}
-            name="escalationTarget"
-            type="radio"
-            value="human"
-            defaultChecked={(defaultEscalationTarget ?? 'human') === 'human'}
-            disabled={disabled}
-          />
-          An einen Menschen übergeben — Live-Übernahme in der Inbox; Telefon: Weiterleitung oder
-          Rückruf
-        </label>
-        <p className="hint" style={{ marginLeft: '1.6rem' }}>
-          Die Konversation wechselt in die Warteschlange (Bot pausiert), bis ein Mitarbeiter übernimmt
-          oder an den Bot zurückgibt.
-        </p>
-        <label htmlFor={`${idPrefix}-target-ticket`} className="check-row">
-          <input
-            id={`${idPrefix}-target-ticket`}
-            name="escalationTarget"
-            type="radio"
-            value="ticket"
-            defaultChecked={defaultEscalationTarget === 'ticket'}
-            disabled={disabled}
-          />
-          Als Ticket aufnehmen — kein Mensch live verfügbar; der Bot bleibt aktiv, der Kunde bekommt
-          eine Bestätigung
-        </label>
-        <p className="hint" style={{ marginLeft: '1.6rem' }}>
-          Das Anliegen wird als Ticket angelegt und dem Kunden mit Ticketnummer bestätigt (Text
-          „Ticket-Bestätigung" unter Übergabe &amp; Zeiten); der Agent beantwortet weitere Fragen.
-          Telefon: nimmt einen Rückruf auf, leitet nie weiter.
-        </p>
-      </fieldset>
-      {mode !== 'intake_only' ? (
-        <div>
-          <label htmlFor={`${idPrefix}-handoff`} className="check-row">
+        <OptionGroup
+          label="Eskalationsziel"
+          name="escalationTarget"
+          value={defaultEscalationTarget ?? 'human'}
+          options={TARGET_OPTIONS}
+          disabled={disabled}
+        />
+        {mode !== 'intake_only' ? (
+          <SettingRow
+            label="Auch bei Unsicherheit eskalieren"
+            htmlFor={`${idPrefix}-handoff`}
+            help="Aus: Eine unsichere Antwort bleibt ein Vorschlag im Posteingang (Text), am Telefon bietet der Assistent ein Ticket an."
+          >
             <input
               id={`${idPrefix}-handoff`}
               name="handoffEnabled"
               type="checkbox"
+              className="switch"
               defaultChecked={defaultHandoffEnabled !== false}
               disabled={disabled}
             />
-            Auch bei Unsicherheit (unter dem Schwellwert) eskalieren
-          </label>
-          <p className="hint">
-            Aus = eine unsichere Antwort bleibt ein Vorschlag im Posteingang (Text) bzw. der Assistent
-            bietet ein Ticket an (Telefon). Eskalations-Begriffe und der ausdrückliche Wunsch nach
-            einem Menschen eskalieren IMMER — je nach Auswahl oben als Übergabe oder als Ticket.
+          </SettingRow>
+        ) : (
+          <p className="field-help">
+            Reine Annahme: Jede Nachricht wird aufgenommen, je nach Auswahl oben als Übergabe oder
+            als Ticket mit Bestätigung.
           </p>
-        </div>
-      ) : (
-        <p className="hint">
-          Reine Annahme: jede Nachricht wird aufgenommen — als Übergabe in die Warteschlange oder
-          als Ticket mit Bestätigung, je nach Auswahl oben.
-        </p>
-      )}
-      {showThreshold ? (
-        <div>
-          <label htmlFor={`${idPrefix}-threshold`}>Sicherheits-Schwellwert (0–1)</label>
-          {/* render-time truth: a form without the field must not reset the stored value */}
-          <input type="hidden" name="thresholdRendered" value="1" />
-          <input
-            id={`${idPrefix}-threshold`}
-            name="confidenceThreshold"
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            defaultValue={defaultThreshold ?? 0.7}
-            disabled={disabled}
-            style={{ maxWidth: '10rem' }}
-          />
-          <p className="hint">
-            {kind === 'voice'
-              ? 'Der Agent schätzt im Gespräch selbst ein, wie sicher er sich ist (0–1). Liegt er unter diesem Wert, antwortet er nicht inhaltlich, sondern eskaliert (Übergabe oder Ticket, siehe oben) — sofern „Auch bei Unsicherheit eskalieren" aktiv ist; sonst bietet er ein Ticket an. Höher = vorsichtiger, 0 = eskaliert nie wegen Unsicherheit.'
-              : 'Unterhalb dieses Werts eskaliert der Agent (Übergabe oder Ticket, siehe oben — sofern „Auch bei Unsicherheit eskalieren" aktiv ist), auch im Modus „Nur Entwürfe". Im Autopilot bestimmt der Wert zusätzlich, ab welcher Sicherheit automatisch gesendet wird.'}
+        )}
+        {handoffSettingsHref ? (
+          <p className="field-help">
+            Eskalations-Begriffe, Geschäftszeiten und Bestätigungstexte gelten für alle Agenten.{' '}
+            <Link href={handoffSettingsHref}>Übergabe und Zeiten öffnen</Link>
           </p>
-        </div>
-      ) : null}
-    </>
+        ) : null}
+      </Section>
+    </div>
   );
 }

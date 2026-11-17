@@ -18,8 +18,14 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function agentsUrl(org: string, message?: { error?: string; notice?: string }): string {
+function agentsUrl(
+  org: string,
+  message?: { error?: string; notice?: string },
+  /** 'new' keeps the "Neuer Agent" drawer open when creating fails (redesign stage 4). */
+  panel?: 'new'
+): string {
   const params = new URLSearchParams({ org });
+  if (panel) params.set('panel', panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/agents?${params.toString()}`;
@@ -103,18 +109,18 @@ export async function createAgent(formData: FormData): Promise<void> {
   const kindParsed = agentKindSchema.safeParse(textField(formData.get('kind')) || 'text');
   if (!parsed.success || !kindParsed.success) {
     redirect(
-      agentsUrl(textField(formData.get('org')), {
-        error: 'Bitte Name (2–80 Zeichen), Typ, Modus und Schwellwert (0–1) prüfen.',
-      })
+      agentsUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte Name (2–80 Zeichen), Typ, Modus und Schwellwert (0–1) prüfen.' },
+        'new'
+      )
     );
   }
   const { org, name, identity, mode, confidenceThreshold, escalationTarget } = parsed.data;
   const kind = kindParsed.data;
   if (!modeAllowedForKind(kind, mode)) {
     redirect(
-      agentsUrl(org, {
-        error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".',
-      })
+      agentsUrl(org, { error: 'Voice-Agenten kennen nur „Reine Annahme" und „Autopilot".' }, 'new')
     );
   }
   await requireOwner(org);
@@ -165,10 +171,10 @@ export async function createAgent(formData: FormData): Promise<void> {
       .single();
     createdRow = retry.data;
     if (retry.error || !createdRow) {
-      redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }));
+      redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }, 'new'));
     }
   } else if (error || !created) {
-    redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }));
+    redirect(agentsUrl(org, { error: 'Agent konnte nicht angelegt werden.' }, 'new'));
   }
 
   // Default: link ALL current knowledge bases (least surprise — matches the

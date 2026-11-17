@@ -29,24 +29,12 @@ export default function GreetingSuggestion({
   }
 
   return (
-    <p className="hint">
+    <p className="field-help">
       Empfehlung{agentMode === 'answer' ? ' (Autopilot)' : ' (Reine Annahme)'}:{' '}
-      <button
-        type="button"
-        onClick={() => fill(recommended)}
-        style={{
-          background: 'none',
-          border: 'none',
-          padding: 0,
-          color: 'var(--brand-600)',
-          cursor: 'pointer',
-          font: 'inherit',
-          textDecoration: 'underline',
-        }}
-      >
+      <button type="button" className="link-button" onClick={() => fill(recommended)}>
         Vorschlag übernehmen
       </button>
-      <span style={{ display: 'block', marginTop: '0.2rem' }}>„{recommended}"</span>
+      <span className="agents-greeting-text">„{recommended}"</span>
     </p>
   );
 }
