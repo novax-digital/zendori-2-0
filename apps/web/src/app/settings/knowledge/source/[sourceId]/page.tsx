@@ -1,20 +1,28 @@
-// Chunk transparency view: shows VERBATIM what is indexed for one kb_source —
-// every Textbaustein exactly as the AI retrieves it (incl. the "Quelle: …"
-// provenance header). Owner-facing traceability for the knowledge base; RLS
-// scopes every query to the caller's org.
+// Chunk transparency view (page type C with a side rail): shows VERBATIM what
+// is indexed for one kb_source — every Textbaustein exactly as the AI retrieves
+// it (incl. the "Quelle: …" provenance header). Owner-facing traceability for
+// the knowledge base; RLS scopes every query to the caller's org.
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { KbSourceStatus, KbSourceType } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { canViewArea, isAdminRole, isKbImageFilename } from '@zendori/core';
+import { href } from '@/lib/href';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import { SettingRow } from '@/components/ui/Field';
+import { EmptyState, Property, PropertyList, Section } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
 import { setSourceShareable } from '../../actions';
+import { SOURCE_TYPE_LABELS, SourceStatusBadge, formatRelative, sourceLabel } from '../../shared';
 
 const PAGE_SIZE = 50;
 
 type SourceRow = {
   id: string;
+  knowledge_base_id: string;
   type: KbSourceType;
   uri: string | null;
   status: KbSourceStatus;
@@ -30,29 +38,6 @@ type ChunkRow = {
   token_count: number | null;
 };
 
-const typeLabels: Record<KbSourceType, string> = {
-  url: 'URL',
-  file: 'Datei',
-  text: 'Text',
-};
-
-const statusLabels: Record<KbSourceStatus, string> = {
-  pending: 'Ausstehend',
-  indexed: 'Indiziert',
-  error: 'Fehler',
-};
-
-const statusClass: Record<KbSourceStatus, string> = {
-  pending: 'badge--warn',
-  indexed: 'badge--success',
-  error: 'badge--danger',
-};
-
-function sourceLabel(source: SourceRow): string {
-  if (source.type === 'text') return 'Manueller Text';
-  return source.uri ?? '—';
-}
-
 export default async function SourceChunksPage({
   params,
   searchParams,
@@ -66,7 +51,8 @@ export default async function SourceChunksPage({
   if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Wissensdatenbank" />;
 
   const supabase = await createSupabaseServerClient();
-  const COLUMNS = 'id, type, uri, status, last_indexed_at, knowledge_base:knowledge_bases(name)';
+  const COLUMNS =
+    'id, knowledge_base_id, type, uri, status, last_indexed_at, knowledge_base:knowledge_bases(name)';
   // is_shareable is 0025 — retry without it while the migration is pending (the
   // same 42703 schema-skew pattern used elsewhere; an unreleased file is the
   // correct assumption pre-migration).
@@ -108,109 +94,148 @@ export default async function SourceChunksPage({
 
   const isImage = source.type === 'file' && isKbImageFilename(source.uri ?? '');
   const canRelease = isAdminRole(access.role);
-  const backHref = `/settings/knowledge?org=${orgId}`;
-  const pageHref = (p: number) => `/settings/knowledge/source/${sourceId}?org=${orgId}&page=${p}`;
+  const kbName = source.knowledge_base?.name ?? 'Wissensdatenbank';
+  const kbHref = href(`/settings/knowledge/${source.knowledge_base_id}`, { org: orgId });
+  const pageHref = (p: number) =>
+    href(`/settings/knowledge/source/${sourceId}`, { org: orgId, page: p });
 
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>Textbausteine</h1>
-        <p>
-          <Link href={backHref}>← Zurück zur Wissensdatenbank</Link>
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Wissen', href: href('/settings/knowledge', { org: orgId }) },
+          { label: kbName, href: kbHref },
+          { label: 'Textbausteine' },
+        ]}
+        title={<span className="kb-break">{sourceLabel(source)}</span>}
+        badges={<SourceStatusBadge status={source.status} />}
+        subtitle="Genau dieser Wortlaut liegt im Index. Der KI-Agent findet und zitiert ausschließlich diese Bausteine."
+      />
 
-      <div className="panel">
-        <h2 style={{ wordBreak: 'break-all' }}>{sourceLabel(source)}</h2>
-        <p className="help" style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          <span>
-            {source.knowledge_base?.name ?? 'Wissensdatenbank'} · {typeLabels[source.type]}
-          </span>
-          <span className={`badge ${statusClass[source.status]}`}>{statusLabels[source.status]}</span>
-          <span>
-            {total} {total === 1 ? 'Textbaustein' : 'Textbausteine'}
-            {chunks.length > 0 && chunks.length < total
-              ? ` (Seite ${pageNum} von ${lastPage})`
-              : ''}
-          </span>
-        </p>
-        <p className="hint">
-          Genau dieser Wortlaut liegt im Index — inklusive der „Quelle:"-Kopfzeile. Der KI-Agent
-          findet und zitiert ausschließlich diese Bausteine. Wirkt etwas veraltet oder falsch?
-          Quelle anpassen und neu indizieren.
-          {isImage
-            ? ' Bei Bildern steht hier die KI-Beschreibung — sie ersetzt das Bild für die Suche, das Bild selbst wird nicht durchsucht.'
-            : ''}
-        </p>
-      </div>
+      <div className="page-split">
+        <div className="page-body">
+          {/* Release for outbound sending (0025). Only files have bytes to send, and
+              only owners/admins may decide — the DB trigger enforces the same rule. */}
+          {source.type === 'file' && shareableSupported ? (
+            <Section
+              title="Weitersenden an Kunden"
+              help="Ob der Bot den Inhalt kennt, steuerst du über die Wissensdatenbanken des Agenten. Hier geht es nur darum, ob die Datei selbst das Haus verlassen darf."
+            >
+              <div className="form-narrow">
+                <SettingRow
+                  label={
+                    source.is_shareable
+                      ? 'Diese Datei ist freigegeben'
+                      : 'Diese Datei ist nicht freigegeben'
+                  }
+                  help={
+                    source.is_shareable
+                      ? 'Nutzt der Bot diese Quelle für eine Antwort, hängt er die Datei an: im Chat, per WhatsApp oder als E-Mail-Anhang.'
+                      : 'Der Bot darf ihren Inhalt für Antworten nutzen, die Datei selbst aber nicht an Kunden schicken.'
+                  }
+                >
+                  {canRelease ? (
+                    <form action={setSourceShareable}>
+                      <input type="hidden" name="org" value={orgId} />
+                      <input type="hidden" name="id" value={source.id} />
+                      <input type="hidden" name="kb" value={source.knowledge_base_id} />
+                      <input
+                        type="hidden"
+                        name="shareable"
+                        value={source.is_shareable ? 'off' : 'on'}
+                      />
+                      <Button type="submit">
+                        {source.is_shareable ? 'Freigabe entziehen' : 'Zum Senden freigeben'}
+                      </Button>
+                    </form>
+                  ) : (
+                    <Badge
+                      tone={source.is_shareable ? 'success' : 'neutral'}
+                      title="Ändern dürfen das nur Inhaber und Admins"
+                    >
+                      {source.is_shareable ? 'Freigegeben' : 'Nicht freigegeben'}
+                    </Badge>
+                  )}
+                </SettingRow>
+              </div>
+            </Section>
+          ) : null}
 
-      {/* Release for outbound sending (0025). Only files have bytes to send, and
-          only owners/admins may decide — the DB trigger enforces the same rule. */}
-      {source.type === 'file' && shareableSupported ? (
-        <div className="panel">
-          <h2>Weitersenden an Kunden</h2>
-          <p className="help">
-            {source.is_shareable
-              ? 'Diese Datei ist freigegeben: Nutzt der Bot diese Quelle für eine Antwort, hängt er die Datei an — im Chat, per WhatsApp oder als E-Mail-Anhang.'
-              : 'Diese Datei ist nicht freigegeben. Der Bot darf ihren Inhalt für Antworten nutzen, die Datei selbst aber nicht an Kunden schicken.'}
-          </p>
-          <p className="hint">
-            Zwei verschiedene Dinge: Ob der Bot den <em>Inhalt</em> kennt, steuern Sie über die
-            Wissensdatenbanken des Agenten. Hier geht es nur darum, ob die <em>Datei</em> das Haus
-            verlassen darf. Interne Unterlagen wie Preiskalkulationen bleiben also aus, auch wenn der
-            Bot daraus antwortet.
-          </p>
-          {canRelease ? (
-            <form action={setSourceShareable}>
-              <input type="hidden" name="org" value={orgId} />
-              <input type="hidden" name="id" value={source.id} />
-              <input type="hidden" name="shareable" value={source.is_shareable ? 'off' : 'on'} />
-              <button type="submit" className={source.is_shareable ? 'button' : 'button button--primary'}>
-                {source.is_shareable ? 'Freigabe entziehen' : 'Zum Senden freigeben'}
-              </button>
-            </form>
-          ) : (
-            <p className="hint">
-              <span className={`badge ${source.is_shareable ? 'badge--success' : ''}`}>
-                {source.is_shareable ? 'Freigegeben' : 'Nicht freigegeben'}
-              </span>{' '}
-              Ändern dürfen das nur Inhaber und Admins.
-            </p>
-          )}
+          <Section
+            title={total === 1 ? '1 Textbaustein' : `${total} Textbausteine`}
+            help={
+              <>
+                Inklusive der „Quelle:“-Kopfzeile. Wirkt etwas veraltet oder falsch? Quelle
+                anpassen und neu indizieren.
+                {isImage
+                  ? ' Bei Bildern steht hier die KI-Beschreibung. Sie ersetzt das Bild für die Suche, das Bild selbst wird nicht durchsucht.'
+                  : ''}
+              </>
+            }
+          >
+            {chunks.length === 0 ? (
+              <EmptyState
+                title="Keine Textbausteine"
+                text={
+                  source.status === 'pending'
+                    ? 'Die Indizierung läuft gerade.'
+                    : 'Indiziere die Quelle neu, falls hier Inhalte erwartet werden.'
+                }
+              />
+            ) : (
+              <div className="kb-chunks">
+                {chunks.map((chunk, index) => (
+                  <div className="kb-chunk" key={chunk.id}>
+                    <div className="muted small">
+                      Baustein {from + index + 1} von {total}
+                      {chunk.token_count ? ` · ~${chunk.token_count} Tokens` : ''}
+                    </div>
+                    <p className="kb-chunk-text">{chunk.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {lastPage > 1 ? (
+              <div className="row row--between">
+                <span className="muted small">
+                  Seite {pageNum} von {lastPage}
+                  {totalTokens ? ` · ~${totalTokens} Tokens auf dieser Seite` : ''}
+                </span>
+                <div className="row">
+                  {pageNum > 1 ? (
+                    <Button href={pageHref(pageNum - 1)} size="sm">
+                      Vorherige Seite
+                    </Button>
+                  ) : null}
+                  {pageNum < lastPage ? (
+                    <Button href={pageHref(pageNum + 1)} size="sm">
+                      Nächste Seite
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </Section>
         </div>
-      ) : null}
 
-      {chunks.length === 0 ? (
-        <div className="panel">
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            {source.status === 'pending'
-              ? 'Noch keine Textbausteine — die Indizierung läuft gerade.'
-              : 'Keine Textbausteine vorhanden. Quelle neu indizieren, falls hier Inhalte erwartet werden.'}
-          </p>
-        </div>
-      ) : (
-        chunks.map((chunk, index) => (
-          <div className="panel" key={chunk.id}>
-            <p className="hint" style={{ marginBottom: '0.5rem' }}>
-              Baustein {from + index + 1} von {total}
-              {chunk.token_count ? ` · ~${chunk.token_count} Tokens` : ''}
-            </p>
-            <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.92rem' }}>
-              {chunk.content}
-            </p>
+        <aside className="page-rail" aria-label="Quelle">
+          <div className="rail-section">
+            <h2>Quelle</h2>
+            <PropertyList>
+              <Property label="Wissensdatenbank">
+                <Link href={kbHref}>{kbName}</Link>
+              </Property>
+              <Property label="Typ">{SOURCE_TYPE_LABELS[source.type]}</Property>
+              <Property label="Status">
+                <SourceStatusBadge status={source.status} />
+              </Property>
+              <Property label="Textbausteine">{total}</Property>
+              <Property label="Zuletzt indiziert">{formatRelative(source.last_indexed_at)}</Property>
+            </PropertyList>
           </div>
-        ))
-      )}
-
-      {lastPage > 1 ? (
-        <div className="panel" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          {pageNum > 1 ? <Link href={pageHref(pageNum - 1)}>← Vorherige Seite</Link> : <span />}
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Seite {pageNum} von {lastPage} · {totalTokens ? `~${totalTokens} Tokens auf dieser Seite` : ''}
-          </span>
-          {pageNum < lastPage ? <Link href={pageHref(pageNum + 1)}>Nächste Seite →</Link> : null}
-        </div>
-      ) : null}
+        </aside>
+      </div>
     </div>
   );
 }

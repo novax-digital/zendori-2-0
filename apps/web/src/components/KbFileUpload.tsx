@@ -3,6 +3,9 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { finalizeKbUploads, prepareKbUploads } from '@/app/settings/knowledge/actions';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Icon from '@/components/ui/Icon';
 
 /**
  * Drag-and-drop multi-file uploader for knowledge-base sources. Files go
@@ -13,7 +16,8 @@ import { finalizeKbUploads, prepareKbUploads } from '@/app/settings/knowledge/ac
  * (creates the kb_sources rows and redirects with the notice).
  */
 
-// CSV stays out of this dialog on purpose (it has its own Q&A tab). Images were
+// CSV stays out of this dialog on purpose (it has its own source type,
+// "Fragen und Antworten"). Images were
 // added in 0025: the worker describes them with a vision call at index time.
 const ACCEPT = '.pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp';
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -108,9 +112,9 @@ export default function KbFileUpload({
   }
 
   return (
-    <div className="stack" style={{ maxWidth: '32rem' }}>
+    <div className="stack">
       <div
-        className={`kb-dropzone${dragActive ? ' kb-dropzone--active' : ''}`}
+        className={`kb-drop${dragActive ? ' kb-drop--active' : ''}`}
         role="button"
         tabIndex={0}
         onClick={() => inputRef.current?.click()}
@@ -127,24 +131,11 @@ export default function KbFileUpload({
         onDragLeave={() => setDragActive(false)}
         onDrop={onDrop}
       >
-        <svg
-          width="26"
-          height="26"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.7}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <path d="M12 16V4M8 8l4-4 4 4" />
-          <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-        </svg>
-        <span className="kb-dropzone-title">
-          Dateien hierher ziehen oder <span className="kb-dropzone-link">durchsuchen</span>
+        <Icon name="plus" size={20} className="kb-drop-icon" />
+        <span className="kb-drop-title">
+          Dateien hierher ziehen oder <span className="kb-drop-link">durchsuchen</span>
         </span>
-        <span className="kb-dropzone-hint">
+        <span className="kb-drop-hint">
           Mehrere Dateien möglich · PDF, DOCX, TXT, MD (max. 15 MB) · JPG, PNG, GIF, WEBP (max. 7 MB)
         </span>
         <input
@@ -162,53 +153,52 @@ export default function KbFileUpload({
       </div>
 
       {files.length > 0 ? (
-        <ul className="kb-filelist">
+        <ul className="kb-files">
           {files.map((f, i) => {
             const tooBig = f.size > MAX_BYTES;
             return (
-              <li key={fileKey(f)} className="kb-fileitem">
-                <span className="kb-fileitem-name" title={f.name}>
+              <li key={fileKey(f)} className="kb-file">
+                <span className="grow truncate" title={f.name}>
                   {f.name}
                 </span>
-                <span className={`kb-fileitem-size${tooBig ? ' kb-fileitem-size--bad' : ''}`}>
+                <span className={`kb-file-size${tooBig ? ' kb-file-size--bad' : ''}`}>
                   {formatBytes(f.size)}
                   {tooBig ? ' · zu groß' : ''}
                 </span>
-                <button
+                <Button
                   type="button"
-                  className="kb-fileitem-remove"
+                  variant="ghost"
+                  size="sm"
+                  iconOnly
+                  icon="close"
                   aria-label={`${f.name} entfernen`}
                   onClick={() => removeAt(i)}
                   disabled={pending}
-                >
-                  ✕
-                </button>
+                />
               </li>
             );
           })}
         </ul>
       ) : null}
 
-      {error ? (
-        <p className="error" style={{ margin: 0 }}>
-          {error}
-        </p>
-      ) : null}
+      {error ? <Callout tone="danger">{error}</Callout> : null}
 
-      <button
-        className="primary"
-        type="button"
-        disabled={files.length === 0 || pending}
-        onClick={() => void upload()}
-      >
-        {pending
-          ? 'Wird hochgeladen…'
-          : files.length === 0
-            ? 'Datei hochladen'
-            : files.length === 1
-              ? '1 Datei hochladen'
-              : `${files.length} Dateien hochladen`}
-      </button>
+      <div>
+        <Button
+          type="button"
+          variant="primary"
+          disabled={files.length === 0 || pending}
+          onClick={() => void upload()}
+        >
+          {pending
+            ? 'Wird hochgeladen …'
+            : files.length === 0
+              ? 'Datei hochladen'
+              : files.length === 1
+                ? '1 Datei hochladen'
+                : `${files.length} Dateien hochladen`}
+        </Button>
+      </div>
     </div>
   );
 }

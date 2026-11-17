@@ -1,27 +1,23 @@
-import type { ReactNode } from 'react';
+// Wissen: list of the organisation's knowledge bases (page type B). One
+// knowledge base opens on its own page (/settings/knowledge/[kbId]); a new one
+// is created in the drawer (?panel=new).
 import Link from 'next/link';
-import type { KbSourceStatus, KbSourceType } from '@zendori/core';
+import type { KbSourceStatus } from '@zendori/core';
+import { canViewArea } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import KnowledgeTabs, { type KbTabKey } from '@/components/KnowledgeTabs';
-import KbGallery, { type KbTileMeta } from '@/components/KbGallery';
-import KbFileUpload from '@/components/KbFileUpload';
-import KbIndexingPoller from '@/components/KbIndexingPoller';
-import DangerDeleteKb from '@/components/DangerDeleteKb';
+import { href } from '@/lib/href';
 import DismissibleBanners from '@/components/DismissibleBanners';
-import {
-  addQaCsvSource,
-  addTextSource,
-  addUrlSource,
-  createKnowledgeBase,
-  deleteKnowledgeBase,
-  deleteSource,
-  reindexSource,
-} from './actions';
-import { canViewArea } from '@zendori/core';
+import KbIndexingPoller from '@/components/KbIndexingPoller';
 import NoAccessPanel from '@/components/NoAccessPanel';
-import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Drawer from '@/components/ui/Drawer';
+import { Field } from '@/components/ui/Field';
+import { EmptyState } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
+import { createKnowledgeBase } from './actions';
+import { formatRelative } from './shared';
 
 type KbRow = {
   id: string;
@@ -30,67 +26,42 @@ type KbRow = {
 };
 
 type KbSourceRow = {
-  id: string;
   knowledge_base_id: string;
-  type: KbSourceType;
-  uri: string | null;
   status: KbSourceStatus;
   last_indexed_at: string | null;
-  created_at: string;
 };
 
-const typeLabels: Record<KbSourceType, string> = {
-  url: 'URL',
-  file: 'Datei',
-  text: 'Text',
-};
-
-const statusLabels: Record<KbSourceStatus, string> = {
-  pending: 'Ausstehend',
-  indexed: 'Indiziert',
-  error: 'Fehler',
-};
-
-const statusClass: Record<KbSourceStatus, string> = {
-  pending: 'badge--warn',
-  indexed: 'badge--success',
-  error: 'badge--danger',
-};
-
-
-
-function statusBadge(status: KbSourceStatus) {
+/** One badge for the indexing state of a whole knowledge base. */
+function IndexState({ sources }: { sources: KbSourceRow[] }) {
+  if (sources.length === 0) return <Badge tone="muted">Leer</Badge>;
+  const errors = sources.filter((s) => s.status === 'error').length;
+  if (errors > 0) {
+    return (
+      <Badge tone="danger" dot>
+        {errors === 1 ? '1 Fehler' : `${errors} Fehler`}
+      </Badge>
+    );
+  }
+  if (sources.some((s) => s.status === 'pending')) {
+    return (
+      <Badge tone="warn" dot>
+        Wird indiziert
+      </Badge>
+    );
+  }
   return (
-    <span className={`badge ${statusClass[status]}`}>{statusLabels[status]}</span>
+    <Badge tone="success" dot>
+      Indiziert
+    </Badge>
   );
-}
-
-/** Human label for a source (URL / uploaded filename / generic text). */
-function sourceLabel(source: KbSourceRow): string {
-  if (source.type === 'text') return 'Manueller Text';
-  return source.uri ?? '—';
-}
-
-/** Server-rendered coarse relative time (German), good enough for an index list. */
-function formatRelative(iso: string | null): string {
-  if (!iso) return '—';
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return '—';
-  const diffMin = Math.round((Date.now() - then) / 60_000);
-  if (diffMin < 1) return 'gerade eben';
-  if (diffMin < 60) return `vor ${diffMin} Min.`;
-  const diffHours = Math.round(diffMin / 60);
-  if (diffHours < 24) return `vor ${diffHours} Std.`;
-  const diffDays = Math.round(diffHours / 24);
-  return `vor ${diffDays} ${diffDays === 1 ? 'Tag' : 'Tagen'}`;
 }
 
 export default async function KnowledgePage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ org?: string; error?: string; notice?: string; panel?: string }>;
 }) {
-  const { org, error, notice } = await searchParams;
+  const { org, error, notice, panel } = await searchParams;
   const { orgId, orgs, access } = await requireActiveOrg(org);
   if (!canViewArea(access, 'knowledge')) return <NoAccessPanel title="Wissensdatenbank" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
@@ -104,16 +75,15 @@ export default async function KnowledgePage({
       .order('created_at', { ascending: true }),
     supabase
       .from('kb_sources')
-      .select('id, knowledge_base_id, type, uri, status, last_indexed_at, created_at')
-      .eq('org_id', orgId)
-      .order('created_at', { ascending: false }),
+      .select('knowledge_base_id, status, last_indexed_at')
+      .eq('org_id', orgId),
     supabase.from('agent_knowledge_bases').select('knowledge_base_id').eq('org_id', orgId),
   ]);
   const kbs = (kbData ?? []) as KbRow[];
   const sources = (sourceData ?? []) as unknown as KbSourceRow[];
   const agentLinks = (linkData ?? []) as { knowledge_base_id: string }[];
 
-  // Learning loop (0020): open proposal count for the entry banner. Defensive —
+  // Learning loop (0020): open proposal count for the page head. Defensive —
   // before the migration the table is missing and the count stays hidden.
   let learnedProposedCount = 0;
   {
@@ -124,20 +94,6 @@ export default async function KnowledgePage({
       .eq('status', 'proposed');
     if (!learnedError) learnedProposedCount = count ?? 0;
   }
-
-  // Per-source chunk counts (Textbausteine) — cheap HEAD count queries, run in
-  // parallel. This is the owner-facing proof of WHAT is actually indexed.
-  const chunkCounts = new Map<string, number>();
-  await Promise.all(
-    sources.map(async (source) => {
-      const { count } = await supabase
-        .from('kb_chunks')
-        .select('id', { count: 'exact', head: true })
-        .eq('org_id', orgId)
-        .eq('source_id', source.id);
-      chunkCounts.set(source.id, count ?? 0);
-    })
-  );
 
   const sourcesByKb = new Map<string, KbSourceRow[]>();
   for (const source of sources) {
@@ -153,301 +109,166 @@ export default async function KnowledgePage({
     );
   }
 
-  const tiles: KbTileMeta[] = kbs.map((kb) => ({
-    id: kb.id,
-    name: kb.name,
-    description: kb.description,
-    sourceCount: sourcesByKb.get(kb.id)?.length ?? 0,
-    agentCount: agentCountByKb.get(kb.id) ?? 0,
-  }));
-
-  const addTabsFor = (kb: KbRow): { key: KbTabKey; label: string; panel: ReactNode }[] => [
-    {
-      key: 'url',
-      label: 'URL',
-      panel: (
-        <>
-          <p className="help">
-            Eine Webseite oder Sitemap (.xml). Bei einer Sitemap werden bis zu 20 verlinkte Seiten
-            eingelesen.
-          </p>
-          <form className="stack" action={addUrlSource} style={{ maxWidth: '32rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
-            <div>
-              <label htmlFor={`url-${kb.id}`}>URL</label>
-              <input
-                id={`url-${kb.id}`}
-                name="url"
-                type="url"
-                required
-                placeholder="https://www.beispiel.de/hilfe"
-              />
-            </div>
-            <button className="primary" type="submit">
-              URL hinzufügen
-            </button>
-          </form>
-        </>
-      ),
-    },
-    {
-      key: 'file',
-      label: 'Datei',
-      panel: (
-        <>
-          <p className="help">
-            PDF, DOCX, TXT, MD oder CSV bis 15 MB und Bilder (JPG, PNG, GIF, WEBP) bis 7 MB pro
-            Datei. Mehrere Dateien auf einmal möglich — der Text wird aus jeder Datei extrahiert und
-            indiziert (CSV-Dateien werden als Frage-Antwort-Paare eingelesen, siehe Tab „Q&amp;A
-            (CSV)"). Bilder beschreibt die KI beim Hochladen: Was zu sehen ist, welche Stellen
-            markiert sind und was auf dem Gerät steht. Danach sind sie über diese Beschreibung
-            auffindbar.
-          </p>
-          <KbFileUpload org={orgId} knowledgeBaseId={kb.id} />
-        </>
-      ),
-    },
-    {
-      key: 'qa',
-      label: 'Q&A (CSV)',
-      panel: (
-        <>
-          <p className="help">
-            Fragen und Antworten als CSV importieren — zwei Spalten{' '}
-            <strong>Frage;Antwort</strong> (Semikolon oder Komma, optionale Kopfzeile,
-            Anführungszeichen für mehrzeilige Antworten). Jedes Paar wird als eigener
-            Textbaustein indiziert — das ideale Format, damit der Agent Kundenfragen präzise
-            trifft. Export aus Excel: „Speichern unter" → CSV.
-          </p>
-          <form className="stack" action={addQaCsvSource} style={{ maxWidth: '32rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
-            <div>
-              <label htmlFor={`qa-file-${kb.id}`}>CSV-Datei</label>
-              <input id={`qa-file-${kb.id}`} name="file" type="file" accept=".csv,text/csv" required />
-            </div>
-            <button className="primary" type="submit">
-              Q&amp;A importieren
-            </button>
-          </form>
-        </>
-      ),
-    },
-    {
-      key: 'text',
-      label: 'Text',
-      panel: (
-        <>
-          <p className="help">
-            Ein manuell gepflegter Text — z. B. Rückgabebedingungen, FAQ-Antworten oder interne
-            Hinweise, die der KI-Agent kennen soll.
-          </p>
-          <form className="stack" action={addTextSource} style={{ maxWidth: '32rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="knowledgeBaseId" value={kb.id} />
-            <div>
-              <label htmlFor={`title-${kb.id}`}>Titel</label>
-              <input
-                id={`title-${kb.id}`}
-                name="title"
-                type="text"
-                required
-                minLength={1}
-                maxLength={200}
-                placeholder="z. B. Rückgabebedingungen"
-              />
-            </div>
-            <div>
-              <label htmlFor={`text-${kb.id}`}>Text</label>
-              <textarea id={`text-${kb.id}`} name="text" rows={6} required />
-            </div>
-            <button className="primary" type="submit">
-              Text hinzufügen
-            </button>
-          </form>
-        </>
-      ),
-    },
-  ];
-
-  const panels: Record<string, ReactNode> = {};
-  for (const kb of kbs) {
-    const kbSources = sourcesByKb.get(kb.id) ?? [];
-    const kbHasPending = kbSources.some((s) => s.status === 'pending');
-    const agentCount = agentCountByKb.get(kb.id) ?? 0;
-    panels[kb.id] = (
-      <div key={kb.id}>
-        <div className="panel">
-          <h2>Quellen — {kb.name}</h2>
-          {agentCount === 0 ? (
-            <p className="notice" style={{ marginBottom: '1rem' }}>
-              Diese Wissensdatenbank ist mit keinem Agenten verknüpft — ihr Inhalt wird aktuell
-              von keiner KI genutzt. Verknüpfen unter Einstellungen → Agenten.
-            </p>
-          ) : null}
-          {kbSources.length === 0 ? (
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-              Noch keine Quellen vorhanden. Füge unten eine URL, eine Datei oder einen Text hinzu.
-            </p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Typ</th>
-                  <th>Quelle</th>
-                  <th>Status</th>
-                  <th>Textbausteine</th>
-                  <th>Zuletzt indiziert</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {kbSources.map((source) => (
-                  <tr key={source.id}>
-                    <td>{typeLabels[source.type]}</td>
-                    <td style={{ wordBreak: 'break-all' }}>{sourceLabel(source)}</td>
-                    <td>{statusBadge(source.status)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {(chunkCounts.get(source.id) ?? 0) > 0 ? (
-                        <Link href={`/settings/knowledge/source/${source.id}?org=${orgId}`}>
-                          {chunkCounts.get(source.id)} ansehen
-                        </Link>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>—</span>
-                      )}
-                    </td>
-                    <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                      {formatRelative(source.last_indexed_at)}
-                    </td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <form
-                        action={reindexSource}
-                        style={{ display: 'inline-block', marginRight: '0.4rem' }}
-                      >
-                        <input type="hidden" name="org" value={orgId} />
-                        <input type="hidden" name="id" value={source.id} />
-                        <button className="ghost" type="submit">
-                          Neu indizieren
-                        </button>
-                      </form>
-                      <form action={deleteSource} style={{ display: 'inline-block' }}>
-                        <input type="hidden" name="org" value={orgId} />
-                        <input type="hidden" name="id" value={source.id} />
-                        {/* two-step confirm (owner 2026-07-24): deletion removes the
-                            chunks immediately from every agent's retrieval */}
-                        <ConfirmDeleteButton label="Löschen" confirmLabel="Wirklich löschen" />
-                      </form>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {kbHasPending ? (
-            <p className="hint" style={{ marginTop: '0.6rem' }}>
-              Ausstehende Quellen werden im Hintergrund indiziert — diese Ansicht aktualisiert
-              sich automatisch, sobald die Indizierung abgeschlossen ist.
-            </p>
-          ) : null}
-        </div>
-
-        <KnowledgeTabs tabs={addTabsFor(kb)} />
-
-        <div className="panel">
-          <h2>Wissensdatenbank löschen</h2>
-          <p className="help">
-            Löscht „{kb.name}" mitsamt {kbSources.length === 1 ? 'ihrer Quelle' : 'allen Quellen'}{' '}
-            und deren Index — Agenten verlieren die Verknüpfung. Nicht rückgängig machbar, daher
-            nur nach Eingabe deines aktuellen Passworts.
-          </p>
-          <DangerDeleteKb org={orgId} kbId={kb.id} kbName={kb.name} action={deleteKnowledgeBase} />
-        </div>
-      </div>
-    );
-  }
-
-  const newPanel: ReactNode = (
-    <div className="panel">
-      <h2>Neue Wissensdatenbank</h2>
-      <p className="help">
-        Bündle Quellen thematisch (z. B. „Website-FAQ", „Interne Doku", „Produktkatalog") und
-        verknüpfe sie gezielt mit Agenten — so weiß jeder Agent nur, was er wissen soll.
-      </p>
-      <form className="stack" action={createKnowledgeBase} style={{ maxWidth: '28rem' }}>
-        <input type="hidden" name="org" value={orgId} />
-        <div>
-          <label htmlFor="kb-name">Name</label>
-          <input
-            id="kb-name"
-            name="name"
-            type="text"
-            required
-            minLength={2}
-            maxLength={80}
-            placeholder="z. B. Website-FAQ"
-          />
-        </div>
-        <div>
-          <label htmlFor="kb-description">Beschreibung (optional)</label>
-          <input
-            id="kb-description"
-            name="description"
-            type="text"
-            maxLength={300}
-            placeholder="Was liegt hier drin?"
-          />
-        </div>
-        <button className="primary" type="submit">
-          Wissensdatenbank anlegen
-        </button>
-      </form>
-    </div>
-  );
+  const listHref = href('/settings/knowledge', { org: orgId });
+  const newHref = href('/settings/knowledge', { org: orgId, panel: 'new' });
+  const drawerOpen = panel === 'new';
 
   return (
-    <div className="shell">
+    <div className="page">
       <PageHeader
         title="Wissensdatenbank"
-        subtitle={
-          <>
-            Das Wissen von {orgName}, gebündelt in Datenbanken: Quellen werden im Hintergrund
-            zerlegt und als Embeddings indiziert. Welche Datenbanken ein Agent nutzt, legst du
-            unter Einstellungen → Agenten fest.
-          </>
-        }
+        subtitle={`Das Wissen von ${orgName}, gebündelt in Datenbanken, die du gezielt mit Agenten verknüpfst.`}
         actions={
-          // former sidebar entry "MD-Generator" (needs the same 'knowledge' view right)
-          <Link className="ghost" href={`/tools/md-generator?org=${orgId}`}>
-            MD-Generator
-          </Link>
+          <>
+            <Button href={href('/settings/knowledge/learned', { org: orgId })}>
+              Gelernte Antworten
+              {learnedProposedCount > 0 ? (
+                <Badge
+                  tone="accent"
+                  title={
+                    learnedProposedCount === 1
+                      ? '1 Vorschlag wartet auf Prüfung'
+                      : `${learnedProposedCount} Vorschläge warten auf Prüfung`
+                  }
+                >
+                  {learnedProposedCount}
+                </Badge>
+              ) : null}
+            </Button>
+            {/* former sidebar entry "MD-Generator" (needs the same 'knowledge' view right) */}
+            <Button href={href('/tools/md-generator', { org: orgId })}>MD-Generator</Button>
+            <Button href={newHref} variant="primary" icon="plus" scroll={false}>
+              Neue Wissensdatenbank
+            </Button>
+          </>
         }
       />
 
-      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
+      <div className="page-body">
+        <div className="stack">
+          {/* an error that belongs to the open drawer is shown inside the drawer */}
+          <DismissibleBanners error={drawerOpen ? undefined : error} notice={notice} />
 
-      {/* auto-refresh while any source is still indexing (kb_sources has no
-          realtime publication — polling is the migration-free mechanism) */}
-      <KbIndexingPoller active={sources.some((s) => s.status === 'pending')} />
+          {/* auto-refresh while any source is still indexing (kb_sources has no
+              realtime publication — polling is the migration-free mechanism) */}
+          <KbIndexingPoller active={sources.some((s) => s.status === 'pending')} />
 
-      <div className="panel" style={{ marginBottom: '1.5rem' }}>
-        <h2>Gelernte Antworten</h2>
-        <p className="help">
-          Zendori lernt aus Mitarbeiter-Antworten und Entwurfs-Korrekturen — als anonymisierte
-          Frage-Antwort-Vorschläge, die du vor der Übernahme prüfst.{' '}
-          {learnedProposedCount > 0 ? (
-            <strong>
-              {learnedProposedCount}{' '}
-              {learnedProposedCount === 1 ? 'Vorschlag wartet' : 'Vorschläge warten'} auf Prüfung.
-            </strong>
+          {kbs.length === 0 ? (
+            <EmptyState
+              title="Noch keine Wissensdatenbank"
+              text="Bündle Quellen thematisch, zum Beispiel „Website-FAQ“ oder „Produktkatalog“, und verknüpfe sie mit Agenten."
+              action={
+                <Button href={newHref} variant="primary" icon="plus" scroll={false}>
+                  Neue Wissensdatenbank
+                </Button>
+              }
+            />
           ) : (
-            'Aktuell keine offenen Vorschläge.'
-          )}{' '}
-          <Link href={`/settings/knowledge/learned?org=${orgId}`}>Vorschläge prüfen →</Link>
-        </p>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Wissensdatenbank</th>
+                    <th>Quellen</th>
+                    <th>Status</th>
+                    <th>Agenten</th>
+                    <th>Zuletzt indiziert</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {kbs.map((kb) => {
+                    const kbSources = sourcesByKb.get(kb.id) ?? [];
+                    const agentCount = agentCountByKb.get(kb.id) ?? 0;
+                    const lastIndexed = kbSources
+                      .map((s) => s.last_indexed_at)
+                      .filter((value): value is string => Boolean(value))
+                      .sort()
+                      .pop();
+                    return (
+                      <tr key={kb.id}>
+                        <td>
+                          <Link
+                            href={href(`/settings/knowledge/${kb.id}`, { org: orgId })}
+                            className="cell-title"
+                          >
+                            {kb.name}
+                          </Link>
+                          {kb.description?.trim() ? (
+                            <div className="cell-sub">{kb.description}</div>
+                          ) : null}
+                        </td>
+                        <td>{kbSources.length}</td>
+                        <td>
+                          <IndexState sources={kbSources} />
+                        </td>
+                        <td>
+                          {agentCount === 0 ? (
+                            <Badge
+                              tone="warn"
+                              title="Mit keinem Agenten verknüpft — der Inhalt wird von keiner KI genutzt"
+                            >
+                              Kein Agent
+                            </Badge>
+                          ) : (
+                            agentCount
+                          )}
+                        </td>
+                        <td className="muted">{formatRelative(lastIndexed ?? null)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
-      <KbGallery tiles={tiles} panels={panels} newPanel={newPanel} />
+      {drawerOpen ? (
+        <Drawer
+          title="Neue Wissensdatenbank"
+          closeHref={listHref}
+          footer={
+            <>
+              <Button href={listHref} scroll={false}>
+                Abbrechen
+              </Button>
+              <Button type="submit" form="kb-new" variant="primary">
+                Wissensdatenbank anlegen
+              </Button>
+            </>
+          }
+        >
+          <DismissibleBanners error={error} />
+          <form id="kb-new" className="stack" action={createKnowledgeBase}>
+            <input type="hidden" name="org" value={orgId} />
+            <Field
+              label="Name"
+              htmlFor="kb-name"
+              help="Bündle Quellen thematisch, zum Beispiel „Website-FAQ“, „Interne Doku“ oder „Produktkatalog“."
+            >
+              <input
+                id="kb-name"
+                name="name"
+                type="text"
+                required
+                minLength={2}
+                maxLength={80}
+                placeholder="z. B. Website-FAQ"
+              />
+            </Field>
+            <Field label="Beschreibung (optional)" htmlFor="kb-description">
+              <input
+                id="kb-description"
+                name="description"
+                type="text"
+                maxLength={300}
+                placeholder="Was liegt hier drin?"
+              />
+            </Field>
+          </form>
+        </Drawer>
+      ) : null}
     </div>
   );
 }

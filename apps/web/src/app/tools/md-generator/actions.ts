@@ -120,9 +120,11 @@ export async function saveMarkdownToKb(formData: FormData): Promise<void> {
     redirect(generatorUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidatePath('/settings/knowledge', 'layout');
+  // knowledgeBaseId is a validated UUID (saveSchema) — the source now lives on
+  // that knowledge base's own page
   redirect(
-    `/settings/knowledge?${new URLSearchParams({
+    `/settings/knowledge/${knowledgeBaseId}?${new URLSearchParams({
       org,
       notice: `„${title}" übernommen — die Indizierung startet in Kürze.`,
     }).toString()}`

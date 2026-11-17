@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useFormStatus } from 'react-dom';
+import Button from '@/components/ui/Button';
+import { Field } from '@/components/ui/Field';
 
 /**
  * Two-step, password-gated delete for a knowledge base. The destructive submit
@@ -12,9 +14,9 @@ import { useFormStatus } from 'react-dom';
 function ConfirmButton({ kbName }: { kbName: string }) {
   const { pending } = useFormStatus();
   return (
-    <button className="danger" type="submit" disabled={pending}>
-      {pending ? 'Wird gelöscht…' : `„${kbName}" endgültig löschen`}
-    </button>
+    <Button type="submit" variant="danger" disabled={pending}>
+      {pending ? 'Wird gelöscht …' : `„${kbName}“ endgültig löschen`}
+    </Button>
   );
 }
 
@@ -33,18 +35,19 @@ export default function DangerDeleteKb({
 
   if (!armed) {
     return (
-      <button className="ghost kb-delete-arm" type="button" onClick={() => setArmed(true)}>
-        „{kbName}" löschen
-      </button>
+      <div>
+        <Button type="button" variant="danger" onClick={() => setArmed(true)}>
+          „{kbName}“ löschen
+        </Button>
+      </div>
     );
   }
 
   return (
-    <form className="stack" action={action} style={{ maxWidth: '28rem' }}>
+    <form className="stack" action={action}>
       <input type="hidden" name="org" value={org} />
       <input type="hidden" name="id" value={kbId} />
-      <div>
-        <label htmlFor={`kb-del-pw-${kbId}`}>Zur Bestätigung dein aktuelles Passwort</label>
+      <Field label="Zur Bestätigung dein aktuelles Passwort" htmlFor={`kb-del-pw-${kbId}`}>
         <input
           id={`kb-del-pw-${kbId}`}
           name="password"
@@ -53,12 +56,12 @@ export default function DangerDeleteKb({
           autoComplete="current-password"
           placeholder="Aktuelles Passwort"
         />
-      </div>
-      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+      </Field>
+      <div className="row">
         <ConfirmButton kbName={kbName} />
-        <button className="ghost" type="button" onClick={() => setArmed(false)}>
+        <Button type="button" onClick={() => setArmed(false)}>
           Abbrechen
-        </button>
+        </Button>
       </div>
     </form>
   );

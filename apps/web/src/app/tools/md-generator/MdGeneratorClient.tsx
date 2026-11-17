@@ -3,6 +3,12 @@
 // Client half of the MD generator: URL form → server action crawl → preview,
 // .md download (client-side blob) and "in Wissensdatenbank übernehmen".
 import { useState, useTransition } from 'react';
+import Link from 'next/link';
+import { href } from '@/lib/href';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field } from '@/components/ui/Field';
+import { Section } from '@/components/ui/Layout';
 import { generateMarkdown, saveMarkdownToKb, type GenerateResult } from './actions';
 
 export default function MdGeneratorClient({
@@ -41,26 +47,22 @@ export default function MdGeneratorClient({
   };
 
   return (
-    <>
-      <div className="panel">
-        <h2>Website → Markdown</h2>
-        <p className="help">
-          Trage eine Website-URL (oder direkt eine sitemap.xml) ein. Der Generator lädt die Seite —
-          optional inklusive Unterseiten derselben Domain (max. 12) — entfernt Navigation und
-          Beiwerk und erzeugt eine saubere Markdown-Datei: ideal als Wissensquelle.
-        </p>
-        <div className="stack" style={{ maxWidth: '32rem' }}>
-          <div>
-            <label htmlFor="md-url">Website-URL</label>
+    <div className="form-narrow">
+      <Section
+        title="Website in Markdown umwandeln"
+        help="Der Generator lädt die Seite, auf Wunsch mit Unterseiten derselben Domain (höchstens 12), entfernt Navigation und Beiwerk und erzeugt eine saubere Markdown-Datei."
+      >
+        <div className="stack">
+          <Field label="Website-URL" htmlFor="md-url" help="Auch eine sitemap.xml ist möglich.">
             <input
               id="md-url"
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://www.strong-energy.eu"
+              placeholder="https://www.beispiel.de"
               disabled={pending}
             />
-          </div>
+          </Field>
           <label className="check-row">
             <input
               type="checkbox"
@@ -70,53 +72,57 @@ export default function MdGeneratorClient({
             />
             Unterseiten derselben Domain einbeziehen
           </label>
+          {error ? <Callout tone="danger">{error}</Callout> : null}
           <div>
-            <button className="primary" type="button" onClick={run} disabled={pending || !url.trim()}>
-              {pending ? 'Erzeuge Markdown… (kann bis zu einer Minute dauern)' : 'Markdown erzeugen'}
-            </button>
+            <Button type="button" variant="primary" onClick={run} disabled={pending || !url.trim()}>
+              {pending ? 'Erzeuge Markdown … (kann bis zu einer Minute dauern)' : 'Markdown erzeugen'}
+            </Button>
           </div>
-          {error ? <p className="error">{error}</p> : null}
         </div>
-      </div>
+      </Section>
 
       {result ? (
         <>
-          <div className="panel">
-            <h2>Ergebnis: {result.title}</h2>
-            <p className="help">
-              {result.pageCount} Seite{result.pageCount === 1 ? '' : 'n'} ·{' '}
-              {new Intl.NumberFormat('de-DE').format(result.markdown.length)} Zeichen
-              {result.skipped.length > 0
-                ? ` · ${result.skipped.length} übersprungen (Fehler/Budget)`
-                : ''}
-            </p>
+          <Section
+            title={`Ergebnis: ${result.title}`}
+            help={
+              <>
+                {result.pageCount} Seite{result.pageCount === 1 ? '' : 'n'} ·{' '}
+                {new Intl.NumberFormat('de-DE').format(result.markdown.length)} Zeichen
+                {result.skipped.length > 0
+                  ? ` · ${result.skipped.length} übersprungen (Fehler oder Budget)`
+                  : ''}
+              </>
+            }
+            actions={
+              <Button type="button" size="sm" onClick={download}>
+                Als .md herunterladen
+              </Button>
+            }
+          >
             <textarea
               readOnly
               value={result.markdown}
               rows={16}
-              style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem' }}
+              className="kb-md-preview"
+              aria-label="Erzeugtes Markdown"
             />
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-              <button className="ghost" type="button" onClick={download}>
-                Als .md herunterladen
-              </button>
-            </div>
-          </div>
+          </Section>
 
           {canSave ? (
-            <div className="panel">
-              <h2>In Wissensdatenbank übernehmen</h2>
+            <Section title="In Wissensdatenbank übernehmen">
               {kbs.length === 0 ? (
-                <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  Noch keine Wissensdatenbank vorhanden — anlegen unter Einstellungen →
-                  Wissensdatenbank.
+                <p className="muted small">
+                  Noch keine Wissensdatenbank vorhanden.{' '}
+                  <Link href={href('/settings/knowledge', { org: orgId, panel: 'new' })}>
+                    Wissensdatenbank anlegen
+                  </Link>
                 </p>
               ) : (
-                <form className="stack" action={saveMarkdownToKb} style={{ maxWidth: '32rem' }}>
+                <form className="stack" action={saveMarkdownToKb}>
                   <input type="hidden" name="org" value={orgId} />
                   <input type="hidden" name="markdown" value={result.markdown} />
-                  <div>
-                    <label htmlFor="md-kb">Wissensdatenbank</label>
+                  <Field label="Wissensdatenbank" htmlFor="md-kb">
                     <select id="md-kb" name="knowledgeBaseId" required defaultValue={kbs[0]?.id}>
                       {kbs.map((kb) => (
                         <option key={kb.id} value={kb.id}>
@@ -124,9 +130,8 @@ export default function MdGeneratorClient({
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <label htmlFor="md-title">Titel der Quelle</label>
+                  </Field>
+                  <Field label="Titel der Quelle" htmlFor="md-title">
                     <input
                       id="md-title"
                       name="title"
@@ -136,16 +141,16 @@ export default function MdGeneratorClient({
                       maxLength={150}
                       defaultValue={`Website: ${result.title}`}
                     />
+                  </Field>
+                  <div>
+                    <Button type="submit">Übernehmen und indizieren</Button>
                   </div>
-                  <button className="primary" type="submit">
-                    Übernehmen &amp; indizieren
-                  </button>
                 </form>
               )}
-            </div>
+            </Section>
           ) : null}
         </>
       ) : null}
-    </>
+    </div>
   );
 }

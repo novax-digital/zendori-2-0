@@ -3,6 +3,7 @@
 import { canEditArea, canViewArea } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { href } from '@/lib/href';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import PageHeader from '@/components/ui/PageHeader';
@@ -30,20 +31,23 @@ export default async function MdGeneratorPage({
   const kbs = (kbData ?? []) as { id: string; name: string }[];
 
   return (
-    <div className="shell">
+    <div className="page">
       {/* reached from the Wissensdatenbank page head (no sidebar entry of its own) */}
       <PageHeader
         breadcrumb={[
-          { label: 'Wissen', href: `/settings/knowledge?org=${orgId}` },
+          { label: 'Wissen', href: href('/settings/knowledge', { org: orgId }) },
           { label: 'MD-Generator' },
         ]}
         title="MD-Generator"
-        subtitle="Websites in saubere Markdown-Dateien verwandeln — zum Herunterladen oder direkt als Quelle in die Wissensdatenbank."
+        subtitle="Verwandelt eine Website in eine saubere Markdown-Datei, zum Herunterladen oder direkt als Quelle für die Wissensdatenbank."
       />
 
-      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
-
-      <MdGeneratorClient orgId={orgId} kbs={kbs} canSave={canEditArea(access, 'knowledge')} />
+      <div className="page-body">
+        <div className="stack stack--lg">
+          <DismissibleBanners error={error} notice={notice} />
+          <MdGeneratorClient orgId={orgId} kbs={kbs} canSave={canEditArea(access, 'knowledge')} />
+        </div>
+      </div>
     </div>
   );
 }

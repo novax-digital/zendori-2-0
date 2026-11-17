@@ -1,3 +1,113 @@
-/* Wissen — page-specific styles (redesign stages 4-7).
+/* Wissen — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx); merged into it in stage 8.
+   Replaces the legacy .kb-dropzone* / .kb-filelist / .kb-fileitem* /
+   .kb-delete-arm rules of globals.css (new names, so nothing old leaks in). */
+
+/* long URLs and file names may break anywhere instead of widening the layout */
+.kb-break {
+  overflow-wrap: anywhere;
+}
+
+/* --- file drop area of the "Datei" source type (KbFileUpload) --- */
+/* dropzone (file upload of a knowledge base) */
+.kb-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+.kb-drop:hover,
+.kb-drop--active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.kb-drop--active {
+  border-style: solid;
+}
+.kb-drop-icon {
+  color: var(--primary);
+}
+.kb-drop-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--ink);
+}
+.kb-drop-link {
+  color: var(--link);
+}
+.kb-drop-hint {
+  font-size: var(--fs-small);
+}
+
+/* picked files, before the upload starts */
+.kb-files {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.kb-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-small);
+  color: var(--ink);
+}
+.kb-file-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.kb-file-size--bad {
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* --- learned answers: one proposal of the review queue --- */
+.kb-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+/* --- source page: the indexed Textbausteine, verbatim --- */
+.kb-chunks {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.kb-chunk {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.kb-chunk-text {
+  max-width: 720px;
+  color: var(--ink);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- MD generator: the generated Markdown, read-only --- */
+.kb-md-preview {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+}

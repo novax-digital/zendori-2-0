@@ -6,10 +6,17 @@
 import Link from 'next/link';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { href } from '@/lib/href';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import { approveLearnedAnswer, rejectLearnedAnswer, retryLearnedCandidate } from './actions';
 import { canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field } from '@/components/ui/Field';
+import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
 
 type LearnedRow = {
   id: string;
@@ -80,143 +87,160 @@ export default async function LearnedAnswersPage({
   const approvedCount = approvedCountRaw ?? 0;
   const pendingDistill = (candidateCount ?? 0) + (errorCount ?? 0);
 
-  const backHref = `/settings/knowledge?org=${orgId}`;
-
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>Gelernte Antworten</h1>
-        <p>
-          Wenn ein Mitarbeiter nach einer Übergabe antwortet oder einen KI-Entwurf deutlich
-          korrigiert, destilliert Zendori daraus einen verallgemeinerten, anonymisierten
-          Frage-Antwort-Vorschlag. Erst nach deiner Freigabe wandert er in die Wissensdatenbank
-          „Gelernte Antworten" — ab dann nutzt ihn jeder verknüpfte Agent.{' '}
-          <Link href={backHref}>← Zurück zur Wissensdatenbank</Link>
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Wissen', href: href('/settings/knowledge', { org: orgId }) },
+          { label: 'Gelernte Antworten' },
+        ]}
+        title="Gelernte Antworten"
+        subtitle="Vorschläge aus Mitarbeiter-Antworten und korrigierten KI-Entwürfen, die du vor der Übernahme prüfst."
+      />
 
-      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
+      <div className="page-body">
+        <div className="stack stack--lg">
+          <DismissibleBanners error={error} notice={notice} />
 
-      <div className="panel">
-        <h2>Überblick</h2>
-        <p className="help">
-          {approvedCount} freigegeben · {proposed.length} zur Prüfung · {pendingDistill > 0
-            ? `${pendingDistill} in Verarbeitung`
-            : 'nichts in Verarbeitung'}
-          . Damit gelernte Antworten wirken, muss die Wissensdatenbank „Gelernte Antworten" unter
-          Einstellungen → Agenten mit deinen Agenten verknüpft sein.
-        </p>
-      </div>
+          <Stats>
+            <Stat label="Freigegeben" value={approvedCount} />
+            <Stat label="Zur Prüfung" value={proposed.length} />
+            <Stat label="In Verarbeitung" value={pendingDistill} />
+          </Stats>
 
-      {proposed.length === 0 ? (
-        <div className="panel">
-          <h2>Keine offenen Vorschläge</h2>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            Sobald Mitarbeiter in der Inbox übernommene Konversationen beantworten oder
-            KI-Entwürfe korrigieren, erscheinen hier neue Lern-Vorschläge.
-          </p>
-        </div>
-      ) : (
-        proposed.map((row) => (
-          <div className="panel" key={row.id}>
-            <p className="hint" style={{ marginBottom: '0.6rem' }}>
-              {originLabels[row.origin]} · {formatDate(row.created_at)}
-              {row.conversation_id ? (
-                <>
-                  {' · '}
-                  <Link href={`/inbox?org=${orgId}&c=${row.conversation_id}&status=all&channel=all`}>
-                    Zur Konversation
-                  </Link>
-                </>
-              ) : null}
-            </p>
-            <form className="stack" action={approveLearnedAnswer} id={`approve-${row.id}`}>
-              <input type="hidden" name="org" value={orgId} />
-              <input type="hidden" name="id" value={row.id} />
-              <div>
-                <label htmlFor={`q-${row.id}`}>Frage</label>
-                <input
-                  id={`q-${row.id}`}
-                  name="question"
-                  type="text"
-                  required
-                  minLength={3}
-                  maxLength={500}
-                  defaultValue={row.question ?? ''}
+          <Callout>
+            Damit gelernte Antworten wirken, muss die Wissensdatenbank „Gelernte Antworten“ mit
+            deinen Agenten verknüpft sein.{' '}
+            <Link href={href('/settings/agents', { org: orgId })}>Unter Agenten verknüpfen</Link>
+          </Callout>
+
+          <div>
+            <Section
+              title="Zur Prüfung"
+              help="Antwortet ein Mitarbeiter nach einer Übergabe oder korrigiert er einen KI-Entwurf deutlich, entsteht daraus ein verallgemeinerter, anonymisierter Vorschlag. Erst nach deiner Freigabe nutzt ihn jeder verknüpfte Agent."
+            >
+              {proposed.length === 0 ? (
+                <EmptyState
+                  title="Keine offenen Vorschläge"
+                  text="Sobald Mitarbeiter in der Inbox übernommene Konversationen beantworten oder KI-Entwürfe korrigieren, erscheinen hier neue Vorschläge."
                 />
-              </div>
-              <div>
-                <label htmlFor={`a-${row.id}`}>Antwort</label>
-                <textarea
-                  id={`a-${row.id}`}
-                  name="answer"
-                  rows={4}
-                  required
-                  minLength={3}
-                  maxLength={4000}
-                  defaultValue={row.answer ?? ''}
-                />
-              </div>
-            </form>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-              <button className="primary" type="submit" form={`approve-${row.id}`}>
-                In Wissensdatenbank übernehmen
-              </button>
-              <form action={rejectLearnedAnswer}>
-                <input type="hidden" name="org" value={orgId} />
-                <input type="hidden" name="id" value={row.id} />
-                <button className="ghost" type="submit">
-                  Ablehnen
-                </button>
-              </form>
-            </div>
-          </div>
-        ))
-      )}
-
-      {recent.length > 0 ? (
-        <div className="panel">
-          <h2>Zuletzt entschieden</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Frage</th>
-                <th>Status</th>
-                <th>Quelle</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent.map((row) => (
-                <tr key={row.id}>
-                  <td style={{ wordBreak: 'break-word' }}>{row.question ?? '—'}</td>
-                  <td>
-                    {row.status === 'approved' ? (
-                      <span className="badge badge--success">Freigegeben</span>
-                    ) : (
-                      <span className="badge badge--danger">Fehler</span>
-                    )}
-                  </td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    {originLabels[row.origin]}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {row.status === 'error' ? (
-                      <form action={retryLearnedCandidate} style={{ display: 'inline-block' }}>
+              ) : (
+                <div className="stack form-narrow">
+                  {proposed.map((row) => (
+                    <div className="kb-proposal" key={row.id}>
+                      <div className="muted small">
+                        {originLabels[row.origin]} · {formatDate(row.created_at)}
+                        {row.conversation_id ? (
+                          <>
+                            {' · '}
+                            <Link
+                              href={href('/inbox', {
+                                org: orgId,
+                                c: row.conversation_id,
+                                status: 'all',
+                                channel: 'all',
+                              })}
+                            >
+                              Zur Konversation
+                            </Link>
+                          </>
+                        ) : null}
+                      </div>
+                      <form className="stack" action={approveLearnedAnswer} id={`approve-${row.id}`}>
                         <input type="hidden" name="org" value={orgId} />
                         <input type="hidden" name="id" value={row.id} />
-                        <button className="ghost" type="submit">
-                          Erneut versuchen
-                        </button>
+                        <Field label="Frage" htmlFor={`q-${row.id}`}>
+                          <input
+                            id={`q-${row.id}`}
+                            name="question"
+                            type="text"
+                            required
+                            minLength={3}
+                            maxLength={500}
+                            defaultValue={row.question ?? ''}
+                          />
+                        </Field>
+                        <Field label="Antwort" htmlFor={`a-${row.id}`}>
+                          <textarea
+                            id={`a-${row.id}`}
+                            name="answer"
+                            rows={4}
+                            required
+                            minLength={3}
+                            maxLength={4000}
+                            defaultValue={row.answer ?? ''}
+                          />
+                        </Field>
                       </form>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {/* every proposal has the same pair of actions — none of them is
+                          THE primary action of the page */}
+                      <div className="row">
+                        <Button type="submit" form={`approve-${row.id}`}>
+                          In Wissensdatenbank übernehmen
+                        </Button>
+                        <form action={rejectLearnedAnswer}>
+                          <input type="hidden" name="org" value={orgId} />
+                          <input type="hidden" name="id" value={row.id} />
+                          <Button type="submit" variant="ghost">
+                            Ablehnen
+                          </Button>
+                        </form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            {recent.length > 0 ? (
+              <Section title="Zuletzt entschieden">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Frage</th>
+                        <th>Status</th>
+                        <th>Herkunft</th>
+                        <th aria-label="Aktionen" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recent.map((row) => (
+                        <tr key={row.id}>
+                          <td className="kb-break">{row.question ?? '—'}</td>
+                          <td>
+                            {row.status === 'approved' ? (
+                              <Badge tone="success" dot>
+                                Freigegeben
+                              </Badge>
+                            ) : (
+                              <Badge tone="danger" dot>
+                                Fehler
+                              </Badge>
+                            )}
+                          </td>
+                          <td className="muted">{originLabels[row.origin]}</td>
+                          <td className="cell-actions">
+                            {row.status === 'error' ? (
+                              <form action={retryLearnedCandidate}>
+                                <input type="hidden" name="org" value={orgId} />
+                                <input type="hidden" name="id" value={row.id} />
+                                <Button type="submit" size="sm">
+                                  Erneut versuchen
+                                </Button>
+                              </form>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Section>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

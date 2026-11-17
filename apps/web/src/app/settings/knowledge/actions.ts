@@ -16,6 +16,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { publicSupabaseEnv } from '@/lib/env';
 import { getMemberAccess, requireAreaEdit } from '@/lib/access';
+import { href } from '@/lib/href';
 
 const KB_BUCKET = 'kb-files';
 const MAX_TEXT_LENGTH = 100_000;
@@ -33,11 +34,38 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function knowledgeUrl(org: string, message?: { error?: string; notice?: string }): string {
-  const params = new URLSearchParams({ org });
-  if (message?.error) params.set('error', message.error);
-  if (message?.notice) params.set('notice', message.notice);
-  return `/settings/knowledge?${params.toString()}`;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where an action sends the user back to. Since the redesign every knowledge
+ * base has its own page (/settings/knowledge/[kbId]) and forms live in drawers:
+ * - `kb`: back to that knowledge base instead of the list (only a UUID may
+ *   become a path segment; anything else falls back to the list)
+ * - `panel` (+ `type`): re-open the drawer the form was posted from, so a
+ *   validation error keeps it open
+ * - `tab`: the tab of the knowledge-base page
+ */
+type KnowledgeTarget = { kb?: string; tab?: string; panel?: string; type?: string };
+
+function knowledgeUrl(
+  org: string,
+  message?: { error?: string; notice?: string },
+  target: KnowledgeTarget = {}
+): string {
+  const kb = target.kb && UUID_PATTERN.test(target.kb) ? target.kb : null;
+  return href(kb ? `/settings/knowledge/${kb}` : '/settings/knowledge', {
+    org,
+    tab: target.tab,
+    panel: target.panel,
+    type: target.panel ? target.type : undefined,
+    error: message?.error,
+    notice: message?.notice,
+  });
+}
+
+/** The list and every page below it (knowledge base, source). */
+function revalidateKnowledge(): void {
+  revalidatePath('/settings/knowledge', 'layout');
 }
 
 /**
@@ -78,6 +106,8 @@ const addUrlSchema = z.object({
 
 export async function addUrlSource(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // errors re-open the "Quelle hinzufügen" drawer on the knowledge base's page
+  const drawer = { kb: textField(formData.get('knowledgeBaseId')), panel: 'source', type: 'url' };
   const parsed = addUrlSchema.safeParse({
     org: formData.get('org'),
     knowledgeBaseId: formData.get('knowledgeBaseId'),
@@ -85,15 +115,17 @@ export async function addUrlSource(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Bitte eine gültige URL (http/https) angeben.',
-      })
+      knowledgeUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte eine gültige URL (http/https) angeben.' },
+        drawer
+      )
     );
   }
   const { org, knowledgeBaseId, url } = parsed.data;
   // reject non-web schemes (javascript:, data:, file: …) before we ever crawl it
   if (!/^https?:\/\//i.test(url)) {
-    redirect(knowledgeUrl(org, { error: 'Bitte eine gültige URL (http/https) angeben.' }));
+    redirect(knowledgeUrl(org, { error: 'Bitte eine gültige URL (http/https) angeben.' }, drawer));
   }
 
   const supabase = await createSupabaseServerClient();
@@ -102,12 +134,16 @@ export async function addUrlSource(formData: FormData): Promise<void> {
     .from('kb_sources')
     .insert({ org_id: org, knowledge_base_id: knowledgeBaseId, type: 'url', uri: url, status: 'pending' });
   if (error) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }, drawer));
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   redirect(
-    knowledgeUrl(org, { notice: 'URL-Quelle angelegt — die Indizierung startet in Kürze.' })
+    knowledgeUrl(
+      org,
+      { notice: 'URL-Quelle angelegt — die Indizierung startet in Kürze.' },
+      { kb: knowledgeBaseId }
+    )
   );
 }
 
@@ -127,6 +163,8 @@ const addTextSchema = z.object({
  */
 export async function addTextSource(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // errors re-open the "Quelle hinzufügen" drawer on the knowledge base's page
+  const drawer = { kb: textField(formData.get('knowledgeBaseId')), panel: 'source', type: 'text' };
   const rawText = formData.get('text');
   const parsed = addTextSchema.safeParse({
     org: formData.get('org'),
@@ -136,16 +174,18 @@ export async function addTextSource(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Bitte einen Titel und einen Text (max. 100.000 Zeichen) angeben.',
-      })
+      knowledgeUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte einen Titel und einen Text (max. 100.000 Zeichen) angeben.' },
+        drawer
+      )
     );
   }
   const { org, knowledgeBaseId, title, text } = parsed.data;
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
-    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
+    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }, drawer));
   }
 
   const supabase = await createSupabaseServerClient();
@@ -161,7 +201,7 @@ export async function addTextSource(formData: FormData): Promise<void> {
     .select('id')
     .single();
   if (error || !inserted) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }, drawer));
   }
   const sourceId = (inserted as { id: string }).id;
 
@@ -175,7 +215,7 @@ export async function addTextSource(formData: FormData): Promise<void> {
   if (uploadError) {
     // roll back the orphaned row so it is not stuck 'pending' with no content
     await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
-    redirect(knowledgeUrl(org, { error: 'Text konnte nicht gespeichert werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Text konnte nicht gespeichert werden.' }, drawer));
   }
 
   // TOCTOU vs deleteKnowledgeBase: if the base (and via cascade this row) was
@@ -188,12 +228,16 @@ export async function addTextSource(formData: FormData): Promise<void> {
     .maybeSingle();
   if (!stillThere) {
     await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/text.txt`]);
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }, drawer));
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   redirect(
-    knowledgeUrl(org, { notice: 'Text-Quelle angelegt — die Indizierung startet in Kürze.' })
+    knowledgeUrl(
+      org,
+      { notice: 'Text-Quelle angelegt — die Indizierung startet in Kürze.' },
+      { kb: knowledgeBaseId }
+    )
   );
 }
 
@@ -215,41 +259,49 @@ const addQaCsvSchema = z.object({
  */
 export async function addQaCsvSource(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // errors re-open the "Quelle hinzufügen" drawer on the knowledge base's page
+  const drawer = { kb: textField(formData.get('knowledgeBaseId')), panel: 'source', type: 'qa' };
   const parsed = addQaCsvSchema.safeParse({
     org: formData.get('org'),
     knowledgeBaseId: formData.get('knowledgeBaseId'),
   });
   if (!parsed.success) {
-    redirect(knowledgeUrl(textField(formData.get('org')), { error: 'Ungültige Anfrage.' }));
+    redirect(
+      knowledgeUrl(textField(formData.get('org')), { error: 'Ungültige Anfrage.' }, drawer)
+    );
   }
   const { org, knowledgeBaseId } = parsed.data;
 
   const file = formData.get('file');
   if (!(file instanceof File) || file.size === 0) {
-    redirect(knowledgeUrl(org, { error: 'Bitte eine CSV-Datei auswählen.' }));
+    redirect(knowledgeUrl(org, { error: 'Bitte eine CSV-Datei auswählen.' }, drawer));
   }
   if (file.size > MAX_QA_CSV_BYTES) {
-    redirect(knowledgeUrl(org, { error: 'CSV-Datei zu groß (max. 800 KB).' }));
+    redirect(knowledgeUrl(org, { error: 'CSV-Datei zu groß (max. 800 KB).' }, drawer));
   }
   const filename = sanitizeFilename(file.name);
   if (fileExtension(filename) !== 'csv') {
-    redirect(knowledgeUrl(org, { error: 'Bitte eine .csv-Datei auswählen.' }));
+    redirect(knowledgeUrl(org, { error: 'Bitte eine .csv-Datei auswählen.' }, drawer));
   }
 
   const csvText = await file.text();
   const { pairs, skipped } = parseQaCsv(csvText);
   if (pairs.length === 0) {
     redirect(
-      knowledgeUrl(org, {
-        error:
-          'Keine Frage-Antwort-Paare gefunden. Erwartetes Format: zwei Spalten „Frage;Antwort" (Semikolon oder Komma), optional mit Kopfzeile.',
-      })
+      knowledgeUrl(
+        org,
+        {
+          error:
+            'Keine Frage-Antwort-Paare gefunden. Erwartetes Format: zwei Spalten „Frage;Antwort" (Semikolon oder Komma), optional mit Kopfzeile.',
+        },
+        drawer
+      )
     );
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
-    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
+    redirect(knowledgeUrl(org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }, drawer));
   }
 
   const supabase = await createSupabaseServerClient();
@@ -265,7 +317,7 @@ export async function addQaCsvSource(formData: FormData): Promise<void> {
     .select('id')
     .single();
   if (error || !inserted) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }, drawer));
   }
   const sourceId = (inserted as { id: string }).id;
 
@@ -278,7 +330,7 @@ export async function addQaCsvSource(formData: FormData): Promise<void> {
   if (uploadError) {
     // roll back the orphaned row so it is not stuck 'pending' with no content
     await supabase.from('kb_sources').delete().eq('org_id', org).eq('id', sourceId);
-    redirect(knowledgeUrl(org, { error: 'CSV konnte nicht gespeichert werden.' }));
+    redirect(knowledgeUrl(org, { error: 'CSV konnte nicht gespeichert werden.' }, drawer));
   }
 
   // TOCTOU vs deleteKnowledgeBase: if the base (and via cascade this row) was
@@ -291,16 +343,20 @@ export async function addQaCsvSource(formData: FormData): Promise<void> {
     .maybeSingle();
   if (!stillThere) {
     await admin.storage.from(KB_BUCKET).remove([`${org}/${sourceId}/${filename}`]);
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht angelegt werden.' }, drawer));
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   const skippedSuffix =
     skipped > 0 ? ` (${skipped} ${skipped === 1 ? 'Zeile' : 'Zeilen'} übersprungen)` : '';
   redirect(
-    knowledgeUrl(org, {
-      notice: `${pairs.length} Frage-Antwort-Paare erkannt${skippedSuffix} — die Indizierung startet in Kürze.`,
-    })
+    knowledgeUrl(
+      org,
+      {
+        notice: `${pairs.length} Frage-Antwort-Paare erkannt${skippedSuffix} — die Indizierung startet in Kürze.`,
+      },
+      { kb: knowledgeBaseId }
+    )
   );
 }
 
@@ -414,9 +470,17 @@ export async function finalizeKbUploads(
   uploads: { path: string; filename: string }[]
 ): Promise<void> {
   await requireAreaEdit(org, 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // errors re-open the "Quelle hinzufügen" drawer on the knowledge base's page
+  const drawer = {
+    kb: typeof knowledgeBaseId === 'string' ? knowledgeBaseId : '',
+    panel: 'source',
+    type: 'file',
+  };
   const parsed = finalizeUploadsSchema.safeParse({ org, knowledgeBaseId, uploads });
   if (!parsed.success) {
-    redirect(knowledgeUrl(typeof org === 'string' ? org : '', { error: 'Upload fehlgeschlagen.' }));
+    redirect(
+      knowledgeUrl(typeof org === 'string' ? org : '', { error: 'Upload fehlgeschlagen.' }, drawer)
+    );
   }
 
   // Membership gate BEFORE any service-role storage op (§7).
@@ -428,12 +492,20 @@ export async function finalizeKbUploads(
     .eq('id', parsed.data.knowledgeBaseId)
     .maybeSingle();
   if (!kbRow) {
-    redirect(knowledgeUrl(parsed.data.org, { error: 'Wissensdatenbank wurde nicht gefunden.' }));
+    redirect(
+      knowledgeUrl(parsed.data.org, { error: 'Wissensdatenbank wurde nicht gefunden.' }, drawer)
+    );
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
-    redirect(knowledgeUrl(parsed.data.org, { error: 'Speicher ist serverseitig nicht konfiguriert.' }));
+    redirect(
+      knowledgeUrl(
+        parsed.data.org,
+        { error: 'Speicher ist serverseitig nicht konfiguriert.' },
+        drawer
+      )
+    );
   }
 
   // Temp paths must belong to THIS org's upload area — a forged path may not
@@ -475,16 +547,20 @@ export async function finalizeKbUploads(
     ok += 1;
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   if (ok === 0) {
-    redirect(knowledgeUrl(parsed.data.org, { error: 'Keine Datei konnte hochgeladen werden.' }));
+    redirect(
+      knowledgeUrl(parsed.data.org, { error: 'Keine Datei konnte hochgeladen werden.' }, drawer)
+    );
   }
   const noticeCount = ok === 1 ? 'Datei hochgeladen' : `${ok} Dateien hochgeladen`;
   const suffix = failures.length > 0 ? ` (${failures.length} fehlgeschlagen)` : '';
   redirect(
-    knowledgeUrl(parsed.data.org, {
-      notice: `${noticeCount}${suffix} — die Indizierung startet in Kürze.`,
-    })
+    knowledgeUrl(
+      parsed.data.org,
+      { notice: `${noticeCount}${suffix} — die Indizierung startet in Kürze.` },
+      { kb: parsed.data.knowledgeBaseId }
+    )
   );
 }
 
@@ -506,9 +582,12 @@ export async function createKnowledgeBase(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Bitte einen Namen (2–80 Zeichen) angeben.',
-      })
+      knowledgeUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte einen Namen (2–80 Zeichen) angeben.' },
+        // keep the "Neue Wissensdatenbank" drawer open
+        { panel: 'new' }
+      )
     );
   }
   const { org, name, description } = parsed.data;
@@ -520,10 +599,12 @@ export async function createKnowledgeBase(formData: FormData): Promise<void> {
     description: description === '' ? null : description,
   });
   if (error) {
-    redirect(knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht angelegt werden.' }));
+    redirect(
+      knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht angelegt werden.' }, { panel: 'new' })
+    );
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   redirect(knowledgeUrl(org, { notice: `Wissensdatenbank „${name}" angelegt.` }));
 }
 
@@ -541,6 +622,8 @@ const deleteKbSchema = z.object({
  */
 export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // errors return to the "Einstellungen" tab of the knowledge base (where the form lives)
+  const settingsTab = { kb: textField(formData.get('id')), tab: 'settings' };
   const parsed = deleteKbSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
@@ -548,9 +631,11 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Bitte zur Bestätigung dein aktuelles Passwort eingeben.',
-      })
+      knowledgeUrl(
+        textField(formData.get('org')),
+        { error: 'Bitte zur Bestätigung dein aktuelles Passwort eingeben.' },
+        settingsTab
+      )
     );
   }
   const { org, id, password } = parsed.data;
@@ -563,7 +648,7 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user?.email || !(await verifyCurrentPassword(user.email, password))) {
-    redirect(knowledgeUrl(org, { error: 'Falsches Passwort — Löschung abgebrochen.' }));
+    redirect(knowledgeUrl(org, { error: 'Falsches Passwort — Löschung abgebrochen.' }, settingsTab));
   }
 
   // Collect the source ids BEFORE the cascade removes them (user-scoped: RLS
@@ -582,7 +667,7 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
     .eq('id', id)
     .select('id');
   if (error || !deleted || deleted.length === 0) {
-    redirect(knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht gelöscht werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Wissensdatenbank konnte nicht gelöscht werden.' }, settingsTab));
   }
 
   // Membership proven → best-effort cleanup of stored files per source.
@@ -598,7 +683,7 @@ export async function deleteKnowledgeBase(formData: FormData): Promise<void> {
     }
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   revalidatePath('/settings/agents');
   redirect(knowledgeUrl(org, { notice: 'Wissensdatenbank samt Quellen gelöscht.' }));
 }
@@ -623,22 +708,26 @@ const setShareableSchema = z.object({
  */
 export async function setSourceShareable(formData: FormData): Promise<void> {
   const orgRaw = textField(formData.get('org'));
+  // optional: the knowledge base the source belongs to — the redirect returns there
+  const back = { kb: textField(formData.get('kb')) };
   const parsed = setShareableSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
     shareable: formData.get('shareable'),
   });
   if (!parsed.success) {
-    redirect(knowledgeUrl(orgRaw, { error: 'Freigabe konnte nicht geändert werden.' }));
+    redirect(knowledgeUrl(orgRaw, { error: 'Freigabe konnte nicht geändert werden.' }, back));
   }
   const { org, id, shareable } = parsed.data;
 
   const access = await getMemberAccess(org);
   if (!access || !isAdminRole(access.role)) {
     redirect(
-      knowledgeUrl(org, {
-        error: 'Nur Inhaber und Admins dürfen Dateien zum Versand freigeben.',
-      })
+      knowledgeUrl(
+        org,
+        { error: 'Nur Inhaber und Admins dürfen Dateien zum Versand freigeben.' },
+        back
+      )
     );
   }
 
@@ -653,18 +742,22 @@ export async function setSourceShareable(formData: FormData): Promise<void> {
     .eq('type', 'file')
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(knowledgeUrl(org, { error: 'Freigabe konnte nicht geändert werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Freigabe konnte nicht geändert werden.' }, back));
   }
 
-  revalidatePath('/settings/knowledge');
+  revalidateKnowledge();
   revalidatePath(`/settings/knowledge/source/${id}`);
   redirect(
-    knowledgeUrl(org, {
-      notice:
-        shareable === 'on'
-          ? 'Datei ist freigegeben — der Bot darf sie an Kunden senden.'
-          : 'Freigabe entzogen — die Datei wird nicht mehr versendet.',
-    })
+    knowledgeUrl(
+      org,
+      {
+        notice:
+          shareable === 'on'
+            ? 'Datei ist freigegeben — der Bot darf sie an Kunden senden.'
+            : 'Freigabe entzogen — die Datei wird nicht mehr versendet.',
+      },
+      back
+    )
   );
 }
 
@@ -674,15 +767,15 @@ const rowActionSchema = z.object({ org: z.uuid(), id: z.uuid() });
 
 export async function reindexSource(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // optional: the knowledge base the source belongs to — the redirect returns there
+  const back = { kb: textField(formData.get('kb')) };
   const parsed = rowActionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Quelle konnte nicht neu indiziert werden.',
-      })
+      knowledgeUrl(textField(formData.get('org')), { error: 'Quelle konnte nicht neu indiziert werden.' }, back)
     );
   }
   const { org, id } = parsed.data;
@@ -695,24 +788,24 @@ export async function reindexSource(formData: FormData): Promise<void> {
     .eq('id', id)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht neu indiziert werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht neu indiziert werden.' }, back));
   }
 
-  revalidatePath('/settings/knowledge');
-  redirect(knowledgeUrl(org, { notice: 'Neuindizierung gestartet.' }));
+  revalidateKnowledge();
+  redirect(knowledgeUrl(org, { notice: 'Neuindizierung gestartet.' }, back));
 }
 
 export async function deleteSource(formData: FormData): Promise<void> {
   await requireAreaEdit(formData.get('org'), 'knowledge', (o) => knowledgeUrl(o, { error: 'Keine Berechtigung für diesen Bereich.' }));
+  // optional: the knowledge base the source belongs to — the redirect returns there
+  const back = { kb: textField(formData.get('kb')) };
   const parsed = rowActionSchema.safeParse({
     org: formData.get('org'),
     id: formData.get('id'),
   });
   if (!parsed.success) {
     redirect(
-      knowledgeUrl(textField(formData.get('org')), {
-        error: 'Quelle konnte nicht gelöscht werden.',
-      })
+      knowledgeUrl(textField(formData.get('org')), { error: 'Quelle konnte nicht gelöscht werden.' }, back)
     );
   }
   const { org, id } = parsed.data;
@@ -730,7 +823,7 @@ export async function deleteSource(formData: FormData): Promise<void> {
     .eq('id', id)
     .select('id');
   if (error || !deleted || deleted.length === 0) {
-    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht gelöscht werden.' }));
+    redirect(knowledgeUrl(org, { error: 'Quelle konnte nicht gelöscht werden.' }, back));
   }
 
   // Membership proven → clean up stored files + any residual chunks (best effort).
@@ -745,6 +838,6 @@ export async function deleteSource(formData: FormData): Promise<void> {
     }
   }
 
-  revalidatePath('/settings/knowledge');
-  redirect(knowledgeUrl(org, { notice: 'Quelle gelöscht.' }));
+  revalidateKnowledge();
+  redirect(knowledgeUrl(org, { notice: 'Quelle gelöscht.' }, back));
 }
