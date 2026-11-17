@@ -1,3 +1,8 @@
-/* Kanäle — page-specific styles (redesign stages 4-7).
+/* Kanäle — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx). */
+
+/* agent select inside a setting row: wide enough for agent names, never huge */
+.chan-agent-select {
+  max-width: 14rem;
+}

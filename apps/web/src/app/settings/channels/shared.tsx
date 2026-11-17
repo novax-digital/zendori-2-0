@@ -4,6 +4,7 @@
 import type { AgentKind, AgentMode, Channel } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
+import Button from '@/components/ui/Button';
 import { setChannelActive, setChannelAgent } from './actions';
 
 export type AgentOption = {
@@ -306,13 +307,15 @@ export function ActiveToggle({
       <input type="hidden" name="channelId" value={channelId} />
       <input type="hidden" name="active" value={isActive ? 'false' : 'true'} />
       {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
+      {/* a switch that is a submit button: one click posts the opposite state */}
       <button
         type="submit"
-        className={`chan-toggle ${isActive ? 'chan-toggle--active' : 'chan-toggle--inactive'}`}
-        title={isActive ? 'Klicken zum Deaktivieren' : 'Klicken zum Aktivieren'}
-      >
-        {isActive ? 'Aktiv' : 'Inaktiv'}
-      </button>
+        role="switch"
+        aria-checked={isActive}
+        aria-label="Kanal aktiv"
+        className="switch-btn"
+        title={isActive ? 'Aktiv — klicken zum Deaktivieren' : 'Inaktiv — klicken zum Aktivieren'}
+      />
     </form>
   );
 }
@@ -330,6 +333,7 @@ export function AgentSelect({
   agents,
   disabled,
   returnTo,
+  selectId,
 }: {
   orgId: string;
   channelId: string;
@@ -340,25 +344,25 @@ export function AgentSelect({
   disabled: boolean;
   /** Detail-page path to return to (validated in the action). */
   returnTo?: string;
+  /** id of the <select>, so a surrounding SettingRow label can point at it. */
+  selectId?: string;
 }) {
   const requiredKind: AgentKind = channelType === 'voice' ? 'voice' : 'text';
   const eligible = agents.filter((a) => a.kind === requiredKind);
   return (
-    <form
-      action={setChannelAgent}
-      style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.5rem' }}
-    >
+    <form action={setChannelAgent} className="row">
       <input type="hidden" name="org" value={orgId} />
       <input type="hidden" name="channelId" value={channelId} />
       {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
       <select
+        id={selectId}
         name="agentId"
         defaultValue={agentId ?? ''}
-        aria-label="Agent"
+        aria-label={selectId ? undefined : 'Agent'}
         disabled={disabled}
-        style={{ maxWidth: '18rem' }}
+        className="chan-agent-select"
       >
-        <option value="">— kein Agent (keine KI-Antworten) —</option>
+        <option value="">Kein Agent (keine KI-Antworten)</option>
         {eligible.map((agent) => (
           <option key={agent.id} value={agent.id}>
             {agent.name}
@@ -366,11 +370,7 @@ export function AgentSelect({
           </option>
         ))}
       </select>
-      {disabled ? null : (
-        <button className="ghost" type="submit">
-          Agent zuweisen
-        </button>
-      )}
+      {disabled ? null : <Button type="submit">Agent zuweisen</Button>}
     </form>
   );
 }

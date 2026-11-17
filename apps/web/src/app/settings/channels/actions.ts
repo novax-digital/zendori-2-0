@@ -28,17 +28,45 @@ function channelsUrl(
   if (message?.notice) params.set('notice', message.notice);
   // two-level layout (2026-07-24): actions invoked from a channel detail page
   // return there. Strictly validated same-section path — never an open redirect.
-  const base =
-    returnTo && /^\/settings\/channels\/[0-9a-f-]{36}$/.test(returnTo)
-      ? returnTo
-      : '/settings/channels';
+  // Redesign: the detail page has page tabs (?tab=…); returnToOf() appends the
+  // tab the form was on, so a save lands on the same tab again.
+  let base = '/settings/channels';
+  if (returnTo) {
+    const [path, query] = returnTo.split('?');
+    if (path && /^\/settings\/channels\/[0-9a-f-]{36}$/.test(path)) {
+      base = path;
+      const tab = new URLSearchParams(query ?? '').get('tab');
+      if (tab && /^[a-z]{1,16}$/.test(tab)) params.set('tab', tab);
+    }
+  }
   return `${base}?${params.toString()}`;
 }
 
-/** Reads the optional detail-page return target from the form. */
+/** Reads the optional detail-page return target (plus its page tab) from the form. */
 function returnToOf(formData: FormData): string | null {
   const value = formData.get('returnTo');
-  return typeof value === 'string' ? value : null;
+  if (typeof value !== 'string') return null;
+  const tab = formData.get('tab');
+  return typeof tab === 'string' && tab !== '' ? `${value}?tab=${tab}` : value;
+}
+
+/** Channel types offered in the "Neuer Kanal" drawer of the list page. */
+const DRAWER_TYPES = new Set(['email', 'form', 'webform', 'chat', 'whatsapp', 'voice', 'test']);
+
+/**
+ * Error target of the create actions. The create forms live in the "Neuer
+ * Kanal" drawer (?panel=new&type=…) and send their type as `drawerType`; an
+ * error returns into that drawer so the user can correct and resubmit. Without
+ * a (valid) drawerType this is the plain list URL, as before.
+ */
+function createErrorUrl(formData: FormData, org: string, error: string): string {
+  const params = new URLSearchParams({ org, error });
+  const type = textField(formData.get('drawerType'));
+  if (DRAWER_TYPES.has(type)) {
+    params.set('panel', 'new');
+    params.set('type', type);
+  }
+  return `/settings/channels?${params.toString()}`;
 }
 
 // --- create widget channel -----------------------------------------------------
@@ -55,16 +83,18 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      channelsUrl(textField(formData.get('org')), {
-        error: 'Bitte einen Namen mit 2–80 Zeichen angeben.',
-      })
+      createErrorUrl(
+        formData,
+        textField(formData.get('org')),
+        'Bitte einen Namen mit 2–80 Zeichen angeben.'
+      )
     );
   }
   const { org, name } = parsed.data;
 
   // Quota pre-check (0017; the DB trigger is the race-safe backstop).
   const quotaError = await checkChannelQuota(org, 'chat');
-  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
+  if (quotaError) redirect(createErrorUrl(formData, org, quotaError));
 
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.from('channels').insert({
@@ -80,7 +110,7 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
     },
   });
   if (error) {
-    redirect(channelsUrl(org, { error: 'Widget-Channel konnte nicht angelegt werden.' }));
+    redirect(createErrorUrl(formData, org, 'Widget-Channel konnte nicht angelegt werden.'));
   }
 
   revalidatePath('/settings/channels');
@@ -169,16 +199,18 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     redirect(
-      channelsUrl(textField(formData.get('org')), {
-        error: 'Bitte einen Namen (2–120 Zeichen) und ein Kürzel (z. B. „kf") angeben.',
-      })
+      createErrorUrl(
+        formData,
+        textField(formData.get('org')),
+        'Bitte einen Namen (2–120 Zeichen) und ein Kürzel (z. B. „kf") angeben.'
+      )
     );
   }
   const { org, name, slugPart, purpose } = parsed.data;
 
   // Quota pre-check: 'form' and 'email' (forwarded) count separately (0017).
   const quotaError = await checkChannelQuota(org, purpose === 'form' ? 'form' : 'email');
-  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
+  if (quotaError) redirect(createErrorUrl(formData, org, quotaError));
 
   const supabase = await createSupabaseServerClient();
 
@@ -190,7 +222,7 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
     .maybeSingle();
   const slug = (orgRow as { slug: string } | null)?.slug;
   if (!slug) {
-    redirect(channelsUrl(org, { error: 'Organisation wurde nicht gefunden.' }));
+    redirect(createErrorUrl(formData, org, 'Organisation wurde nicht gefunden.'));
   }
 
   const address = generateIntakeAddress(slug, slugPart);
@@ -202,7 +234,7 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
     purpose,
   });
   if (!config.success) {
-    redirect(channelsUrl(org, { error: 'Intake-Adresse konnte nicht angelegt werden.' }));
+    redirect(createErrorUrl(formData, org, 'Intake-Adresse konnte nicht angelegt werden.'));
   }
   const { error } = await supabase.from('channels').insert({
     org_id: org,
@@ -212,7 +244,7 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
     config: config.data,
   });
   if (error) {
-    redirect(channelsUrl(org, { error: 'Intake-Adresse konnte nicht angelegt werden.' }));
+    redirect(createErrorUrl(formData, org, 'Intake-Adresse konnte nicht angelegt werden.'));
   }
 
   revalidatePath('/settings/channels');
@@ -508,20 +540,21 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
   });
   if (!parsed.success) {
     redirect(
-      channelsUrl(textField(formData.get('org')), {
-        error:
-          'Bitte Nummer (+49…), Account SID (AC…), Auth Token und optional Messaging Service SID (MG…) angeben.',
-      })
+      createErrorUrl(
+        formData,
+        textField(formData.get('org')),
+        'Bitte Nummer (+49…), Account SID (AC…), Auth Token und optional Messaging Service SID (MG…) angeben.'
+      )
     );
   }
   const { org, name, sender, accountSid, authToken, messagingServiceSid } = parsed.data;
 
   const quotaError = await checkChannelQuota(org, 'whatsapp');
-  if (quotaError) redirect(channelsUrl(org, { error: quotaError }));
+  if (quotaError) redirect(createErrorUrl(formData, org, quotaError));
 
   const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   if (!masterKey) {
-    redirect(channelsUrl(org, { error: 'Verschlüsselung ist serverseitig nicht konfiguriert.' }));
+    redirect(createErrorUrl(formData, org, 'Verschlüsselung ist serverseitig nicht konfiguriert.'));
   }
   const authTokenEncrypted = await encryptSecret(authToken, masterKey);
 
@@ -536,7 +569,7 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
     conversationSplitHours: 72,
   });
   if (!config.success) {
-    redirect(channelsUrl(org, { error: 'WhatsApp-Kanal konnte nicht angelegt werden.' }));
+    redirect(createErrorUrl(formData, org, 'WhatsApp-Kanal konnte nicht angelegt werden.'));
   }
 
   const supabase = await createSupabaseServerClient();
@@ -554,7 +587,7 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
       error.code === '23505'
         ? 'Diese Nummer ist bereits als WhatsApp-Kanal verbunden.'
         : 'WhatsApp-Kanal konnte nicht angelegt werden.';
-    redirect(channelsUrl(org, { error: message }));
+    redirect(createErrorUrl(formData, org, message));
   }
 
   revalidatePath('/settings/channels');

@@ -1,7 +1,9 @@
-// Channel DETAIL page (two-level layout, owner 2026-07-24): everything about
-// ONE channel — status toggle, agent assignment and the flavor-specific
-// settings (voice tuning, widget theme + embed, WhatsApp split, intake
-// address). Actions return here via the validated returnTo field.
+// Channel DETAIL page (redesign, page type C — docs/design-redesign.md §5/§7):
+// everything about ONE channel in sections — agent + status, name and the
+// flavor-specific settings (voice tuning, widget theme + embed, WhatsApp
+// webhook, intake address). Chat and voice channels have more than three
+// sections and therefore page tabs (?tab=…). Actions return here via the
+// validated returnTo field (plus the tab the form was on).
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -10,10 +12,18 @@ import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@ze
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
+import { href } from '@/lib/href';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import VoicePicker from '@/components/VoicePicker';
 import GreetingSuggestion from '@/components/GreetingSuggestion';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import { Field, SettingRow } from '@/components/ui/Field';
+import { CodeBlock, Section, Tabs } from '@/components/ui/Layout';
+import Menu from '@/components/ui/Menu';
+import PageHeader from '@/components/ui/PageHeader';
 import {
   deleteChannel,
   updateConversationSplit,
@@ -21,7 +31,6 @@ import {
   updateVoiceChannelSettings,
   updateWidgetTheme,
 } from '../actions';
-import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import {
   ActiveToggle,
   AgentSelect,
@@ -39,15 +48,30 @@ import {
 
 const SPLIT_PRESETS = [24, 72, 168];
 
+/** ids of the two long forms; their submit button sits in the save bar below. */
+const VOICE_FORM_ID = 'voice-settings';
+const THEME_FORM_ID = 'widget-theme';
+
+type TabKey = 'general' | 'design' | 'embed' | 'voice';
+const CHAT_TABS: { key: TabKey; label: string }[] = [
+  { key: 'general', label: 'Allgemein' },
+  { key: 'design', label: 'Design' },
+  { key: 'embed', label: 'Einbetten' },
+];
+const VOICE_TABS: { key: TabKey; label: string }[] = [
+  { key: 'general', label: 'Allgemein' },
+  { key: 'voice', label: 'Sprachassistent' },
+];
+
 export default async function ChannelDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ channelId: string }>;
-  searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ org?: string; error?: string; notice?: string; tab?: string }>;
 }) {
   const { channelId } = await params;
-  const { org, error, notice } = await searchParams;
+  const { org, error, notice, tab } = await searchParams;
   const { orgId, orgs, role, access } = await requireActiveOrg(org);
   if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Kanäle" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
@@ -79,172 +103,252 @@ export default async function ChannelDetailPage({
   const hoursConfigured = hasConfiguredHours(businessHours);
 
   const base = appUrl().replace(/\/+$/, '');
+  const widget = flavor === 'chat' ? toWidgetChannelView(channel) : null;
+  const vc = flavor === 'voice' ? toVoiceChannelView(channel) : null;
 
-  const conversationSplitForm = (current: number | null): ReactNode => (
-    <form action={updateConversationSplit}>
+  // Page tabs only where there are more than three sections (chat, voice).
+  const tabs = widget ? CHAT_TABS : vc ? VOICE_TABS : null;
+  const activeTab: TabKey = tabs?.find((t) => t.key === tab)?.key ?? 'general';
+
+  /** Hidden fields of every form on this page: where to return to, on which tab. */
+  const formBase = (
+    <>
       <input type="hidden" name="org" value={orgId} />
       <input type="hidden" name="channelId" value={channel.id} />
       <input type="hidden" name="returnTo" value={returnTo} />
-      <label htmlFor="split-hours" className="field-label" style={{ marginBottom: 0 }}>
-        Neue Unterhaltung nach Inaktivität
-      </label>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.3rem' }}>
-        <select
-          id="split-hours"
-          name="splitHours"
-          defaultValue={current === null ? '' : String(current)}
-          disabled={!isOwner}
-          style={{ maxWidth: '18rem' }}
-        >
-          <option value="">Aus — nie trennen</option>
-          <option value="24">Nach 24 Stunden</option>
-          <option value="72">Nach 3 Tagen</option>
-          <option value="168">Nach 7 Tagen</option>
-          {current !== null && !SPLIT_PRESETS.includes(current) ? (
-            <option value={String(current)}>Nach {current} Stunden</option>
-          ) : null}
-        </select>
-        <button className="ghost" type="submit" disabled={!isOwner}>
-          Speichern
-        </button>
-      </div>
-      <p className="hint">
-        Schreibt der Kontakt nach dieser Zeit erneut, beginnt ein neues Ticket. Unterhaltungen, die
-        gerade auf euch warten, werden nie getrennt.
-      </p>
-    </form>
+      {activeTab === 'general' ? null : <input type="hidden" name="tab" value={activeTab} />}
+    </>
   );
 
-  // --- flavor-specific settings ------------------------------------------------
+  const conversationSplitSection = (current: number | null): ReactNode => (
+    <Section title="Unterhaltungen">
+      <form action={updateConversationSplit}>
+        {formBase}
+        <SettingRow
+          label="Neue Unterhaltung nach Inaktivität"
+          help="Schreibt der Kontakt nach dieser Zeit erneut, beginnt ein neues Ticket. Unterhaltungen, die gerade auf euch warten, werden nie getrennt."
+          htmlFor="split-hours"
+        >
+          <select
+            id="split-hours"
+            name="splitHours"
+            defaultValue={current === null ? '' : String(current)}
+            disabled={!isOwner}
+          >
+            <option value="">Aus — nie trennen</option>
+            <option value="24">Nach 24 Stunden</option>
+            <option value="72">Nach 3 Tagen</option>
+            <option value="168">Nach 7 Tagen</option>
+            {current !== null && !SPLIT_PRESETS.includes(current) ? (
+              <option value={String(current)}>Nach {current} Stunden</option>
+            ) : null}
+          </select>
+          <Button type="submit" disabled={!isOwner}>
+            Speichern
+          </Button>
+        </SettingRow>
+      </form>
+    </Section>
+  );
 
-  const sections: ReactNode[] = [];
+  // --- tab "Allgemein" (the whole page for channels without tabs) --------------
+
+  let flavorSections: ReactNode = null;
 
   if (flavor === 'form' || flavor === 'email') {
     const intake = toIntakeChannelView(channel);
-    sections.push(
-      <div className="panel" key="intake">
-        <h2>{flavor === 'form' ? 'Intake-Adresse' : 'Weiterleitungs-Adresse'}</h2>
-        <code className="invite-link">{intake?.address}</code>
-        <p className="hint" style={{ marginTop: '0.5rem' }}>
-          {flavor === 'form'
-            ? 'Diese Adresse als Empfänger (oder CC) im Kontaktformular der Website eintragen. Der echte Absender wird aus dem Formular-Inhalt extrahiert.'
-            : 'Im bestehenden Postfach eine Weiterleitung auf diese Adresse einrichten. Der echte Absender wird aus dem Weiterleitungs-Header übernommen.'}
-        </p>
-      </div>
+    flavorSections = (
+      <Section
+        title={flavor === 'form' ? 'Intake-Adresse' : 'Weiterleitungs-Adresse'}
+        help={
+          flavor === 'form'
+            ? 'Diese Adresse als Empfänger (oder CC) im Kontaktformular der Website eintragen. Der echte Absender wird aus dem Formular-Inhalt gelesen.'
+            : 'Im bestehenden Postfach eine Weiterleitung auf diese Adresse einrichten. Der echte Absender wird aus dem Weiterleitungs-Header übernommen.'
+        }
+      >
+        <CodeBlock>{intake?.address}</CodeBlock>
+      </Section>
     );
-  }
-
-  if (flavor === 'whatsapp') {
+  } else if (flavor === 'whatsapp') {
     const wa = toWhatsappChannelView(channel);
-    sections.push(
-      <div className="panel" key="wa">
-        <h2>WhatsApp-Einstellungen</h2>
-        <div style={{ marginBottom: '1rem' }}>
-          <span className="field-label">Webhook-URL (in Twilio eintragen)</span>
-          <code className="invite-link">{`${base}/api/hooks/whatsapp/twilio`}</code>
+    flavorSections = (
+      <>
+        <Section
+          title="Webhook-URL"
+          help="In der Twilio-Console bei der Nummer unter „A message comes in“ (POST) eintragen."
+        >
+          <CodeBlock>{`${base}/api/hooks/whatsapp/twilio`}</CodeBlock>
+        </Section>
+        {conversationSplitSection(wa?.splitHours ?? null)}
+      </>
+    );
+  } else if (widget) {
+    flavorSections = conversationSplitSection(widget.splitHours);
+  } else if (flavor === 'webform') {
+    // builder-form id for the "Im Builder bearbeiten" link
+    const { data: formRow } = await supabase
+      .from('forms')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('channel_id', channel.id)
+      .maybeSingle();
+    const formId = (formRow as { id?: string } | null)?.id;
+    flavorSections = (
+      <Section
+        title="Web-Formular"
+        help="Design, Felder, Einbetten-Code und Weiterleitungs-Empfänger bearbeitest du im Formular-Builder. Dort löschst du das Formular auch, samt diesem Kanal."
+      >
+        <div>
+          <Button
+            href={href(formId ? `/settings/forms/${formId}` : '/settings/forms', { org: orgId })}
+            variant="primary"
+          >
+            Im Builder bearbeiten
+          </Button>
         </div>
-        {conversationSplitForm(wa?.splitHours ?? null)}
-      </div>
+      </Section>
+    );
+  } else if (flavor === 'test') {
+    flavorSections = (
+      <Section
+        title="Test-Channel"
+        help="Nachrichten manuell einspeisen, um Inbox, KI und Zuweisung auszuprobieren."
+      >
+        <div>
+          <Button href={href('/test-channel', { org: orgId })}>Zum Test-Channel</Button>
+        </div>
+      </Section>
     );
   }
 
-  if (flavor === 'chat') {
-    const widget = toWidgetChannelView(channel);
-    if (widget) {
-      sections.push(
-        <div className="panel" key="widget">
-          <h2>Widget-Einstellungen</h2>
-          <form className="stack" action={updateWidgetTheme} style={{ maxWidth: '26rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={widget.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
-            <div>
-              <label htmlFor="widget-color">Farbe</label>
-              <input id="widget-color" name="color" type="color" defaultValue={widget.theme.color} />
-            </div>
-            <div>
-              <label htmlFor="widget-title">Titel</label>
-              <input
-                id="widget-title"
-                name="title"
-                type="text"
-                required
-                minLength={1}
-                maxLength={60}
-                defaultValue={widget.theme.title}
-              />
-            </div>
-            <div>
-              <label htmlFor="widget-greeting">Begrüßung</label>
-              <textarea
-                id="widget-greeting"
-                name="greeting"
-                rows={3}
-                required
-                maxLength={300}
-                defaultValue={widget.theme.greeting}
-              />
-            </div>
-            {isOwner ? (
-              <button className="primary" type="submit">
-                Theme speichern
-              </button>
-            ) : null}
-          </form>
-          <div style={{ marginTop: '1.25rem' }}>
-            <span className="field-label">Embed-Code</span>
-            <code className="invite-link">
-              {`<script src="${base}/widget.js" data-zendori-token="${widget.publicToken}" async></script>`}
-            </code>
-            <p className="hint">
-              Diesen Code auf der Website vor dem schließenden &lt;/body&gt;-Tag einfügen. Der
-              Token ist öffentlich — er identifiziert nur den Kanal und enthält keine Geheimnisse.
-            </p>
-            {/* former sidebar entry "Widget-Demo" */}
-            <p className="hint">
-              Ausprobieren: <Link href={`/widget-demo?org=${orgId}`}>Widget-Demo öffnen</Link>
-            </p>
-          </div>
-          <div style={{ marginTop: '1.25rem' }}>{conversationSplitForm(widget.splitHours)}</div>
+  const generalTab = (
+    <>
+      <Section title="Agent und Status">
+        <div>
+          <SettingRow
+            label="Agent"
+            help="Ohne zugewiesenen Agenten werden Nachrichten nur in der Inbox gesammelt, es gibt keine KI-Antworten."
+            htmlFor="channel-agent"
+          >
+            <AgentSelect
+              orgId={orgId}
+              channelId={channel.id}
+              channelType={channel.type}
+              agentId={channel.agent_id ?? null}
+              agents={agentOptions}
+              disabled={!isOwner}
+              returnTo={returnTo}
+              selectId="channel-agent"
+            />
+          </SettingRow>
+          <SettingRow label="Kanal aktiv">
+            <ActiveToggle
+              orgId={orgId}
+              channelId={channel.id}
+              isActive={channel.is_active}
+              returnTo={returnTo}
+            />
+          </SettingRow>
         </div>
-      );
-    }
-  }
+      </Section>
 
-  if (flavor === 'voice') {
-    const vc = toVoiceChannelView(channel);
-    if (vc) {
-      const assignedAgent = agentOptions.find((a) => a.id === vc.agentId) ?? null;
-      const greetingAgentMode: 'answer' | 'intake' | null = assignedAgent
-        ? assignedAgent.mode === 'autopilot'
-          ? 'answer'
-          : 'intake'
-        : null;
-      sections.push(
-        <div className="panel" key="voice">
-          <h2>Voice-Einstellungen</h2>
-          {/* 0018: honest transfer status at a glance */}
-          <p className="hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-            <span className={vc.transferNumber ? 'badge badge--success' : 'badge badge--warn'}>
-              {vc.transferNumber ? 'Live-Weiterleitung aktiv' : 'Nur Rückruf-Ticket'}
-            </span>
-            <span>
-              {vc.transferNumber
-                ? hoursConfigured
-                  ? `An ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
-                  : `An ${vc.transferNumber}, jederzeit — keine Geschäftszeiten gepflegt.`
-                : 'Ohne Transfer-Nummer werden Übergaben als Rückruf-Ticket aufgenommen.'}
-            </span>
-          </p>
-          <form className="stack" action={updateVoiceChannelSettings} style={{ maxWidth: '30rem' }}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={vc.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
-            {/* the action is owner-gated — read-only for members instead of a
-                data-losing rejection on submit */}
-            <fieldset disabled={!isOwner} style={{ border: 'none', padding: 0, margin: 0, display: 'contents' }}>
-              <div>
-                <label htmlFor="voice-greeting">Begrüßung (Welcome Message)</label>
+      <Section
+        title="Name"
+        help={`Nur eine Bezeichnung für dich. Die Zustellung läuft weiter über ${FLAVOR_ROUTING_HINT[flavor]}.`}
+      >
+        <form action={renameChannel}>
+          {formBase}
+          <Field label="Kanalname" htmlFor="channel-name">
+            <div className="row">
+              <input
+                id="channel-name"
+                className="grow"
+                type="text"
+                name="name"
+                defaultValue={channel.name}
+                required
+                minLength={2}
+                maxLength={120}
+              />
+              <Button type="submit">Namen speichern</Button>
+            </div>
+          </Field>
+        </form>
+      </Section>
+
+      {flavorSections}
+    </>
+  );
+
+  // --- tab "Design" / "Einbetten" (chat) ---------------------------------------
+
+  const designTab = widget ? (
+    <Section title="Widget-Design" help="So erscheint der Chat auf deiner Website.">
+      <form id={THEME_FORM_ID} className="stack" action={updateWidgetTheme}>
+        {formBase}
+        <Field label="Farbe" htmlFor="widget-color">
+          <input id="widget-color" name="color" type="color" defaultValue={widget.theme.color} />
+        </Field>
+        <Field label="Titel" htmlFor="widget-title">
+          <input
+            id="widget-title"
+            name="title"
+            type="text"
+            required
+            minLength={1}
+            maxLength={60}
+            defaultValue={widget.theme.title}
+          />
+        </Field>
+        <Field label="Begrüßung" htmlFor="widget-greeting">
+          <textarea
+            id="widget-greeting"
+            name="greeting"
+            rows={3}
+            required
+            maxLength={300}
+            defaultValue={widget.theme.greeting}
+          />
+        </Field>
+      </form>
+    </Section>
+  ) : null;
+
+  const embedTab = widget ? (
+    <Section
+      title="Embed-Code"
+      help="Auf der Website vor dem schließenden </body>-Tag einfügen. Der Token ist öffentlich: Er identifiziert nur den Kanal und enthält keine Geheimnisse."
+    >
+      <CodeBlock>
+        {`<script src="${base}/widget.js" data-zendori-token="${widget.publicToken}" async></script>`}
+      </CodeBlock>
+      {/* former sidebar entry "Widget-Demo" */}
+      <p className="muted small">
+        Ausprobieren:{' '}
+        <Link href={href('/widget-demo', { org: orgId })}>Widget-Demo öffnen</Link>
+      </p>
+    </Section>
+  ) : null;
+
+  // --- tab "Sprachassistent" (voice) -------------------------------------------
+
+  let voiceTab: ReactNode = null;
+  if (vc) {
+    const assignedAgent = agentOptions.find((a) => a.id === vc.agentId) ?? null;
+    const greetingAgentMode: 'answer' | 'intake' | null = assignedAgent
+      ? assignedAgent.mode === 'autopilot'
+        ? 'answer'
+        : 'intake'
+      : null;
+    voiceTab = (
+      <form id={VOICE_FORM_ID} action={updateVoiceChannelSettings}>
+        {formBase}
+        {/* the action is owner-gated — read-only for members instead of a
+            data-losing rejection on submit */}
+        <fieldset disabled={!isOwner} className="fieldset-plain fieldset-plain--contents">
+          <Section title="Ansagen">
+            <div className="stack">
+              <Field label="Begrüßung" htmlFor="voice-greeting">
                 <input
                   id="voice-greeting"
                   name="greeting"
@@ -258,22 +362,25 @@ export default async function ChannelDetailPage({
                   companyName={orgName}
                   agentMode={greetingAgentMode}
                 />
-                <label htmlFor="voice-greeting-int" className="check-row" style={{ marginTop: '0.5rem' }}>
-                  <input
-                    id="voice-greeting-int"
-                    name="greetingInterruptible"
-                    type="checkbox"
-                    defaultChecked={vc.greetingInterruptible}
-                  />
-                  Anrufer darf die Begrüßung unterbrechen
-                </label>
-                <p className="hint">
-                  Standard: aus — die Begrüßung wird immer vollständig gesprochen, auch wenn der
-                  Anrufer hineinredet.
-                </p>
-              </div>
-              <div>
-                <label htmlFor="voice-farewell">Verabschiedung (wird am Gesprächsende immer gesprochen)</label>
+              </Field>
+              <SettingRow
+                label="Anrufer darf die Begrüßung unterbrechen"
+                help="Standard: aus. Dann wird die Begrüßung immer vollständig gesprochen, auch wenn der Anrufer hineinredet."
+                htmlFor="voice-greeting-int"
+              >
+                <input
+                  id="voice-greeting-int"
+                  name="greetingInterruptible"
+                  type="checkbox"
+                  className="switch"
+                  defaultChecked={vc.greetingInterruptible}
+                />
+              </SettingRow>
+              <Field
+                label="Verabschiedung"
+                htmlFor="voice-farewell"
+                help="Der Assistent spricht diesen Satz garantiert, bevor aufgelegt wird. Kein Anruf endet abrupt."
+              >
                 <input
                   id="voice-farewell"
                   name="farewell"
@@ -282,17 +389,20 @@ export default async function ChannelDetailPage({
                   defaultValue={vc.farewell}
                   placeholder="Leer = „Vielen Dank für Ihren Anruf. Auf Wiederhören!“"
                 />
-                <p className="hint">
-                  Der Assistent spricht diesen Satz garantiert, bevor aufgelegt wird — kein Anruf
-                  endet abrupt.
-                </p>
-              </div>
-              <div>
-                <label htmlFor="voice-voice">Stimme</label>
+              </Field>
+            </div>
+          </Section>
+
+          <Section title="Stimme und Sprache">
+            <div className="stack">
+              <Field label="Stimme" htmlFor="voice-voice">
                 <VoicePicker id="voice-voice" name="voice" defaultVoice={vc.voice} />
-              </div>
-              <div>
-                <label htmlFor="voice-language">Sprache des Voice-Agents</label>
+              </Field>
+              <Field
+                label="Sprache des Voice-Agents"
+                htmlFor="voice-language"
+                help="Gesprächs- und Erkennungssprache. Spricht der Anrufer eine andere Sprache, wechselt der Assistent automatisch."
+              >
                 <select id="voice-language" name="languageHint" defaultValue={vc.languageHint}>
                   {VOICE_LANGUAGES.map((l) => (
                     <option key={l.code} value={l.code}>
@@ -300,15 +410,12 @@ export default async function ChannelDetailPage({
                     </option>
                   ))}
                 </select>
-                <p className="hint">
-                  Gesprächs- und Erkennungssprache. Spricht der Anrufer eine andere Sprache,
-                  wechselt der Assistent automatisch.
-                </p>
-              </div>
-              <div>
-                <label htmlFor="voice-keyterms">
-                  Fachbegriffe (kommagetrennt, verbessern die Erkennung)
-                </label>
+              </Field>
+              <Field
+                label="Fachbegriffe"
+                htmlFor="voice-keyterms"
+                help="Kommagetrennt. Sie verbessern die Erkennung."
+              >
                 <input
                   id="voice-keyterms"
                   name="keyterms"
@@ -317,9 +424,8 @@ export default async function ChannelDetailPage({
                   defaultValue={vc.keyterms}
                   placeholder="z. B. Produktnamen, Markennamen"
                 />
-              </div>
-              <div>
-                <label htmlFor="voice-speed">Sprechtempo (0,7–1,5)</label>
+              </Field>
+              <Field label="Sprechtempo (0,7–1,5)" htmlFor="voice-speed">
                 <input
                   id="voice-speed"
                   name="speechSpeed"
@@ -329,190 +435,162 @@ export default async function ChannelDetailPage({
                   max="1.5"
                   defaultValue={vc.speechSpeed}
                 />
-              </div>
-              <div>
-                <label htmlFor="voice-transfer">
-                  Transfer-Nummer (optional, für Live-Weiterleitung an einen Menschen)
-                </label>
-                <input
-                  id="voice-transfer"
-                  name="transferNumber"
-                  type="text"
-                  defaultValue={vc.transferNumber}
-                  placeholder="+49301234567 (leer = Rückruf-Ticket)"
-                />
-              </div>
-              <div>
-                <label htmlFor="voice-recording" className="check-row">
-                  <input
-                    id="voice-recording"
-                    name="recordingEnabled"
-                    type="checkbox"
-                    defaultChecked={vc.recordingEnabled}
-                  />
-                  Anrufe aufzeichnen
-                </label>
-                <p className="hint">
-                  Der Assistent spricht zu Gesprächsbeginn einen Aufzeichnungshinweis (gesetzlich
-                  erforderlich, § 201 StGB). Die Aufnahme erscheint nach dem Anruf als Anhang in
-                  der Konversation und wird in der EU gespeichert.
-                </p>
-              </div>
-              {isOwner ? (
-                <button className="primary" type="submit">
-                  Voice-Einstellungen speichern
-                </button>
-              ) : (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Nur Inhaber können die Voice-Einstellungen ändern.
-                </p>
-              )}
-            </fieldset>
-          </form>
-        </div>
-      );
-    }
-  }
+              </Field>
+            </div>
+          </Section>
 
-  if (flavor === 'webform') {
-    // builder-form id for the "Im Builder bearbeiten" link
-    const { data: formRow } = await supabase
-      .from('forms')
-      .select('id')
-      .eq('org_id', orgId)
-      .eq('channel_id', channel.id)
-      .maybeSingle();
-    const formId = (formRow as { id?: string } | null)?.id;
-    sections.push(
-      <div className="panel" key="webform">
-        <h2>Web-Formular</h2>
-        <p className="help">
-          Design, Felder, Einbetten-Code und Weiterleitungs-Empfänger bearbeitest du im
-          Formular-Builder.
-        </p>
-        <Link
-          className="primary"
-          style={{ display: 'inline-block', textDecoration: 'none', padding: '0.5rem 1.2rem', borderRadius: '9999px' }}
-          href={formId ? `/settings/forms/${formId}?org=${orgId}` : `/settings/forms?org=${orgId}`}
-        >
-          Im Builder bearbeiten
-        </Link>
-      </div>
+          <Section title="Weiterleitung an einen Menschen">
+            {/* 0018: honest transfer status at a glance */}
+            <div className="row">
+              <Badge tone={vc.transferNumber ? 'success' : 'warn'}>
+                {vc.transferNumber ? 'Live-Weiterleitung aktiv' : 'Nur Rückruf-Ticket'}
+              </Badge>
+              <span className="muted small">
+                {vc.transferNumber
+                  ? hoursConfigured
+                    ? `An ${vc.transferNumber} innerhalb der Geschäftszeiten — außerhalb: Rückruf-Ticket.`
+                    : `An ${vc.transferNumber}, jederzeit — keine Geschäftszeiten gepflegt.`
+                  : 'Ohne Transfer-Nummer werden Übergaben als Rückruf-Ticket aufgenommen.'}
+              </span>
+            </div>
+            <Field
+              label="Transfer-Nummer"
+              htmlFor="voice-transfer"
+              help="Optional. Leer lassen: Übergaben werden als Rückruf-Ticket aufgenommen."
+            >
+              <input
+                id="voice-transfer"
+                name="transferNumber"
+                type="text"
+                defaultValue={vc.transferNumber}
+                placeholder="+49301234567"
+              />
+            </Field>
+          </Section>
+
+          <Section title="Aufzeichnung">
+            <SettingRow
+              label="Anrufe aufzeichnen"
+              help="Der Assistent spricht zu Gesprächsbeginn einen Aufzeichnungshinweis (gesetzlich erforderlich, § 201 StGB). Die Aufnahme erscheint nach dem Anruf als Anhang in der Konversation und wird in der EU gespeichert."
+              htmlFor="voice-recording"
+            >
+              <input
+                id="voice-recording"
+                name="recordingEnabled"
+                type="checkbox"
+                className="switch"
+                defaultChecked={vc.recordingEnabled}
+              />
+            </SettingRow>
+          </Section>
+        </fieldset>
+      </form>
     );
   }
 
-  if (flavor === 'test') {
-    sections.push(
-      <div className="panel" key="test">
-        <h2>Test-Channel</h2>
-        <p className="help">
-          Nachrichten manuell einspeisen — zum Ausprobieren von Inbox, KI und Zuweisung:{' '}
-          <Link href={`/test-channel?org=${orgId}`}>zum Test-Channel</Link>.
-        </p>
-      </div>
+  // --- save bar of the two long forms (their button lives outside the form) ----
+
+  let saveBar: ReactNode = null;
+  if (activeTab === 'voice') {
+    saveBar = isOwner ? (
+      <Button type="submit" form={VOICE_FORM_ID} variant="primary">
+        Voice-Einstellungen speichern
+      </Button>
+    ) : (
+      <span className="muted small">Nur Inhaber können die Voice-Einstellungen ändern.</span>
+    );
+  } else if (activeTab === 'design' && isOwner) {
+    saveBar = (
+      <Button type="submit" form={THEME_FORM_ID} variant="primary">
+        Theme speichern
+      </Button>
     );
   }
+
+  const identifier = channelIdentifier(channel);
+  // only real routing identifiers are worth showing next to the type
+  const showIdentifier = ['form', 'email', 'whatsapp', 'voice'].includes(flavor);
+  const conversationsText =
+    conversationCount === 1
+      ? 'der 1 zugehörigen Konversation'
+      : `aller ${conversationCount ?? 0} zugehörigen Konversationen`;
 
   return (
-    <div className="shell">
-      <div className="page-head">
-        <h1>{channel.name}</h1>
-        <p>
-          <Link href={`/settings/channels?org=${orgId}`}>← Alle Kanäle</Link>
-          <span style={{ color: 'var(--text-muted)' }}> · {FLAVOR_LABELS[flavor]}</span>
-        </p>
-      </div>
-
-      <DismissibleBanners error={error} notice={notice} style={{ marginBottom: '1.5rem' }} />
-
-      <div className="panel">
-        <div className="chan-instance chan-instance--header">
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <span className="field-label">{FLAVOR_LABELS[flavor]}</span>
-            <code className="invite-link">{channelIdentifier(channel)}</code>
-            <AgentSelect
-              orgId={orgId}
-              channelId={channel.id}
-              channelType={channel.type}
-              agentId={channel.agent_id ?? null}
-              agents={agentOptions}
-              disabled={!isOwner}
-              returnTo={returnTo}
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Kanäle', href: href('/settings/channels', { org: orgId }) },
+          { label: channel.name },
+        ]}
+        title={channel.name}
+        badges={
+          channel.is_active ? (
+            <Badge tone="success" dot>
+              Aktiv
+            </Badge>
+          ) : (
+            <Badge tone="muted" dot>
+              Inaktiv
+            </Badge>
+          )
+        }
+        subtitle={
+          showIdentifier ? (
+            <>
+              {FLAVOR_LABELS[flavor]} · <span className="mono">{identifier}</span>
+            </>
+          ) : (
+            FLAVOR_LABELS[flavor]
+          )
+        }
+        actions={
+          // Web-Formular channels are deleted in the form builder (name confirmation there)
+          isOwner && flavor !== 'webform' ? (
+            <Menu>
+              <p className="menu-note">
+                Löschen ist unwiderruflich und entfernt den Kanal samt {conversationsText},
+                Nachrichten und Notizen.
+              </p>
+              <form action={deleteChannel}>
+                <input type="hidden" name="org" value={orgId} />
+                <input type="hidden" name="channelId" value={channel.id} />
+                <ConfirmDeleteButton
+                  inMenu
+                  label="Kanal löschen"
+                  confirmLabel="Endgültig löschen"
+                />
+              </form>
+            </Menu>
+          ) : null
+        }
+        tabs={
+          tabs ? (
+            <Tabs
+              label="Bereiche des Kanals"
+              items={tabs.map((t) => ({
+                label: t.label,
+                href: href(returnTo, { org: orgId, tab: t.key === 'general' ? undefined : t.key }),
+                active: t.key === activeTab,
+              }))}
             />
-            <p className="hint">
-              Ohne zugewiesenen Agenten werden Nachrichten nur in der Inbox gesammelt — keine
-              KI-Antworten.
-            </p>
-          </div>
-          <ActiveToggle
-            orgId={orgId}
-            channelId={channel.id}
-            isActive={channel.is_active}
-            returnTo={returnTo}
-          />
+          ) : undefined
+        }
+      />
+
+      <div className="page-body">
+        <DismissibleBanners error={error} notice={notice} />
+        <div className="form-narrow">
+          {activeTab === 'design'
+            ? designTab
+            : activeTab === 'embed'
+              ? embedTab
+              : activeTab === 'voice'
+                ? voiceTab
+                : generalTab}
         </div>
       </div>
 
-      <div className="panel">
-        <h2>Name</h2>
-        <p className="help">
-          Der Name ist nur eine Bezeichnung für dich — er erscheint in dieser Liste und an jeder
-          Konversation im Posteingang. Umbenennen ändert nichts an der Zustellung: Die läuft weiter
-          über {FLAVOR_ROUTING_HINT[flavor]}.
-        </p>
-        <form
-          action={renameChannel}
-          style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}
-        >
-          <input type="hidden" name="org" value={orgId} />
-          <input type="hidden" name="channelId" value={channel.id} />
-          <input type="hidden" name="returnTo" value={returnTo} />
-          <div style={{ flex: 1, minWidth: '16rem' }}>
-            <label htmlFor="channel-name">Kanalname</label>
-            <input
-              id="channel-name"
-              type="text"
-              name="name"
-              defaultValue={channel.name}
-              required
-              minLength={2}
-              maxLength={120}
-            />
-          </div>
-          <button className="primary" type="submit">
-            Namen speichern
-          </button>
-        </form>
-      </div>
-
-      {sections}
-
-      {isOwner && flavor !== 'webform' ? (
-        <div className="panel">
-          <h2>Kanal löschen</h2>
-          <p className="help">
-            Löscht den Kanal <strong>unwiderruflich</strong> — inklusive{' '}
-            {conversationCount === 1
-              ? 'der 1 zugehörigen Konversation'
-              : `aller ${conversationCount ?? 0} zugehörigen Konversationen`}{' '}
-            samt Nachrichten und Notizen.
-          </p>
-          <form action={deleteChannel}>
-            <input type="hidden" name="org" value={orgId} />
-            <input type="hidden" name="channelId" value={channel.id} />
-            <ConfirmDeleteButton label="Kanal löschen" confirmLabel="Endgültig löschen" />
-          </form>
-        </div>
-      ) : null}
-      {isOwner && flavor === 'webform' ? (
-        <div className="panel">
-          <h2>Kanal löschen</h2>
-          <p className="help">
-            Web-Formulare löschst du im Formular-Builder (mit Namens-Bestätigung) — dort wird das
-            Formular samt Kanal entfernt.
-          </p>
-        </div>
-      ) : null}
+      {saveBar ? <div className="save-bar">{saveBar}</div> : null}
     </div>
   );
 }
