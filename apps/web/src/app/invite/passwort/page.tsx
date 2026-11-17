@@ -9,6 +9,10 @@
 import { Suspense, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
+import AuthCard from '@/components/ui/AuthCard';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field } from '@/components/ui/Field';
 
 type Phase = 'ready' | 'saving' | 'done' | 'invalid';
 
@@ -63,61 +67,50 @@ function PasswordSetupInner() {
   };
 
   return (
-    <div style={{ maxWidth: '26rem', margin: '4rem auto', padding: '0 1rem' }}>
-      <div className="panel">
-        <h1 style={{ fontSize: '1.3rem', marginBottom: '0.5rem' }}>Passwort festlegen</h1>
+    <AuthCard title="Passwort festlegen">
+      {phase === 'invalid' ? (
+        <Callout tone="danger" title="Dieser Einladungslink ist ungültig oder abgelaufen.">
+          Bitte lass dir vom Team-Verantwortlichen eine neue Einladung senden („Einladung erneut
+          senden" unter Team).
+        </Callout>
+      ) : null}
 
-        {phase === 'invalid' ? (
-          <>
-            <p className="error">Dieser Einladungslink ist ungültig oder abgelaufen.</p>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-              Bitte lass dir vom Team-Verantwortlichen eine neue Einladung senden
-              („Einladung erneut senden" unter Einstellungen → Team).
-            </p>
-          </>
-        ) : null}
+      {phase === 'ready' || phase === 'saving' ? (
+        <form className="stack" onSubmit={submit}>
+          <p className="muted small">Willkommen bei Zendori! Lege dein Passwort fest, um loszulegen.</p>
+          <Field label="Passwort (mindestens 8 Zeichen)" htmlFor="pw">
+            <input
+              id="pw"
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </Field>
+          <Field label="Passwort bestätigen" htmlFor="pw2">
+            <input
+              id="pw2"
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </Field>
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <Button type="submit" variant="primary" disabled={phase === 'saving'}>
+            {phase === 'saving' ? 'Wird gespeichert…' : 'Passwort speichern'}
+          </Button>
+        </form>
+      ) : null}
 
-        {phase === 'ready' || phase === 'saving' ? (
-          <form className="stack" onSubmit={submit}>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-              Willkommen bei Zendori! Lege dein Passwort fest, um loszulegen.
-            </p>
-            <div>
-              <label htmlFor="pw">Passwort (min. 8 Zeichen)</label>
-              <input
-                id="pw"
-                type="password"
-                required
-                minLength={8}
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="pw2">Passwort bestätigen</label>
-              <input
-                id="pw2"
-                type="password"
-                required
-                minLength={8}
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            </div>
-            {error ? <p className="error">{error}</p> : null}
-            <button className="primary" type="submit" disabled={phase === 'saving'}>
-              {phase === 'saving' ? 'Wird gespeichert…' : 'Passwort speichern'}
-            </button>
-          </form>
-        ) : null}
-
-        {phase === 'done' ? (
-          <p className="notice">Passwort gespeichert — du wirst zur Inbox weitergeleitet…</p>
-        ) : null}
-      </div>
-    </div>
+      {phase === 'done' ? (
+        <Callout tone="success">Passwort gespeichert. Du wirst zur Inbox weitergeleitet.</Callout>
+      ) : null}
+    </AuthCard>
   );
 }
 

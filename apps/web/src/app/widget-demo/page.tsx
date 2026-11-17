@@ -2,6 +2,9 @@ import Link from 'next/link';
 import Script from 'next/script';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import Button from '@/components/ui/Button';
+import { EmptyState, Section } from '@/components/ui/Layout';
+import PageHeader from '@/components/ui/PageHeader';
 
 type WidgetChannelRow = {
   id: string;
@@ -34,51 +37,49 @@ export default async function WidgetDemoPage({
       ? { name: channel.name, token: channel.config.public_token }
       : null;
 
-  return (
-    <div className="shell">
-      <header>
-        <Link href={`/settings/channels?org=${orgId}`}>Zurück zu den Kanälen</Link>
-      </header>
-      <div className="page-head">
-        <h1>Widget-Demo</h1>
-        <p>So erscheint das Chat-Widget von {orgName} auf einer Kundenwebsite.</p>
-      </div>
+  const channelsHref = `/settings/channels?org=${orgId}`;
 
-      {widget ? (
-        <div className="panel">
-          <h2>So testest du das Widget</h2>
-          <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-            Diese Seite bindet das Chat-Widget des Kanals „{widget.name}“ genau so ein, wie es
-            später auf einer Kundenwebsite erscheint: als Chat-Bubble unten rechts.
-          </p>
-          <ol style={{ paddingLeft: '1.25rem', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-            <li>Chat-Bubble unten rechts anklicken und eine Nachricht senden.</li>
-            <li>
-              Die Nachricht erscheint sofort in der <Link href={`/inbox?org=${orgId}`}>Inbox</Link>{' '}
-              als Konversation.
-            </li>
-            <li>Eine Antwort aus der Inbox erscheint in Echtzeit hier im Widget.</li>
-          </ol>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Die Widget-Sitzung ist anonym und wird in diesem Browser gespeichert — genau wie bei
-            echten Website-Besuchern. Farbe, Titel und Begrüßung lassen sich in den{' '}
-            <Link href={`/settings/channels?org=${orgId}`}>Kanal-Einstellungen</Link> anpassen.
-          </p>
-        </div>
-      ) : (
-        <div className="panel">
-          <h2>Noch kein Widget-Channel</h2>
-          <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-            Für diese Organisation existiert noch kein Widget-Channel. Lege zuerst einen an, um das
-            Chat-Widget hier auszuprobieren.
-          </p>
-          <p style={{ fontSize: '0.9rem' }}>
-            <Link href={`/settings/channels?org=${orgId}`}>
-              Widget-Channel in den Einstellungen anlegen
-            </Link>
-          </p>
-        </div>
-      )}
+  return (
+    <div className="page">
+      <PageHeader
+        breadcrumb={[{ label: 'Kanäle', href: channelsHref }, { label: 'Widget-Demo' }]}
+        title="Widget-Demo"
+        subtitle={`So erscheint das Chat-Widget von ${orgName} auf einer Kundenwebsite.`}
+      />
+      <div className="page-body">
+        {widget ? (
+          <div className="form-narrow">
+            <Section
+              title="So testest du das Widget"
+              help={`Diese Seite bindet das Chat-Widget des Kanals „${widget.name}“ so ein wie eine Kundenwebsite: als Chat-Bubble unten rechts.`}
+            >
+              <ol className="steps">
+                <li>Chat-Bubble unten rechts anklicken und eine Nachricht senden.</li>
+                <li>
+                  Die Nachricht erscheint sofort in der{' '}
+                  <Link href={`/inbox?org=${orgId}`}>Inbox</Link> als Konversation.
+                </li>
+                <li>Eine Antwort aus der Inbox erscheint in Echtzeit hier im Widget.</li>
+              </ol>
+              <p className="field-help">
+                Die Widget-Sitzung ist anonym und wird in diesem Browser gespeichert, wie bei
+                echten Website-Besuchern. Farbe, Titel und Begrüßung stellst du in den{' '}
+                <Link href={channelsHref}>Kanal-Einstellungen</Link> ein.
+              </p>
+            </Section>
+          </div>
+        ) : (
+          <EmptyState
+            title="Noch kein Widget-Channel"
+            text="Für diese Organisation gibt es noch keinen Chat-Kanal. Lege zuerst einen an, um das Widget hier auszuprobieren."
+            action={
+              <Button href={channelsHref} variant="primary">
+                Zu den Kanälen
+              </Button>
+            }
+          />
+        )}
+      </div>
 
       {widget ? (
         <Script src="/widget.js" data-zendori-token={widget.token} strategy="afterInteractive" />

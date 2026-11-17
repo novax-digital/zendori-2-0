@@ -2,6 +2,10 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { signOut } from './actions';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import AuthCard from '@/components/ui/AuthCard';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Icon from '@/components/ui/Icon';
 
 type Membership = {
   role: string;
@@ -30,53 +34,32 @@ export default async function DashboardPage() {
   if (only) redirect(`/inbox?org=${only.id}`);
 
   return (
-    <div className="shell">
-      <header>
-        <span className="brand">Zendori</span>
+    <AuthCard
+      wide
+      title="Organisation wählen"
+      subtitle="Du bist Mitglied in mehreren Organisationen. Wähle, wo du arbeiten möchtest."
+      footer={
         <form action={signOut}>
-          <button className="ghost" type="submit">
+          <Button type="submit" variant="ghost">
             Abmelden
-          </button>
+          </Button>
         </form>
-      </header>
-
-      <div className="page-head">
-        <h1>Organisation wählen</h1>
-        <p>Du bist Mitglied in mehreren Organisationen — wähle, wo du arbeiten möchtest.</p>
+      }
+    >
+      <div className="option-group">
+        {memberships.map((m) =>
+          m.organizations ? (
+            <Link key={m.organizations.id} className="option" href={`/inbox?org=${m.organizations.id}`}>
+              <span className="option-text">
+                <span className="option-title">{m.organizations.name}</span>
+                <span className="option-help">{m.organizations.slug}</span>
+              </span>
+              <Badge>{m.role === 'owner' ? 'Inhaber' : m.role === 'admin' ? 'Admin' : 'Mitarbeiter'}</Badge>
+              <Icon name="chevronRight" className="muted" />
+            </Link>
+          ) : null
+        )}
       </div>
-
-      <div className="panel">
-        <h2>Deine Organisationen</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Slug</th>
-              <th>Deine Rolle</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {memberships.map((m) =>
-              m.organizations ? (
-                <tr key={m.organizations.id}>
-                  <td>{m.organizations.name}</td>
-                  <td>{m.organizations.slug}</td>
-                  <td>
-                    <span className="badge">{m.role === 'owner' ? 'Inhaber' : m.role === 'admin' ? 'Admin' : 'Mitarbeiter'}</span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <Link className="primary" href={`/inbox?org=${m.organizations.id}`}>
-                      Inbox öffnen
-                    </Link>
-                  </td>
-                </tr>
-              ) : null
-            )}
-          </tbody>
-        </table>
-      </div>
-
-    </div>
+    </AuthCard>
   );
 }

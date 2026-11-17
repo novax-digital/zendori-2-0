@@ -1,4 +1,8 @@
 import { signIn } from '../actions';
+import AuthCard from '@/components/ui/AuthCard';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field } from '@/components/ui/Field';
 
 export default async function LoginPage({
   searchParams,
@@ -8,41 +12,27 @@ export default async function LoginPage({
   const { error, notice, next } = await searchParams;
 
   return (
-    <main className="centered">
-      <div className="auth-wrap">
-        <div className="auth-brand">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="onlight" src="/brand/logo-onlight.svg" alt="Zendori" />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="ondark" src="/brand/logo-ondark.svg" alt="Zendori" />
-        </div>
-        <div className="card">
-          <h1>Willkommen zurück</h1>
-          <p className="sub">Melde dich bei deinem Konto an.</p>
-          {error ? <p className="error">{error}</p> : null}
-          {notice ? <p className="notice">{notice}</p> : null}
-          <form className="stack" action={signIn}>
-            <input type="hidden" name="next" value={next ?? '/'} />
-            <div>
-              <label htmlFor="email">E-Mail</label>
-              <input id="email" name="email" type="email" autoComplete="email" required />
-            </div>
-            <div>
-              <label htmlFor="password">Passwort</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            <button className="primary" type="submit">
-              Anmelden
-            </button>
-          </form>
-        </div>
-      </div>
-    </main>
+    <AuthCard title="Willkommen zurück" subtitle="Melde dich bei deinem Konto an.">
+      {error ? <Callout tone="danger">{error}</Callout> : null}
+      {notice ? <Callout tone="success">{notice}</Callout> : null}
+      <form className="stack" action={signIn}>
+        <input type="hidden" name="next" value={next ?? '/'} />
+        <Field label="E-Mail" htmlFor="email">
+          <input id="email" name="email" type="email" autoComplete="email" required />
+        </Field>
+        <Field label="Passwort" htmlFor="password">
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+          />
+        </Field>
+        <Button type="submit" variant="primary">
+          Anmelden
+        </Button>
+      </form>
+    </AuthCard>
   );
 }

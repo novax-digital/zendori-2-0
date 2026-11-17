@@ -1,6 +1,10 @@
 import { redirect } from 'next/navigation';
 import { createOrganization } from '../actions';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import AuthCard from '@/components/ui/AuthCard';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field } from '@/components/ui/Field';
 
 export default async function OnboardingPage({
   searchParams,
@@ -19,24 +23,19 @@ export default async function OnboardingPage({
   if (memberships && memberships.length > 0) redirect('/');
 
   return (
-    <main className="centered">
-      <div className="card">
-        <h1>Organisation anlegen</h1>
-        <p className="sub">
-          Erstelle deine Organisation — der Mandant, in dem Kanäle, Konversationen und dein Team
-          leben.
-        </p>
-        {error ? <p className="error">{error}</p> : null}
-        <form className="stack" action={createOrganization}>
-          <div>
-            <label htmlFor="name">Name der Organisation</label>
-            <input id="name" name="name" type="text" placeholder="z. B. Strong Energy" required />
-          </div>
-          <button className="primary" type="submit">
-            Organisation erstellen
-          </button>
-        </form>
-      </div>
-    </main>
+    <AuthCard
+      title="Organisation anlegen"
+      subtitle="In deiner Organisation leben Kanäle, Konversationen und dein Team."
+    >
+      {error ? <Callout tone="danger">{error}</Callout> : null}
+      <form className="stack" action={createOrganization}>
+        <Field label="Name der Organisation" htmlFor="name">
+          <input id="name" name="name" type="text" placeholder="z. B. Beispiel GmbH" required />
+        </Field>
+        <Button type="submit" variant="primary">
+          Organisation erstellen
+        </Button>
+      </form>
+    </AuthCard>
   );
 }

@@ -205,13 +205,6 @@
 }
 
 /* Class-level dark tweaks for a few hard-coded light values. */
-:root[data-theme='dark'] main.centered {
-  background:
-    linear-gradient(135deg, rgba(11, 116, 128, 0.28), rgba(11, 18, 32, 0.6) 44%, rgba(37, 99, 235, 0.22)),
-    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px), var(--bg);
-  background-size: auto, 44px 44px, 44px 44px;
-}
 :root[data-theme='dark'] .inbox-note {
   background: rgba(202, 138, 4, 0.13);
   border-color: rgba(202, 138, 4, 0.35);
@@ -595,43 +588,31 @@ a:focus-visible {
 }
 
 /* ============================================================================
-   Auth / centered cards
+   Pages outside the app chrome that ask for one thing (AuthCard):
+   sign in, create the organisation, set a password, pick an organisation
    ========================================================================== */
 
-main.centered {
+.auth {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 2rem 1rem;
-  background:
-    linear-gradient(
-      135deg,
-      rgba(232, 255, 251, 0.9),
-      rgba(255, 255, 255, 0.72) 44%,
-      rgba(239, 246, 255, 0.85)
-    ),
-    linear-gradient(rgba(8, 149, 161, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(8, 149, 161, 0.06) 1px, transparent 1px);
-  background-size:
-    auto,
-    44px 44px,
-    44px 44px;
+  padding: 32px 16px;
+  background: var(--surface-sunken);
 }
-
 .auth-wrap {
+  width: 100%;
+  max-width: 26rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
-  max-width: 26rem;
+  gap: var(--space-6);
 }
-.auth-brand {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 1.5rem;
+.auth-wrap--wide {
+  max-width: 34rem;
 }
 .auth-brand img {
+  display: block;
   height: 32px;
 }
 .auth-brand img.ondark {
@@ -641,27 +622,26 @@ main.centered {
   display: none;
 }
 :root[data-theme='dark'] .auth-brand img.ondark {
-  display: inline;
+  display: block;
 }
-
-.card {
+.auth-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 32px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: 2rem;
-  width: 100%;
-  max-width: 26rem;
-  box-shadow: var(--shadow-card);
+  border-radius: var(--r-lg);
 }
-.card h1 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-bottom: 0.35rem;
+.auth-card h1 {
+  font-size: var(--fs-title);
+  line-height: var(--lh-title);
 }
-.card p.sub {
+.auth-sub {
+  margin-top: 2px;
+  font-size: var(--fs-small);
   color: var(--text-muted);
-  font-size: 0.92rem;
-  margin-bottom: 1.5rem;
 }
 
 /* ============================================================================
@@ -1716,6 +1696,14 @@ input[type='checkbox'].switch:disabled {
   white-space: nowrap;
 }
 
+/* numbered instructions */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 20px;
+}
+
 /* --- CodeBlock: addresses, embed codes, webhook URLs --- */
 .code-block {
   display: block;
@@ -1790,8 +1778,11 @@ input[type='checkbox'].switch:disabled {
   flex-direction: column;
   min-height: 100vh;
 }
+.page > .page-head,
 .app-main .page > .page-head {
   margin: 0;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
 }
 .page-body {
   padding: 24px 32px 48px;
@@ -2398,11 +2389,6 @@ th {
   margin-bottom: 1rem;
 }
 
-/* auth cards: messages need air before the form */
-.card .error,
-.card .notice {
-  margin-bottom: 1rem;
-}
 
 code.invite-link {
   display: block;
@@ -2472,6 +2458,13 @@ code.invite-link {
   }
   .subnav-title {
     display: none;
+  }
+  .page > .page-head,
+  .app-main .page > .page-head {
+    padding: 16px;
+  }
+  .page-tabs {
+    padding: 0 16px;
   }
   .page-body {
     padding: 16px 16px 32px;
