@@ -1,11 +1,15 @@
 'use client';
 
-// Team member form (0024, App-Control pattern): role cards (Mitarbeiter/Admin),
+// Team member form (0024, App-Control pattern): role choice (Mitarbeiter/Admin),
 // permission chips (cycle none → Ansehen → Bearbeiten where allowed) and the
 // channel-access list (the "Standorte" analogue). Pure client-side state
 // rendered into hidden/named inputs; the server action validates everything
 // again (roles, levels, channel ownership).
-import { useMemo, useState } from 'react';
+//
+// Redesign: the form lives in a drawer of the Team page ("Mitglied einladen",
+// "Mitglied bearbeiten"). It has no submit button of its own — the drawer's
+// footer button points at it with form={formId}.
+import { useId, useMemo, useState, type FormEvent } from 'react';
 // Client-safe subpath: the @zendori/core barrel pulls node:crypto (webhooks)
 // and cannot be bundled for the browser.
 import {
@@ -14,6 +18,9 @@ import {
   type AreaLevel,
   type MemberPermissions,
 } from '@zendori/core/permissions';
+import Button from '@/components/ui/Button';
+import { Field, OptionGroup, SettingRow } from '@/components/ui/Field';
+import Icon from '@/components/ui/Icon';
 
 export interface TeamChannelOption {
   id: string;
@@ -21,11 +28,12 @@ export interface TeamChannelOption {
 }
 
 interface Props {
+  /** id of the <form>; the drawer's submit button references it (form="…"). */
+  formId: string;
   orgId: string;
   channels: TeamChannelOption[];
   /** Server action (inviteMember or updateMember). */
   action: (formData: FormData) => Promise<void>;
-  submitLabel: string;
   /** Prefill for editing; omit for the invite form. */
   initial?: { role: 'admin' | 'agent'; permissions: MemberPermissions };
   /** Extra hidden fields (e.g. userId for updates). */
@@ -43,14 +51,15 @@ function nextLevel(current: AreaLevel | undefined, max: AreaLevel): AreaLevel | 
 }
 
 export default function TeamMemberForm({
+  formId,
   orgId,
   channels,
   action,
-  submitLabel,
   initial,
   hidden,
   showEmail,
 }: Props) {
+  const fieldId = useId();
   const [role, setRole] = useState<'admin' | 'agent'>(initial?.role ?? 'agent');
   const [areas, setAreas] = useState<Partial<Record<AreaKey, AreaLevel>>>(
     initial?.permissions.areas ?? { inbox: 'edit' }
@@ -93,107 +102,87 @@ export default function TeamMemberForm({
     });
   };
 
-  const roleCard = (
-    value: 'agent' | 'admin',
-    title: string,
-    description: string
-  ): React.ReactElement => (
-    <button
-      type="button"
-      onClick={() => setRole(value)}
-      aria-pressed={role === value}
-      style={{
-        flex: 1,
-        textAlign: 'left',
-        padding: '0.75rem 0.9rem',
-        borderRadius: '0.75rem',
-        border: role === value ? '2px solid var(--brand-600)' : '1px solid var(--border)',
-        background: role === value ? 'var(--brand-50, rgba(11,184,186,0.08))' : 'transparent',
-        cursor: 'pointer',
-      }}
-    >
-      <div style={{ fontWeight: 600 }}>{title}</div>
-      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{description}</div>
-    </button>
-  );
+  // The role radios (name="role") are the submitted value AND drive which
+  // sections show: their change event bubbles up to the wrapper.
+  const onRoleChange = (event: FormEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLInputElement;
+    if (target.name === 'role' && (target.value === 'admin' || target.value === 'agent')) {
+      setRole(target.value);
+    }
+  };
 
   return (
-    <form className="stack" action={action}>
+    <form id={formId} className="stack stack--lg" action={action}>
       <input type="hidden" name="org" value={orgId} />
       {Object.entries(hidden ?? {}).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <input type="hidden" name="role" value={role} />
 
       {showEmail ? (
-        <div>
-          <label htmlFor="invite-email">E-Mail-Adresse</label>
+        <Field
+          label="E-Mail-Adresse"
+          htmlFor={`${fieldId}-email`}
+          help="Das Mitglied erhält eine Einladungs-E-Mail und legt sein Passwort selbst fest."
+        >
           <input
-            id="invite-email"
+            id={`${fieldId}-email`}
             name="email"
             type="email"
             required
             autoComplete="off"
             placeholder="name@firma.de"
           />
-          <p className="help">
-            Das Mitglied erhält eine Einladungs-E-Mail und legt sein Passwort selbst fest.
-          </p>
-        </div>
+        </Field>
       ) : null}
 
-      <div>
-        <label>Rolle</label>
-        <div style={{ display: 'flex', gap: '0.6rem' }}>
-          {roleCard('agent', 'Mitarbeiter', 'Nur freigeschaltete Bereiche und zugewiesene Kanäle')}
-          {roleCard('admin', 'Admin', 'Alle Rechte und alle Kanäle der Organisation')}
-        </div>
+      <div className="stack stack--sm" onChange={onRoleChange}>
+        <span className="field-label">Rolle</span>
+        <OptionGroup
+          label="Rolle"
+          name="role"
+          value={role}
+          options={[
+            {
+              value: 'agent',
+              title: 'Mitarbeiter',
+              help: 'Nur freigeschaltete Bereiche und zugewiesene Kanäle',
+            },
+            {
+              value: 'admin',
+              title: 'Admin',
+              help: 'Alle Rechte und alle Kanäle der Organisation',
+            },
+          ]}
+        />
       </div>
 
       {role === 'agent' ? (
         <>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <label>Berechtigungen</label>
-              <button
-                type="button"
-                className="ghost"
-                onClick={toggleAll}
-                style={{ fontSize: '0.8rem', padding: '0.15rem 0.6rem' }}
-              >
+          <div className="stack stack--sm">
+            <div className="row row--between">
+              <span className="field-label">Berechtigungen</span>
+              <Button type="button" variant="ghost" size="sm" onClick={toggleAll}>
                 {allSelected ? 'Alle abwählen' : 'Alle auswählen'}
-              </button>
+              </Button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.35rem' }}>
+            <div className="tm-chips">
               {AREA_DEFS.map((def) => {
                 const level = areas[def.key];
-                const active = level !== undefined;
                 return (
                   <button
                     key={def.key}
                     type="button"
+                    className={`tm-chip${level ? ` tm-chip--${level}` : ''}`}
+                    aria-pressed={level !== undefined}
                     onClick={() => toggleArea(def.key, def.maxLevel)}
                     title={
                       def.maxLevel === 'view'
                         ? 'Ansehen (Bearbeiten nur für Admins)'
                         : 'Klicken wechselt: Kein Zugriff → Ansehen → Bearbeiten'
                     }
-                    style={{
-                      borderRadius: '9999px',
-                      padding: '0.3rem 0.8rem',
-                      fontSize: '0.82rem',
-                      cursor: 'pointer',
-                      border: active ? '1px solid var(--brand-600)' : '1px solid var(--border)',
-                      background:
-                        level === 'edit'
-                          ? 'var(--brand-600)'
-                          : level === 'view'
-                            ? 'var(--brand-50, rgba(11,184,186,0.12))'
-                            : 'transparent',
-                      color: level === 'edit' ? '#fff' : 'inherit',
-                    }}
                   >
-                    {active ? `${def.label} · ${LEVEL_LABEL[level!]}` : `+ ${def.label}`}
+                    {level ? null : <Icon name="plus" size={12} />}
+                    {level ? `${def.label} · ${LEVEL_LABEL[level]}` : def.label}
                   </button>
                 );
               })}
@@ -204,59 +193,41 @@ export default function TeamMemberForm({
                 <input key={def.key} type="hidden" name={`area_${def.key}`} value={level} />
               ) : null;
             })}
-            <p className="help">
+            <p className="field-help">
               Klicken wechselt: Kein Zugriff → Ansehen → Bearbeiten. Bereiche wie KI-Agenten oder
               Kanäle können Mitarbeiter nur ansehen — bearbeiten dürfen sie Admins.
             </p>
           </div>
 
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <label>Zugriff auf Kanäle (Posteingang)</label>
+          <div className="stack stack--sm">
+            <div className="row row--between">
+              <span className="field-label">Zugriff auf Kanäle (Posteingang)</span>
               {!allChannels ? (
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <span className="muted small">
                   {selected.size} von {channels.length} ausgewählt
                 </span>
               ) : null}
             </div>
-            <label
-              style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 400 }}
+            <SettingRow
+              label="Alle Kanäle"
+              help="Gilt auch für künftige Kanäle."
+              htmlFor={`${fieldId}-all`}
             >
               <input
+                id={`${fieldId}-all`}
                 type="checkbox"
+                className="switch"
                 checked={allChannels}
                 onChange={(e) => setAllChannels(e.target.checked)}
               />
-              Alle Kanäle (auch künftige)
-            </label>
+            </SettingRow>
             {!allChannels ? (
-              <div
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: '0.75rem',
-                  marginTop: '0.4rem',
-                  maxHeight: '14rem',
-                  overflowY: 'auto',
-                }}
-              >
-                {channels.length === 0 ? (
-                  <p style={{ padding: '0.6rem 0.8rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Noch keine Kanäle vorhanden.
-                  </p>
-                ) : (
-                  channels.map((channel) => (
-                    <label
-                      key={channel.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        padding: '0.45rem 0.8rem',
-                        borderBottom: '1px solid var(--border)',
-                        fontWeight: 400,
-                        cursor: 'pointer',
-                      }}
-                    >
+              channels.length === 0 ? (
+                <p className="muted small">Noch keine Kanäle vorhanden.</p>
+              ) : (
+                <div className="option-group tm-channels" role="group" aria-label="Kanäle">
+                  {channels.map((channel) => (
+                    <label key={channel.id} className="option">
                       <input
                         type="checkbox"
                         name="channelIds"
@@ -264,22 +235,16 @@ export default function TeamMemberForm({
                         checked={selected.has(channel.id)}
                         onChange={() => toggleChannel(channel.id)}
                       />
-                      {channel.name}
+                      <span className="option-text">{channel.name}</span>
                     </label>
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )
             ) : null}
             <input type="hidden" name="channelScope" value={allChannels ? 'all' : 'selected'} />
           </div>
         </>
       ) : null}
-
-      <div>
-        <button className="primary" type="submit">
-          {submitLabel}
-        </button>
-      </div>
     </form>
   );
 }

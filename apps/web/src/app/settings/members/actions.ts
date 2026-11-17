@@ -32,8 +32,18 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function membersUrl(orgId: string, message?: { error?: string; notice?: string }): string {
+/**
+ * `panel` (+ `member` for 'edit') keeps the drawer of the list page open: the
+ * invite and edit forms live in drawers (?panel=invite, ?panel=edit&member=…),
+ * so a rejected input leads back INTO the drawer; success leaves it.
+ */
+function membersUrl(
+  orgId: string,
+  message?: { error?: string; notice?: string; panel?: 'invite' | 'edit'; member?: string }
+): string {
   const params = new URLSearchParams({ org: orgId });
+  if (message?.panel) params.set('panel', message.panel);
+  if (message?.member) params.set('member', message.member);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/members?${params.toString()}`;
@@ -99,11 +109,13 @@ export async function inviteMember(formData: FormData): Promise<void> {
 
   const email = textField(formData.get('email')).toLowerCase();
   if (!z.email().safeParse(email).success) {
-    redirect(membersUrl(orgId, { error: 'Bitte eine gültige E-Mail-Adresse angeben.' }));
+    redirect(
+      membersUrl(orgId, { error: 'Bitte eine gültige E-Mail-Adresse angeben.', panel: 'invite' })
+    );
   }
 
   const parsed = await parseMemberForm(admin, orgId, formData);
-  if ('error' in parsed) redirect(membersUrl(orgId, { error: parsed.error }));
+  if ('error' in parsed) redirect(membersUrl(orgId, { error: parsed.error, panel: 'invite' }));
 
   const { data: orgRow } = await admin
     .from('organizations')
@@ -117,7 +129,7 @@ export async function inviteMember(formData: FormData): Promise<void> {
   try {
     ({ userId, created } = await ensureAuthUser(admin, email));
   } catch {
-    redirect(membersUrl(orgId, { error: 'Konto konnte nicht angelegt werden.' }));
+    redirect(membersUrl(orgId, { error: 'Konto konnte nicht angelegt werden.', panel: 'invite' }));
   }
 
   // Already a member? (multi-org accounts are fine, duplicates are not)
@@ -128,7 +140,9 @@ export async function inviteMember(formData: FormData): Promise<void> {
     .eq('user_id', userId)
     .maybeSingle();
   if (existing) {
-    redirect(membersUrl(orgId, { error: 'Diese E-Mail-Adresse ist bereits im Team.' }));
+    redirect(
+      membersUrl(orgId, { error: 'Diese E-Mail-Adresse ist bereits im Team.', panel: 'invite' })
+    );
   }
 
   const { error: memberError } = await admin.from('org_members').insert({
@@ -139,7 +153,9 @@ export async function inviteMember(formData: FormData): Promise<void> {
   });
   if (memberError) {
     if (created) await admin.auth.admin.deleteUser(userId); // roll back the fresh account
-    redirect(membersUrl(orgId, { error: 'Mitglied konnte nicht angelegt werden.' }));
+    redirect(
+      membersUrl(orgId, { error: 'Mitglied konnte nicht angelegt werden.', panel: 'invite' })
+    );
   }
 
   // Mail is best-effort: the membership stands, "Einladung erneut senden"
@@ -203,14 +219,24 @@ export async function updateMember(formData: FormData): Promise<void> {
   }
 
   const parsed = await parseMemberForm(admin, orgId, formData);
-  if ('error' in parsed) redirect(membersUrl(orgId, { error: parsed.error }));
+  if ('error' in parsed) {
+    redirect(membersUrl(orgId, { error: parsed.error, panel: 'edit', member: userId }));
+  }
 
   const { error } = await admin
     .from('org_members')
     .update({ role: parsed.role, permissions: parsed.permissions })
     .eq('org_id', orgId)
     .eq('user_id', userId);
-  if (error) redirect(membersUrl(orgId, { error: 'Änderung konnte nicht gespeichert werden.' }));
+  if (error) {
+    redirect(
+      membersUrl(orgId, {
+        error: 'Änderung konnte nicht gespeichert werden.',
+        panel: 'edit',
+        member: userId,
+      })
+    );
+  }
 
   revalidatePath('/settings/members');
   redirect(membersUrl(orgId, { notice: 'Mitglied aktualisiert.' }));

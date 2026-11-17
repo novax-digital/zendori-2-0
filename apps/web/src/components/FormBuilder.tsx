@@ -1,22 +1,29 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { FormDefinition, FormField, FormFieldType } from '@zendori/channels';
 import { renderForm, buttonTextColor, type RenderHandles } from '@/form-embed/render';
 import type { PublicFormDefinition } from '@/form-embed/types';
-import {
-  deleteForm,
-  saveFormDefinition,
-  updateFormNotificationSettings,
-} from '@/app/settings/forms/actions';
+import { saveFormDefinition, updateFormNotificationSettings } from '@/app/settings/forms/actions';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { Field, SettingRow } from '@/components/ui/Field';
+import Icon from '@/components/ui/Icon';
+import { CodeBlock, Section } from '@/components/ui/Layout';
 
 /**
  * The form builder (Phase 10): field list with inline accordion editor +
  * design tab + embed tab + owner-only forwarding tab, next to a sticky live
  * preview that mounts the EXACT production renderer (form-embed/render) in a
  * shadow root — the preview cannot drift from what customer sites show.
- * v1 interaction model: ↑/↓ buttons instead of drag & drop (3–8 fields,
+ * v1 interaction model: up/down buttons instead of drag & drop (3–8 fields,
  * keyboard-accessible, no dependency).
+ *
+ * Redesign (docs/design-redesign.md): rendered as direct children of the
+ * page's `.page` — the tabs take over the page head's bottom line
+ * (.page-tabs), the body keeps the two columns, saving sits in the save bar.
+ * Deleting moved to the page head's menu (DeleteFormDrawer).
  */
 
 type TabKey = 'fields' | 'design' | 'embed' | 'forwarding';
@@ -81,6 +88,8 @@ export default function FormBuilder(props: {
   dailyLimit: number;
   isOwner: boolean;
   embedBase: string;
+  /** The page's ?notice= / ?error= banners, shown above both columns. */
+  banners?: ReactNode;
 }) {
   const [name, setName] = useState(props.initialName);
   const [definition, setDefinition] = useState<FormDefinition>(props.initialDefinition);
@@ -89,7 +98,6 @@ export default function FormBuilder(props: {
   const [dirty, setDirty] = useState(false);
   const [previewMobile, setPreviewMobile] = useState(false);
   const [previewSuccess, setPreviewSuccess] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState('');
 
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const previewHandles = useRef<RenderHandles | null>(null);
@@ -180,275 +188,245 @@ export default function FormBuilder(props: {
     { key: 'embed', label: 'Einbetten' },
     { key: 'forwarding', label: 'Weiterleitung' },
   ];
+  const fieldLimitReached = definition.fields.length >= 30;
 
   return (
-    <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      {/* ---------- editor column ---------- */}
-      <div style={{ flex: '1 1 26rem', minWidth: 'min(22rem, 100%)', maxWidth: '34rem' }}>
-        <div className="panel">
-          <div>
-            <label htmlFor="fb-name">Formular-Name</label>
-            <input
-              id="fb-name"
-              type="text"
-              value={name}
-              maxLength={120}
-              onChange={(e) => {
-                setName(e.target.value);
-                setDirty(true);
-              }}
-            />
-          </div>
+    <>
+      {/* ---------- tabs: on the page head's bottom line ---------- */}
+      <div className="page-tabs">
+        <div className="tabs" role="tablist" aria-label="Bereiche des Formulars">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-          <div className="tabbar" style={{ marginTop: '1rem' }}>
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                className={`tab${tab === t.key ? ' tab--active' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+      <div className="page-body fb-body">
+        {props.banners}
 
+        {/* ---------- editor column ---------- */}
+        <div className="fb-editor">
           {/* ---------- fields tab ---------- */}
           {tab === 'fields' ? (
-            <div>
-              {!hasContactRole ? (
-                <p className="notice" style={{ fontSize: '0.82rem' }}>
-                  Ohne ein Feld mit Zuordnung „E-Mail des Kontakts" (oder Telefon) kann niemand
-                  antworten — die Zuordnung findest du im Feld-Editor.
-                </p>
-              ) : null}
-              {!hasConsentField ? (
-                <p className="notice" style={{ fontSize: '0.82rem' }}>
-                  ⚠️ Ohne Zustimmungs-Feld fehlt der DSGVO-Einwilligungsnachweis für die
-                  Verarbeitung der Angaben.
-                </p>
-              ) : null}
-              {definition.fields.map((field, index) => (
-                <div
-                  key={field.key}
-                  style={{
-                    border: '1px solid var(--border)',
-                    borderRadius: '10px',
-                    marginBottom: '0.55rem',
-                    background: 'var(--surface)',
+            <div className="stack stack--lg">
+              <Field label="Formular-Name" htmlFor="fb-name">
+                <input
+                  id="fb-name"
+                  type="text"
+                  value={name}
+                  maxLength={120}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setDirty(true);
                   }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      padding: '0.55rem 0.7rem',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setOpenField(openField === field.key ? null : field.key)}
-                      aria-expanded={openField === field.key}
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        font: 'inherit',
-                        minWidth: 0,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          fontWeight: 600,
-                          color: 'var(--text-muted)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '6px',
-                          padding: '0.1rem 0.4rem',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {TYPE_LABELS[field.type]}
-                      </span>
-                      <span
-                        style={{
-                          fontWeight: 600,
-                          fontSize: '0.9rem',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {field.label}
-                      </span>
-                      {field.required ? (
-                        <span style={{ color: 'var(--brand-600, #0895a1)' }}>*</span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost ghost--icon"
-                      aria-label={`Feld „${field.label}" nach oben`}
-                      disabled={index === 0}
-                      onClick={() => moveField(field.key, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost ghost--icon"
-                      aria-label={`Feld „${field.label}" nach unten`}
-                      disabled={index === definition.fields.length - 1}
-                      onClick={() => moveField(field.key, 1)}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost ghost--icon"
-                      aria-label={`Feld „${field.label}" duplizieren`}
-                      onClick={() => duplicateField(field.key)}
-                    >
-                      ⧉
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost ghost--icon"
-                      aria-label={`Feld „${field.label}" löschen`}
-                      disabled={definition.fields.length <= 1}
-                      onClick={() => removeField(field.key)}
-                    >
-                      ✕
-                    </button>
-                  </div>
+                />
+              </Field>
 
-                  {openField === field.key ? (
-                    <div
-                      className="stack"
-                      style={{ padding: '0 0.7rem 0.7rem', borderTop: '1px solid var(--border)' }}
-                    >
-                      <div style={{ marginTop: '0.6rem' }}>
-                        <label htmlFor={`fb-label-${field.key}`}>Beschriftung</label>
-                        <input
-                          id={`fb-label-${field.key}`}
-                          type="text"
-                          value={field.label}
-                          maxLength={200}
-                          onChange={(e) => updateField(field.key, { label: e.target.value })}
+              {!hasContactRole || !hasConsentField ? (
+                <div className="stack stack--sm">
+                  {!hasContactRole ? (
+                    <Callout tone="warn">
+                      Ohne ein Feld mit Zuordnung „E-Mail des Kontakts“ (oder Telefon) kann niemand
+                      antworten — die Zuordnung findest du im Feld-Editor.
+                    </Callout>
+                  ) : null}
+                  {!hasConsentField ? (
+                    <Callout tone="warn">
+                      Ohne Zustimmungs-Feld fehlt der DSGVO-Einwilligungsnachweis für die
+                      Verarbeitung der Angaben.
+                    </Callout>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="stack stack--sm">
+                {definition.fields.map((field, index) => {
+                  const open = openField === field.key;
+                  return (
+                    <div key={field.key} className="fb-field">
+                      <div className="fb-field-head">
+                        <button
+                          type="button"
+                          className="fb-field-toggle"
+                          onClick={() => setOpenField(open ? null : field.key)}
+                          aria-expanded={open}
+                        >
+                          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
+                          <Badge tone="muted">{TYPE_LABELS[field.type]}</Badge>
+                          <span className="fb-field-label truncate">{field.label}</span>
+                          {field.required ? <Badge tone="accent">Pflicht</Badge> : null}
+                        </button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          iconOnly
+                          icon="chevronDown"
+                          className="fb-up"
+                          aria-label={`Feld „${field.label}“ nach oben`}
+                          disabled={index === 0}
+                          onClick={() => moveField(field.key, -1)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          iconOnly
+                          icon="chevronDown"
+                          aria-label={`Feld „${field.label}“ nach unten`}
+                          disabled={index === definition.fields.length - 1}
+                          onClick={() => moveField(field.key, 1)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          iconOnly
+                          icon="trash"
+                          aria-label={`Feld „${field.label}“ löschen`}
+                          disabled={definition.fields.length <= 1}
+                          onClick={() => removeField(field.key)}
                         />
                       </div>
-                      {field.type !== 'checkbox' && field.type !== 'consent' ? (
-                        <div>
-                          <label htmlFor={`fb-ph-${field.key}`}>Platzhalter (optional)</label>
-                          <input
-                            id={`fb-ph-${field.key}`}
-                            type="text"
-                            value={field.placeholder ?? ''}
-                            maxLength={200}
-                            onChange={(e) =>
-                              updateField(field.key, {
-                                placeholder: e.target.value || undefined,
-                              })
-                            }
-                          />
-                        </div>
-                      ) : null}
-                      {field.type === 'select' || field.type === 'radio' ? (
-                        <div>
-                          <label htmlFor={`fb-opt-${field.key}`}>
-                            Optionen (eine pro Zeile)
-                          </label>
-                          <textarea
-                            id={`fb-opt-${field.key}`}
-                            rows={4}
-                            value={(field.options ?? []).join('\n')}
-                            onChange={(e) =>
-                              updateField(field.key, {
-                                options: e.target.value
-                                  .split('\n')
-                                  .map((o) => o.trim())
-                                  .filter((o) => o.length > 0)
-                                  .slice(0, 50),
-                              })
-                            }
-                          />
-                        </div>
-                      ) : null}
-                      {field.type === 'consent' ? (
-                        <div>
-                          <label htmlFor={`fb-consent-${field.key}`}>Zustimmungstext</label>
-                          <textarea
-                            id={`fb-consent-${field.key}`}
-                            rows={3}
-                            maxLength={1000}
-                            value={field.consentText ?? ''}
-                            onChange={(e) =>
-                              updateField(field.key, { consentText: e.target.value })
-                            }
-                          />
-                        </div>
-                      ) : null}
-                      {field.type !== 'consent' ? (
-                        <label className="check-row" style={{ marginBottom: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={field.required}
-                            onChange={(e) => updateField(field.key, { required: e.target.checked })}
-                          />
-                          Pflichtfeld
-                        </label>
-                      ) : (
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                          Zustimmungs-Felder sind immer Pflicht (Einwilligungsnachweis).
-                        </p>
-                      )}
-                      {['text', 'email', 'phone', 'textarea'].includes(field.type) ? (
-                        <div>
-                          <label htmlFor={`fb-role-${field.key}`}>Zuordnung</label>
-                          <select
-                            id={`fb-role-${field.key}`}
-                            value={field.role ?? ''}
-                            onChange={(e) =>
-                              updateField(field.key, {
-                                role: (e.target.value || undefined) as FormField['role'],
-                              })
-                            }
-                          >
-                            {ROLE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                            Zugeordnete Felder füllen Kontakt und Ticket automatisch.
-                          </p>
+
+                      {open ? (
+                        <div className="stack fb-field-body">
+                          <Field label="Beschriftung" htmlFor={`fb-label-${field.key}`}>
+                            <input
+                              id={`fb-label-${field.key}`}
+                              type="text"
+                              value={field.label}
+                              maxLength={200}
+                              onChange={(e) => updateField(field.key, { label: e.target.value })}
+                            />
+                          </Field>
+                          {field.type !== 'checkbox' && field.type !== 'consent' ? (
+                            <Field label="Platzhalter (optional)" htmlFor={`fb-ph-${field.key}`}>
+                              <input
+                                id={`fb-ph-${field.key}`}
+                                type="text"
+                                value={field.placeholder ?? ''}
+                                maxLength={200}
+                                onChange={(e) =>
+                                  updateField(field.key, {
+                                    placeholder: e.target.value || undefined,
+                                  })
+                                }
+                              />
+                            </Field>
+                          ) : null}
+                          {field.type === 'select' || field.type === 'radio' ? (
+                            <Field label="Optionen (eine pro Zeile)" htmlFor={`fb-opt-${field.key}`}>
+                              <textarea
+                                id={`fb-opt-${field.key}`}
+                                rows={4}
+                                value={(field.options ?? []).join('\n')}
+                                onChange={(e) =>
+                                  updateField(field.key, {
+                                    options: e.target.value
+                                      .split('\n')
+                                      .map((o) => o.trim())
+                                      .filter((o) => o.length > 0)
+                                      .slice(0, 50),
+                                  })
+                                }
+                              />
+                            </Field>
+                          ) : null}
+                          {field.type === 'consent' ? (
+                            <Field
+                              label="Zustimmungstext"
+                              htmlFor={`fb-consent-${field.key}`}
+                              help="Zustimmungs-Felder sind immer Pflicht (Einwilligungsnachweis)."
+                            >
+                              <textarea
+                                id={`fb-consent-${field.key}`}
+                                rows={3}
+                                maxLength={1000}
+                                value={field.consentText ?? ''}
+                                onChange={(e) =>
+                                  updateField(field.key, { consentText: e.target.value })
+                                }
+                              />
+                            </Field>
+                          ) : null}
+                          {['text', 'email', 'phone', 'textarea'].includes(field.type) ? (
+                            <Field
+                              label="Zuordnung"
+                              htmlFor={`fb-role-${field.key}`}
+                              help="Zugeordnete Felder füllen Kontakt und Ticket automatisch."
+                            >
+                              <select
+                                id={`fb-role-${field.key}`}
+                                value={field.role ?? ''}
+                                onChange={(e) =>
+                                  updateField(field.key, {
+                                    role: (e.target.value || undefined) as FormField['role'],
+                                  })
+                                }
+                              >
+                                {ROLE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+                          ) : null}
+                          {field.type !== 'consent' ? (
+                            <SettingRow label="Pflichtfeld" htmlFor={`fb-req-${field.key}`}>
+                              <input
+                                id={`fb-req-${field.key}`}
+                                type="checkbox"
+                                className="switch"
+                                checked={field.required}
+                                onChange={(e) =>
+                                  updateField(field.key, { required: e.target.checked })
+                                }
+                              />
+                            </SettingRow>
+                          ) : null}
+                          <div className="row">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              icon="plus"
+                              disabled={fieldLimitReached}
+                              onClick={() => duplicateField(field.key)}
+                            >
+                              Feld duplizieren
+                            </Button>
+                          </div>
                         </div>
                       ) : null}
                     </div>
-                  ) : null}
-                </div>
-              ))}
+                  );
+                })}
+              </div>
 
-              <div style={{ marginTop: '0.9rem' }}>
+              <div className="stack stack--sm">
                 <span className="field-label">Feld hinzufügen</span>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.4rem' }}>
+                <div className="row">
                   {FIELD_PALETTE.map((entry) => (
-                    <button
+                    <Button
                       key={entry.type}
                       type="button"
-                      className="ghost"
+                      size="sm"
+                      icon="plus"
                       onClick={() => addField(entry.type)}
-                      disabled={definition.fields.length >= 30}
+                      disabled={fieldLimitReached}
                     >
-                      + {entry.label}
-                    </button>
+                      {entry.label}
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -458,8 +436,7 @@ export default function FormBuilder(props: {
           {/* ---------- design tab ---------- */}
           {tab === 'design' ? (
             <div className="stack">
-              <div>
-                <label htmlFor="fb-color">Primärfarbe</label>
+              <Field label="Primärfarbe" htmlFor="fb-color">
                 <input
                   id="fb-color"
                   type="color"
@@ -468,14 +445,13 @@ export default function FormBuilder(props: {
                     update({ ...definition, design: { ...definition.design, color: e.target.value } })
                   }
                 />
-                {whiteTextContrastLow ? (
-                  <p className="notice" style={{ fontSize: '0.8rem', marginTop: '0.3rem' }}>
-                    Helle Farbe erkannt — der Buttontext wird automatisch dunkel dargestellt.
-                  </p>
-                ) : null}
-              </div>
-              <div>
-                <label htmlFor="fb-radius">Eckenradius</label>
+              </Field>
+              {whiteTextContrastLow ? (
+                <Callout>
+                  Helle Farbe erkannt — der Buttontext wird automatisch dunkel dargestellt.
+                </Callout>
+              ) : null}
+              <Field label="Eckenradius" htmlFor="fb-radius">
                 <select
                   id="fb-radius"
                   value={definition.design.radius}
@@ -493,9 +469,8 @@ export default function FormBuilder(props: {
                   <option value="rounded">Abgerundet</option>
                   <option value="pill">Pill-Button</option>
                 </select>
-              </div>
-              <div>
-                <label htmlFor="fb-submit">Button-Text</label>
+              </Field>
+              <Field label="Button-Text" htmlFor="fb-submit">
                 <input
                   id="fb-submit"
                   type="text"
@@ -508,9 +483,8 @@ export default function FormBuilder(props: {
                     })
                   }
                 />
-              </div>
-              <div>
-                <label htmlFor="fb-title">Titel (optional)</label>
+              </Field>
+              <Field label="Titel (optional)" htmlFor="fb-title">
                 <input
                   id="fb-title"
                   type="text"
@@ -523,9 +497,8 @@ export default function FormBuilder(props: {
                     })
                   }
                 />
-              </div>
-              <div>
-                <label htmlFor="fb-intro">Einleitung (optional)</label>
+              </Field>
+              <Field label="Einleitung (optional)" htmlFor="fb-intro">
                 <textarea
                   id="fb-intro"
                   rows={3}
@@ -538,9 +511,8 @@ export default function FormBuilder(props: {
                     })
                   }
                 />
-              </div>
-              <div>
-                <label htmlFor="fb-success">Erfolgsmeldung</label>
+              </Field>
+              <Field label="Erfolgsmeldung" htmlFor="fb-success">
                 <textarea
                   id="fb-success"
                   rows={3}
@@ -553,9 +525,8 @@ export default function FormBuilder(props: {
                     })
                   }
                 />
-              </div>
-              <div>
-                <label htmlFor="fb-privacy">Datenschutz-URL (optional)</label>
+              </Field>
+              <Field label="Datenschutz-URL (optional)" htmlFor="fb-privacy">
                 <input
                   id="fb-privacy"
                   type="url"
@@ -566,42 +537,36 @@ export default function FormBuilder(props: {
                     update({ ...definition, privacyPolicyUrl: e.target.value || undefined })
                   }
                 />
-              </div>
+              </Field>
             </div>
           ) : null}
 
           {/* ---------- embed tab ---------- */}
           {tab === 'embed' ? (
-            <div className="stack">
-              <div>
-                <span className="field-label">Script-Embed (empfohlen)</span>
-                <code className="invite-link" style={{ whiteSpace: 'pre-wrap' }}>
-                  {scriptSnippet}
-                </code>
-                <p className="hint">
-                  Das div bestimmt die Position im Layout. Der Token ist öffentlich — er
-                  identifiziert nur das Formular und enthält keine Geheimnisse.
-                </p>
-              </div>
-              <div>
-                <span className="field-label">Gehosteter Link</span>
-                <code className="invite-link">{hostedUrl}</code>
-                <p className="hint">
-                  Für E-Mail-Signaturen, QR-Codes — und zum Testen:{' '}
-                  <a href={hostedUrl} target="_blank" rel="noopener">
-                    Formular testen ↗
-                  </a>
-                </p>
-              </div>
-              <div>
-                <span className="field-label">iframe (Fallback, feste Höhe)</span>
-                <code className="invite-link" style={{ whiteSpace: 'pre-wrap' }}>
-                  {iframeSnippet}
-                </code>
-              </div>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Testeinsendungen erscheinen als ganz normale Konversationen in der Inbox.
-                Speichern wirkt sofort auf eingebettete Formulare.
+            <div>
+              <Section
+                title="Script-Embed (empfohlen)"
+                help="Das div bestimmt die Position im Layout. Der Token ist öffentlich — er identifiziert nur das Formular und enthält keine Geheimnisse."
+              >
+                <CodeBlock>{scriptSnippet}</CodeBlock>
+              </Section>
+              <Section
+                title="Gehosteter Link"
+                help="Für E-Mail-Signaturen, QR-Codes und zum Testen."
+                actions={
+                  <Button href={hostedUrl} size="sm" icon="external" target="_blank" rel="noopener">
+                    Formular testen
+                  </Button>
+                }
+              >
+                <CodeBlock>{hostedUrl}</CodeBlock>
+              </Section>
+              <Section title="iframe (Fallback, feste Höhe)">
+                <CodeBlock>{iframeSnippet}</CodeBlock>
+              </Section>
+              <p className="muted small page-note">
+                Testeinsendungen erscheinen als ganz normale Konversationen in der Inbox. Speichern
+                wirkt sofort auf eingebettete Formulare.
               </p>
             </div>
           ) : null}
@@ -609,167 +574,111 @@ export default function FormBuilder(props: {
           {/* ---------- forwarding tab (owner-only, separate server action) ----------
                kept MOUNTED and only hidden: its inputs are uncontrolled, a
                conditional render would silently discard typed recipients on
-               every tab switch */}
-          <div style={{ display: tab === 'forwarding' ? 'block' : 'none' }}>
-            <div>
-              <form className="stack" action={updateFormNotificationSettings}>
-                <input type="hidden" name="org" value={props.orgId} />
-                <input type="hidden" name="formId" value={props.formId} />
-                <div>
-                  <label htmlFor="fb-emails">Weiterleitung an E-Mail-Adressen (eine pro Zeile, max. 10)</label>
-                  <textarea
-                    id="fb-emails"
-                    name="emails"
-                    rows={4}
-                    defaultValue={props.notificationEmails.join('\n')}
-                    disabled={!props.isOwner}
-                    placeholder={'info@firma.de\nvertrieb@firma.de'}
-                  />
-                  <p className="hint">
-                    Jede Einsendung wird als gestaltete E-Mail an diese Adressen geschickt.
-                    Antworten auf diese E-Mail gehen direkt an die einsendende Person (an Zendori
-                    vorbei) — nachverfolgbare Antworten kommen aus der Inbox.
-                  </p>
-                </div>
-                <div>
-                  <label htmlFor="fb-cap">Tageslimit für Einsendungen</label>
-                  <input
-                    id="fb-cap"
-                    name="dailyLimit"
-                    type="number"
-                    min={1}
-                    max={10000}
-                    defaultValue={props.dailyLimit}
-                    disabled={!props.isOwner}
-                  />
-                  <p className="hint">
-                    Schutz vor Spam-Fluten: darüber hinausgehende Einsendungen werden abgewiesen.
-                  </p>
-                </div>
-                <button className="primary" type="submit" disabled={!props.isOwner}>
-                  Weiterleitung speichern
-                </button>
-                {!props.isOwner ? (
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Nur Inhaber können Weiterleitung und Limits ändern.
-                  </p>
-                ) : null}
-              </form>
-
-            </div>
-          </div>
-
-          {/* ---------- save (definition + name) ---------- */}
-          {tab === 'fields' || tab === 'design' ? (
-            <form
-              action={saveFormDefinition}
-              style={{ marginTop: '1.1rem', display: 'flex', gap: '0.6rem', alignItems: 'center' }}
-              onSubmit={() => setDirty(false)}
-            >
+               every tab switch. Its submit button sits in the save bar and
+               reaches the form through the `form` attribute. */}
+          <div hidden={tab !== 'forwarding'}>
+            <form id="fb-forwarding" className="stack" action={updateFormNotificationSettings}>
               <input type="hidden" name="org" value={props.orgId} />
               <input type="hidden" name="formId" value={props.formId} />
-              <input type="hidden" name="name" value={name} />
-              <input type="hidden" name="definition" value={serialized} />
-              <button className="primary" type="submit">
-                Formular speichern
-              </button>
-              {dirty ? (
-                <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  Ungespeicherte Änderungen
-                </span>
+              {!props.isOwner ? (
+                <Callout>Nur Inhaber können Weiterleitung und Limits ändern.</Callout>
               ) : null}
-            </form>
-          ) : null}
-        </div>
-
-        {/* ---------- danger zone: always visible, DangerDeleteKb-style arm flow ---------- */}
-        {props.isOwner ? (
-          <div className="panel" style={{ borderColor: 'var(--danger-border)' }}>
-            <span className="field-label" style={{ color: 'var(--danger)' }}>
-              Formular löschen
-            </span>
-            <p className="hint" style={{ margin: '0.3rem 0 0.6rem' }}>
-              Löscht das Formular UND alle zugehörigen Konversationen unwiderruflich. Zum
-              Bestätigen den Formular-Namen eintippen.
-            </p>
-            <form
-              action={deleteForm}
-              style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}
-            >
-              <input type="hidden" name="org" value={props.orgId} />
-              <input type="hidden" name="formId" value={props.formId} />
-              <input
-                type="text"
-                placeholder={props.initialName}
-                value={confirmDelete}
-                onChange={(e) => setConfirmDelete(e.target.value)}
-                style={{ maxWidth: '16rem' }}
-              />
-              <button
-                className="danger"
-                type="submit"
-                disabled={confirmDelete !== props.initialName}
+              <Field
+                label="Weiterleitung an E-Mail-Adressen (eine pro Zeile, max. 10)"
+                htmlFor="fb-emails"
+                help="Jede Einsendung wird als gestaltete E-Mail an diese Adressen geschickt. Antworten auf diese E-Mail gehen direkt an die einsendende Person (an Zendori vorbei) — nachverfolgbare Antworten kommen aus der Inbox."
               >
-                Endgültig löschen
-              </button>
-              {confirmDelete.length > 0 ? (
-                <button className="ghost" type="button" onClick={() => setConfirmDelete('')}>
-                  Abbrechen
-                </button>
-              ) : null}
+                <textarea
+                  id="fb-emails"
+                  name="emails"
+                  rows={4}
+                  defaultValue={props.notificationEmails.join('\n')}
+                  disabled={!props.isOwner}
+                  placeholder={'info@firma.de\nvertrieb@firma.de'}
+                />
+              </Field>
+              <Field
+                label="Tageslimit für Einsendungen"
+                htmlFor="fb-cap"
+                help="Schutz vor Spam-Fluten: darüber hinausgehende Einsendungen werden abgewiesen."
+              >
+                <input
+                  id="fb-cap"
+                  name="dailyLimit"
+                  type="number"
+                  min={1}
+                  max={10000}
+                  defaultValue={props.dailyLimit}
+                  disabled={!props.isOwner}
+                />
+              </Field>
             </form>
           </div>
-        ) : null}
-      </div>
+        </div>
 
-      {/* ---------- preview column ---------- */}
-      <div style={{ flex: '1 1 24rem', minWidth: 'min(20rem, 100%)', position: 'sticky', top: '1rem' }}>
-        <div className="panel">
-          <div
-            style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.8rem' }}
+        {/* ---------- preview column ---------- */}
+        <div className="fb-preview">
+          <Section
+            title="Live-Vorschau"
+            actions={
+              <div className="row" role="group" aria-label="Ansicht der Vorschau">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={previewMobile ? 'ghost' : 'secondary'}
+                  aria-pressed={!previewMobile}
+                  onClick={() => setPreviewMobile(false)}
+                >
+                  Desktop
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={previewMobile ? 'secondary' : 'ghost'}
+                  aria-pressed={previewMobile}
+                  onClick={() => setPreviewMobile(true)}
+                >
+                  Mobil
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={previewSuccess ? 'secondary' : 'ghost'}
+                  aria-pressed={previewSuccess}
+                  onClick={() => setPreviewSuccess(!previewSuccess)}
+                >
+                  Erfolg
+                </Button>
+              </div>
+            }
           >
-            <span className="field-label" style={{ flex: 1 }}>
-              Live-Vorschau
-            </span>
-            <div className="tabbar" style={{ margin: 0 }}>
-              <button
-                type="button"
-                className={`tab${previewMobile ? '' : ' tab--active'}`}
-                onClick={() => setPreviewMobile(false)}
-              >
-                Desktop
-              </button>
-              <button
-                type="button"
-                className={`tab${previewMobile ? ' tab--active' : ''}`}
-                onClick={() => setPreviewMobile(true)}
-              >
-                Mobil
-              </button>
-              <button
-                type="button"
-                className={`tab${previewSuccess ? ' tab--active' : ''}`}
-                onClick={() => setPreviewSuccess(!previewSuccess)}
-              >
-                Erfolg
-              </button>
+            <div className={`fb-preview-frame${previewMobile ? ' fb-preview-frame--mobile' : ''}`}>
+              <div ref={previewHostRef} />
             </div>
-          </div>
-          <div
-            style={{
-              margin: '0 auto',
-              width: previewMobile ? '375px' : '100%',
-              maxWidth: '100%',
-              border: '1px dashed var(--border)',
-              borderRadius: '12px',
-              padding: '1rem',
-              background: '#ffffff',
-            }}
-          >
-            <div ref={previewHostRef} />
-          </div>
+          </Section>
         </div>
       </div>
-    </div>
+
+      {/* ---------- save bar: definition + name (fields/design), forwarding ---------- */}
+      {tab === 'fields' || tab === 'design' ? (
+        <form className="save-bar" action={saveFormDefinition} onSubmit={() => setDirty(false)}>
+          <input type="hidden" name="org" value={props.orgId} />
+          <input type="hidden" name="formId" value={props.formId} />
+          <input type="hidden" name="name" value={name} />
+          <input type="hidden" name="definition" value={serialized} />
+          <Button type="submit" variant="primary">
+            Formular speichern
+          </Button>
+          {dirty ? <span className="muted small">Ungespeicherte Änderungen</span> : null}
+        </form>
+      ) : null}
+      {tab === 'forwarding' ? (
+        <div className="save-bar">
+          <Button type="submit" form="fb-forwarding" variant="primary" disabled={!props.isOwner}>
+            Weiterleitung speichern
+          </Button>
+        </div>
+      ) : null}
+    </>
   );
 }

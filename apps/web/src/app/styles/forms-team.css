@@ -1,3 +1,159 @@
-/* Formulare und Team — page-specific styles (redesign stages 4-7).
+/* Formulare und Team — styles of this area only.
    Only what the UI kit (globals.css, section "UI kit") does not cover.
-   Imported after globals.css (app/layout.tsx); merged into it in stage 8. */
+   Imported after globals.css (app/layout.tsx). */
+
+/* ============================================================================
+   Formular-Builder (components/FormBuilder.tsx)
+   ========================================================================== */
+
+/* two columns: editor (tab content) on the left, live preview on the right */
+.fb-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-6) var(--space-8);
+}
+/* messages span both columns */
+.fb-body > .banners {
+  flex: 1 1 100%;
+  margin-bottom: 0;
+}
+.fb-editor {
+  flex: 1 1 26rem;
+  min-width: min(22rem, 100%);
+  max-width: 34rem;
+}
+.fb-preview {
+  flex: 1 1 24rem;
+  min-width: min(20rem, 100%);
+  max-width: 46rem;
+  position: sticky;
+  top: var(--space-4);
+}
+/* a colour swatch keeps its natural size inside the column-flex .field */
+.fb-editor input[type='color'] {
+  align-self: flex-start;
+  width: 64px;
+}
+
+/* one row per form field: toggle (type, label, required) + reorder/delete */
+.fb-field {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.fb-field-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px 4px 4px;
+}
+.fb-field-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.fb-field-toggle:hover {
+  background: var(--surface-sunken);
+}
+.fb-field-toggle svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.fb-field-label {
+  font-weight: 500;
+}
+/* "move up" reuses the chevronDown icon until the icon set has chevronUp */
+.fb-up svg {
+  transform: rotate(180deg);
+}
+.fb-field-body {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The embed always renders on the customer's own (light) page — the preview
+   ground stays white in the dark scheme as well. */
+.fb-preview-frame {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  background: #ffffff;
+}
+.fb-preview-frame--mobile {
+  width: 375px;
+}
+
+/* ============================================================================
+   Team (components/TeamMemberForm.tsx, settings/members)
+   ========================================================================== */
+
+/* e-mail + "Du" next to the avatar */
+.tm-member {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* chip toggle — a small three-state toggle (off → view → edit) */
+.tm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+.tm-chip:hover {
+  background: var(--surface-sunken);
+}
+.tm-chip--view,
+.tm-chip--view:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.tm-chip--edit,
+.tm-chip--edit:hover {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+/* channel checklist: the option group, scrolling after ~6 rows */
+.tm-channels {
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.tm-channels .option {
+  align-items: center;
+  padding: 10px 12px;
+}
+.tm-channels .option input {
+  margin-top: 0;
+}

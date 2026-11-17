@@ -4,18 +4,28 @@ import { formDefinitionSchema } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
+import { href } from '@/lib/href';
 import FormBuilder from '@/components/FormBuilder';
 import { canViewArea, isAdminRole } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
+import DismissibleBanners from '@/components/DismissibleBanners';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import Menu from '@/components/ui/Menu';
+import PageHeader from '@/components/ui/PageHeader';
+import DeleteFormDrawer from './DeleteFormDrawer';
 
-// The form builder (Phase 10): full-width editor with live preview.
+// The form builder (Phase 10): editor with live preview. The page supplies the
+// head; FormBuilder renders the tabs, the two columns and the save bar.
+// Deleting (owner-only) sits in the head's menu and opens a drawer
+// (?panel=delete) that asks for the form name.
 
 export default async function FormBuilderPage({
   params,
   searchParams,
 }: {
   params: Promise<{ formId: string }>;
-  searchParams: Promise<{ org?: string; error?: string; notice?: string }>;
+  searchParams: Promise<{ org?: string; error?: string; notice?: string; panel?: string }>;
 }) {
   const { formId } = await params;
   const query = await searchParams;
@@ -49,30 +59,43 @@ export default async function FormBuilderPage({
     ? form.notification_emails.filter((e): e is string => typeof e === 'string')
     : [];
 
+  const isOwner = isAdminRole(role);
+  const builderHref = href(`/settings/forms/${form.id}`, { org: orgId });
+  const deleting = isOwner && query.panel === 'delete';
+
   return (
-    <div className="shell shell--wide">
-      <div className="page-head">
-        <p style={{ marginBottom: '0.5rem' }}>
-          <Link href={`/settings/forms?org=${orgId}`} style={{ fontSize: '0.88rem' }}>
-            ← Alle Formulare
-          </Link>
-        </p>
-        <h1>{form.name}</h1>
-        <p>
-          Felder, Design und Einbettung dieses Formulars. Gespeicherte Änderungen wirken sofort
-          auf eingebettete Formulare.
-        </p>
-      </div>
-      {query.error ? (
-        <p className="error" style={{ marginBottom: '1.5rem' }}>
-          {query.error}
-        </p>
-      ) : null}
-      {query.notice ? (
-        <p className="notice" style={{ marginBottom: '1.5rem' }}>
-          {query.notice}
-        </p>
-      ) : null}
+    <div className="page">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Formulare', href: href('/settings/forms', { org: orgId }) },
+          { label: form.name },
+        ]}
+        title={form.name}
+        badges={
+          <Badge tone={form.is_active ? 'success' : 'muted'} dot>
+            {form.is_active ? 'Aktiv' : 'Inaktiv'}
+          </Badge>
+        }
+        subtitle="Gespeicherte Änderungen wirken sofort auf eingebettete Formulare."
+        actions={
+          <>
+            {isOwner ? (
+              <Menu>
+                <Link
+                  className="menu-item menu-item--danger"
+                  href={href(`/settings/forms/${form.id}`, { org: orgId, panel: 'delete' })}
+                  scroll={false}
+                >
+                  <span className="menu-label">Formular löschen</span>
+                </Link>
+              </Menu>
+            ) : null}
+            <Button href={`/f/${form.public_token}`} icon="external" target="_blank" rel="noopener">
+              Ansehen
+            </Button>
+          </>
+        }
+      />
       <FormBuilder
         orgId={orgId}
         formId={form.id}
@@ -81,9 +104,20 @@ export default async function FormBuilderPage({
         publicToken={form.public_token}
         notificationEmails={notificationEmails}
         dailyLimit={form.daily_submission_limit}
-        isOwner={isAdminRole(role)}
+        isOwner={isOwner}
         embedBase={appUrl().replace(/\/+$/, '')}
+        banners={
+          <DismissibleBanners error={query.error} notice={query.notice} />
+        }
       />
+      {deleting ? (
+        <DeleteFormDrawer
+          orgId={orgId}
+          formId={form.id}
+          formName={form.name}
+          closeHref={builderHref}
+        />
+      ) : null}
     </div>
   );
 }

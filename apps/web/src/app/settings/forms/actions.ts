@@ -21,8 +21,13 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function formsUrl(org: string, message?: { error?: string; notice?: string }): string {
+/** `panel` keeps a drawer of the list page open (e.g. 'new' after a failed create). */
+function formsUrl(
+  org: string,
+  message?: { error?: string; notice?: string; panel?: string }
+): string {
   const params = new URLSearchParams({ org });
+  if (message?.panel) params.set('panel', message.panel);
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
   return `/settings/forms?${params.toString()}`;
@@ -63,13 +68,21 @@ export async function createForm(formData: FormData): Promise<void> {
     org: formData.get('org'),
     name: textField(formData.get('name')),
   });
+  // The create form lives in the "Neues Formular" drawer (?panel=new): errors
+  // lead back INTO the drawer, success leaves it.
   if (!parsed.success) {
-    redirect(formsUrl(textField(formData.get('org')), { error: 'Bitte einen Namen mit 2–120 Zeichen angeben.' }));
+    redirect(
+      formsUrl(textField(formData.get('org')), {
+        error: 'Bitte einen Namen mit 2–120 Zeichen angeben.',
+        panel: 'new',
+      })
+    );
   }
   const { org, name } = parsed.data;
 
   // Builder forms share the 'form' quota kind with e-mail intake addresses
   // (product decision 2026-07-21); the 0017 trigger stays the race-safe backstop.
+  // No panel here: with the quota used up the list page offers no drawer.
   const quotaError = await checkChannelQuota(org, 'form');
   if (quotaError) redirect(formsUrl(org, { error: quotaError }));
 
@@ -79,7 +92,9 @@ export async function createForm(formData: FormData): Promise<void> {
   try {
     address = generateIntakeAddress(name, 'webform');
   } catch {
-    redirect(formsUrl(org, { error: 'E-Mail-Intake ist serverseitig nicht konfiguriert.' }));
+    redirect(
+      formsUrl(org, { error: 'E-Mail-Intake ist serverseitig nicht konfiguriert.', panel: 'new' })
+    );
   }
 
   const { data: channelRow, error: channelError } = await supabase
@@ -99,7 +114,7 @@ export async function createForm(formData: FormData): Promise<void> {
     .select('id')
     .single();
   if (channelError || !channelRow) {
-    redirect(formsUrl(org, { error: 'Formular konnte nicht angelegt werden.' }));
+    redirect(formsUrl(org, { error: 'Formular konnte nicht angelegt werden.', panel: 'new' }));
   }
   const channelId = (channelRow as { id: string }).id;
 
@@ -117,7 +132,7 @@ export async function createForm(formData: FormData): Promise<void> {
   if (formError || !formRow) {
     // no half state: a channel without a forms row would silently occupy quota
     await supabase.from('channels').delete().eq('id', channelId).eq('org_id', org);
-    redirect(formsUrl(org, { error: 'Formular konnte nicht angelegt werden.' }));
+    redirect(formsUrl(org, { error: 'Formular konnte nicht angelegt werden.', panel: 'new' }));
   }
 
   revalidatePath('/settings/forms');
