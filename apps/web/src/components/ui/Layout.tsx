@@ -123,3 +123,34 @@ export function Avatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md'
     </span>
   );
 }
+
+/**
+ * A row of key figures (billing, platform overviews).
+ *   <Stats><Stat label="Konversationen" value="1.204" note="diesen Monat" /></Stats>
+ */
+export function Stats({ children }: { children: ReactNode }) {
+  return <div className="stats">{children}</div>;
+}
+
+export function Stat({
+  label,
+  value,
+  note,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  note?: ReactNode;
+}) {
+  return (
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      {note ? <div className="stat-note">{note}</div> : null}
+    </div>
+  );
+}
+
+/** Addresses, embed codes, webhook URLs — anything the user copies verbatim. */
+export function CodeBlock({ children }: { children: ReactNode }) {
+  return <code className="code-block">{children}</code>;
+}

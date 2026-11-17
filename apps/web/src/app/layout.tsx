@@ -1,6 +1,15 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
+// page-specific styles of the redesign, one file per area (merged into globals.css in stage 8)
+import './styles/tickets.css';
+import './styles/channels.css';
+import './styles/agents.css';
+import './styles/knowledge.css';
+import './styles/forms-team.css';
+import './styles/settings.css';
+import './styles/admin.css';
+import './styles/inbox.css';
 import { inter } from '@/lib/fonts';
 import AppShell from '@/components/AppShell';
 
