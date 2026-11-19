@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./chat-theme": {
+      "types": "./src/chat/theme.ts",
+      "default": "./src/chat/theme.ts"
     }
   },
   "scripts": {

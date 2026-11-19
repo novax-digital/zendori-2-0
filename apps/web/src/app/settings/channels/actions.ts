@@ -5,8 +5,20 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import {
   emailInboundConfigSchema,
+  normalizeWidgetTheme,
+  sanitizeFontName,
+  sanitizeImageUrl,
   voiceChannelConfigSchema,
   whatsappTwilioConfigSchema,
+  WIDGET_AVATARS,
+  WIDGET_FONT_SIZES,
+  WIDGET_FONTS,
+  WIDGET_LAUNCHER_ICONS,
+  WIDGET_LAUNCHERS,
+  WIDGET_LIMITS,
+  WIDGET_POSITIONS,
+  WIDGET_RADII,
+  WIDGET_SCHEMES,
 } from '@zendori/channels';
 import { encryptSecret } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -121,32 +133,105 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
 
 // --- update widget theme ---------------------------------------------------------
 
-const updateWidgetThemeSchema = z.object({
-  org: z.uuid(),
-  channelId: z.uuid(),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  title: z.string().min(1).max(60),
-  greeting: z.string().min(1).max(300),
-});
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Bitte eine Farbe als Hex-Wert wählen (z. B. #4f46e5).');
+
+/**
+ * The designer's form (components/WidgetDesigner.tsx). Strict here so a typo
+ * gets a message instead of silently falling back; the stored theme is then
+ * normalized once more (normalizeWidgetTheme) — the single source of truth
+ * for bounds and defaults.
+ */
+const updateWidgetThemeSchema = z
+  .object({
+    org: z.uuid(),
+    channelId: z.uuid(),
+    title: z.string().trim().min(1, 'Bitte einen Titel angeben.').max(WIDGET_LIMITS.title),
+    subtitle: z.string().trim().max(WIDGET_LIMITS.subtitle),
+    greeting: z.string().trim().max(WIDGET_LIMITS.greeting),
+    placeholder: z.string().trim().max(WIDGET_LIMITS.placeholder),
+    quickReplies: z.array(z.string().trim().max(WIDGET_LIMITS.quickReply)).max(WIDGET_LIMITS.quickReplies),
+    color: hexColor,
+    gradient: z.boolean(),
+    color2: hexColor,
+    scheme: z.enum(WIDGET_SCHEMES),
+    font: z.enum(WIDGET_FONTS),
+    customFont: z.string().trim().max(WIDGET_LIMITS.customFont),
+    fontSize: z.enum(WIDGET_FONT_SIZES),
+    radius: z.enum(WIDGET_RADII),
+    position: z.enum(WIDGET_POSITIONS),
+    offsetX: z.coerce.number().int().min(WIDGET_LIMITS.offsetMin).max(WIDGET_LIMITS.offsetMax),
+    offsetY: z.coerce.number().int().min(WIDGET_LIMITS.offsetMin).max(WIDGET_LIMITS.offsetMax),
+    launcher: z.enum(WIDGET_LAUNCHERS),
+    launcherLabel: z.string().trim().max(WIDGET_LIMITS.launcherLabel),
+    launcherIcon: z.enum(WIDGET_LAUNCHER_ICONS),
+    teaser: z.boolean(),
+    teaserText: z.string().trim().max(WIDGET_LIMITS.teaserText),
+    avatar: z.enum(WIDGET_AVATARS),
+    avatarUrl: z.string().trim().max(WIDGET_LIMITS.avatarUrl),
+    branding: z.boolean(),
+  })
+  .superRefine((theme, ctx) => {
+    if (theme.font === 'custom' && !sanitizeFontName(theme.customFont)) {
+      ctx.addIssue({ code: 'custom', message: 'Bitte den Namen der eigenen Schrift angeben.' });
+    }
+    if (theme.avatar === 'image' && !sanitizeImageUrl(theme.avatarUrl)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Bitte für das Bild eine Adresse angeben, die mit https:// beginnt.',
+      });
+    }
+    if (theme.launcher === 'label' && !theme.launcherLabel) {
+      ctx.addIssue({ code: 'custom', message: 'Bitte einen Text für den Chat-Button angeben.' });
+    }
+    if (theme.teaser && !theme.teaserText) {
+      ctx.addIssue({ code: 'custom', message: 'Bitte einen Text für den Hinweis angeben.' });
+    }
+  });
 
 export async function updateWidgetTheme(formData: FormData): Promise<void> {
-  const errorText = 'Theme konnte nicht gespeichert werden.';
+  const errorText = 'Das Design konnte nicht gespeichert werden.';
   const parsed = updateWidgetThemeSchema.safeParse({
     org: formData.get('org'),
     channelId: formData.get('channelId'),
-    color: textField(formData.get('color')),
     title: textField(formData.get('title')),
+    subtitle: textField(formData.get('subtitle')),
     greeting: textField(formData.get('greeting')),
+    placeholder: textField(formData.get('placeholder')),
+    quickReplies: formData
+      .getAll('quickReply')
+      .map((value) => textField(value).trim())
+      .filter((value) => value.length > 0),
+    color: textField(formData.get('color')),
+    gradient: formData.get('gradient') === 'on',
+    color2: textField(formData.get('color2')),
+    scheme: textField(formData.get('scheme')),
+    font: textField(formData.get('font')),
+    customFont: textField(formData.get('customFont')),
+    fontSize: textField(formData.get('fontSize')),
+    radius: textField(formData.get('radius')),
+    position: textField(formData.get('position')),
+    offsetX: textField(formData.get('offsetX')),
+    offsetY: textField(formData.get('offsetY')),
+    launcher: textField(formData.get('launcher')),
+    launcherLabel: textField(formData.get('launcherLabel')),
+    launcherIcon: textField(formData.get('launcherIcon')),
+    teaser: formData.get('teaser') === 'on',
+    teaserText: textField(formData.get('teaserText')),
+    avatar: textField(formData.get('avatar')),
+    avatarUrl: textField(formData.get('avatarUrl')),
+    branding: formData.get('branding') === 'on',
   });
   if (!parsed.success) {
-    redirect(
-      channelsUrl(textField(formData.get('org')), {
-        error:
-          'Bitte Farbe (Hex, z. B. #4f46e5), Titel (max. 60 Zeichen) und Begrüßung (max. 300 Zeichen) angeben.',
-      }, returnToOf(formData))
-    );
+    // the first problem in plain words; field-level limits are also enforced in the form
+    const first = parsed.error.issues[0];
+    const message =
+      first && first.message && !/^(Invalid|Too|Expected)/.test(first.message)
+        ? first.message
+        : 'Bitte prüf die Angaben im Design (Texte, Farben und Abstände).';
+    redirect(channelsUrl(textField(formData.get('org')), { error: message }, returnToOf(formData)));
   }
-  const { org, channelId, color, title, greeting } = parsed.data;
+  const { org, channelId, ...themeInput } = parsed.data;
+  const theme = normalizeWidgetTheme(themeInput);
 
   const supabase = await createSupabaseServerClient();
 
@@ -162,7 +247,7 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
     redirect(channelsUrl(org, { error: errorText }, returnToOf(formData)));
   }
 
-  const nextConfig = { ...channel.config, theme: { color, title, greeting } };
+  const nextConfig = { ...channel.config, theme };
   const { data, error } = await supabase
     .from('channels')
     .update({ config: nextConfig })
@@ -174,7 +259,7 @@ export async function updateWidgetTheme(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: 'Theme gespeichert.' }, returnToOf(formData)));
+  redirect(channelsUrl(org, { notice: 'Design gespeichert.' }, returnToOf(formData)));
 }
 
 // --- create e-mail intake address ------------------------------------------------

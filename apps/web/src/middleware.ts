@@ -87,7 +87,8 @@ export const config = {
   // never a login redirect (an <audio> element cannot follow one meaningfully).
   // webmanifest: browsers fetch it without cookies, so it used to be redirected
   // to /login on every page load (a wasted auth check, and no manifest).
+  // woff2: /widget-fonts — loaded by the chat widget on customer websites.
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|wav|mp3|webmanifest)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|wav|mp3|webmanifest|woff2)$).*)',
   ],
 };

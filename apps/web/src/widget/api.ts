@@ -64,14 +64,9 @@ export async function fetchBootstrap(config: WidgetConfig): Promise<BootstrapRes
   const url = asString(data.realtime.url);
   const anonKey = asString(data.realtime.anonKey);
   if (!url || !anonKey) throw invalidResponse();
-  return {
-    theme: {
-      color: asString(data.theme.color),
-      title: asString(data.theme.title),
-      greeting: asString(data.theme.greeting),
-    },
-    realtime: { url, anonKey },
-  };
+  // The theme is passed on as received: main.ts runs it through
+  // normalizeWidgetTheme, the one place that knows every field and its bounds.
+  return { theme: data.theme, realtime: { url, anonKey } };
 }
 
 export async function createOrResumeSession(

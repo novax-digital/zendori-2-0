@@ -3,7 +3,7 @@
 // (own <form>s — must never nest inside another form) and small option lists.
 import type { AgentKind, AgentMode, Channel } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { DEFAULT_THEME, type WidgetTheme } from '@/lib/widget/session';
+import { normalizeWidgetTheme, type WidgetTheme } from '@zendori/channels/chat-theme';
 import Button from '@/components/ui/Button';
 import { setChannelActive, setChannelAgent } from './actions';
 
@@ -75,20 +75,16 @@ export function toWidgetChannelView(channel: Channel): WidgetChannelView | null 
   const config = channel.config as {
     widget?: unknown;
     public_token?: unknown;
-    theme?: { color?: unknown; title?: unknown; greeting?: unknown };
+    theme?: unknown;
     conversation_split_hours?: unknown;
   };
   if (config.widget !== true || typeof config.public_token !== 'string') return null;
-  const theme = config.theme ?? {};
   return {
     id: channel.id,
     name: channel.name,
     publicToken: config.public_token,
-    theme: {
-      color: typeof theme.color === 'string' ? theme.color : DEFAULT_THEME.color,
-      title: typeof theme.title === 'string' ? theme.title : DEFAULT_THEME.title,
-      greeting: typeof theme.greeting === 'string' ? theme.greeting : DEFAULT_THEME.greeting,
-    },
+    // complete and safe whatever is stored (old three-field themes included)
+    theme: normalizeWidgetTheme(config.theme),
     splitHours:
       typeof config.conversation_split_hours === 'number' ? config.conversation_split_hours : null,
     isActive: channel.is_active,

@@ -17,3 +17,4 @@ export * from './whatsapp/twilio/schemas.js';
 export * from './whatsapp/twilio/signature.js';
 export * from './whatsapp/twilio/normalize.js';
 export * from './whatsapp/twilio/send.js';
+export * from './chat/theme.js';

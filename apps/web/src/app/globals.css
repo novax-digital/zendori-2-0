@@ -977,6 +977,58 @@ input[type='checkbox'].switch:disabled {
   opacity: 0.5;
 }
 
+/* --- Segmented: 2-5 short alternatives side by side (components/ui/Segmented) --- */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+.segmented-item {
+  position: relative;
+  margin: 0;
+  font-weight: 400;
+}
+.segmented-item input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.segmented-item span,
+.segmented-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segmented-item span:hover,
+.segmented-button:hover {
+  color: var(--ink);
+}
+.segmented-item input:checked + span,
+.segmented-button--active {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.12);
+}
+.segmented-item input:focus-visible + span,
+.segmented-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 /* --- OptionGroup: 2-6 explained alternatives in one outlined group --- */
 .option-group {
   display: flex;

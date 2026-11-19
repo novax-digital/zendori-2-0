@@ -4,11 +4,9 @@
  * browser of arbitrary customer websites — keep it framework-free and lean.
  */
 
-export type WidgetTheme = {
-  color: string;
-  title: string;
-  greeting: string;
-};
+// The theme model is shared with the server and the designer:
+// packages/channels/src/chat/theme.ts (dependency-free on purpose).
+export type { WidgetTheme } from '@zendori/channels/chat-theme';
 
 export type RealtimeConfig = {
   url: string;
@@ -16,7 +14,8 @@ export type RealtimeConfig = {
 };
 
 export type BootstrapResponse = {
-  theme: WidgetTheme;
+  /** As stored for the channel — the widget normalizes it before use. */
+  theme: unknown;
   realtime: RealtimeConfig;
 };
 

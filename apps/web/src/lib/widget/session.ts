@@ -2,10 +2,17 @@ import 'server-only';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
+import {
+  DEFAULT_WIDGET_THEME,
+  normalizeWidgetTheme,
+  type WidgetTheme,
+} from '@zendori/channels/chat-theme';
 
 // --- types & defaults -----------------------------------------------------------
 
-export type WidgetTheme = { color: string; title: string; greeting: string };
+// The theme model (fields, defaults, normalization) lives in
+// packages/channels/src/chat/theme.ts — shared with the widget and the designer.
+export type { WidgetTheme };
 
 export type WidgetChannelConfig = {
   widget: true;
@@ -16,23 +23,17 @@ export type WidgetChannelConfig = {
   conversation_split_hours?: number;
 };
 
-export const DEFAULT_THEME: WidgetTheme = {
-  color: '#4f46e5',
-  title: 'Support',
-  greeting: 'Hallo! Wie können wir helfen?',
-};
+export const DEFAULT_THEME: WidgetTheme = DEFAULT_WIDGET_THEME;
 
-/** channels.config shape for widget channels — tolerates a missing/partial theme. */
+/**
+ * channels.config shape for widget channels. The theme is normalized, never
+ * rejected: a missing, partial, old (color/title/greeting only) or hand-edited
+ * theme always yields a complete, safe one.
+ */
 const widgetChannelConfigSchema = z.object({
   widget: z.literal(true),
   public_token: z.string().min(1),
-  theme: z
-    .object({
-      color: z.string().default(DEFAULT_THEME.color),
-      title: z.string().default(DEFAULT_THEME.title),
-      greeting: z.string().default(DEFAULT_THEME.greeting),
-    })
-    .default(DEFAULT_THEME),
+  theme: z.unknown().transform((value) => normalizeWidgetTheme(value)),
   conversation_split_hours: z.number().int().min(1).max(8760).optional(),
 });
 

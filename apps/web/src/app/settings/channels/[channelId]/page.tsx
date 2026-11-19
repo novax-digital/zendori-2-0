@@ -14,6 +14,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
 import { href } from '@/lib/href';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
+import WidgetDesigner from '@/components/WidgetDesigner';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import VoicePicker from '@/components/VoicePicker';
@@ -272,36 +273,13 @@ export default async function ChannelDetailPage({
 
   // --- tab "Design" / "Einbetten" (chat) ---------------------------------------
 
+  // The designer renders every look option with a live preview of the real
+  // widget; its controls carry the field names updateWidgetTheme reads.
   const designTab = widget ? (
-    <Section title="Widget-Design" help="So erscheint der Chat auf deiner Website.">
-      <form id={THEME_FORM_ID} className="stack" action={updateWidgetTheme}>
-        {formBase}
-        <Field label="Farbe" htmlFor="widget-color">
-          <input id="widget-color" name="color" type="color" defaultValue={widget.theme.color} />
-        </Field>
-        <Field label="Titel" htmlFor="widget-title">
-          <input
-            id="widget-title"
-            name="title"
-            type="text"
-            required
-            minLength={1}
-            maxLength={60}
-            defaultValue={widget.theme.title}
-          />
-        </Field>
-        <Field label="Begrüßung" htmlFor="widget-greeting">
-          <textarea
-            id="widget-greeting"
-            name="greeting"
-            rows={3}
-            required
-            maxLength={300}
-            defaultValue={widget.theme.greeting}
-          />
-        </Field>
-      </form>
-    </Section>
+    <form id={THEME_FORM_ID} action={updateWidgetTheme}>
+      {formBase}
+      <WidgetDesigner initial={widget.theme} />
+    </form>
   ) : null;
 
   const embedTab = widget ? (
@@ -489,11 +467,13 @@ export default async function ChannelDetailPage({
     ) : (
       <span className="muted small">Nur Inhaber können die Voice-Einstellungen ändern.</span>
     );
-  } else if (activeTab === 'design' && isOwner) {
-    saveBar = (
+  } else if (activeTab === 'design') {
+    saveBar = isOwner ? (
       <Button type="submit" form={THEME_FORM_ID} variant="primary">
-        Theme speichern
+        Design speichern
       </Button>
+    ) : (
+      <span className="muted small">Nur Inhaber können das Design ändern.</span>
     );
   }
 
@@ -569,7 +549,8 @@ export default async function ChannelDetailPage({
 
       <div className="page-body">
         <DismissibleBanners error={error} notice={notice} />
-        <div className="form-narrow">
+        {/* the design tab needs room for the preview next to the controls */}
+        <div className={activeTab === 'design' ? 'wd-page' : 'form-narrow'}>
           {activeTab === 'design'
             ? designTab
             : activeTab === 'embed'

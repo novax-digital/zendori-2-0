@@ -1,3 +1,4 @@
+import { normalizeWidgetTheme } from '@zendori/channels/chat-theme';
 import {
   createOrResumeSession,
   fetchBootstrap,
@@ -5,12 +6,15 @@ import {
   sendWidgetMessage,
   WidgetApiError,
 } from './api';
+import { loadWidgetFont } from './fonts';
 import { RealtimeConnection } from './realtime';
 import {
   clearStoredSession,
   isContactPromptDone,
+  isTeaserDismissed,
   loadStoredSession,
   markContactPromptDone,
+  markTeaserDismissed,
   saveStoredSession,
 } from './storage';
 import { createWidgetUi } from './ui';
@@ -53,6 +57,8 @@ const RETRY_DELAY_MAX_MS = 60_000;
 // this failsafe guarantees they never get stuck when no reply arrives (e.g.
 // human mode, paused agent, or a dropped broadcast).
 const TYPING_TIMEOUT_MS = 30_000;
+/** The invitation next to the launcher appears after the page had a moment to settle. */
+const TEASER_DELAY_MS = 4_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -156,7 +162,11 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
   let activeSession: { conversationId: string; secret: string } | null = null;
   let sessionFlight: Promise<SessionResponse | null> | null = null;
 
-  const ui = createWidgetUi(shadow, bootData.theme, {
+  // never trust the stored shape: old three-field themes, missing keys, edits
+  const theme = normalizeWidgetTheme(bootData.theme);
+  loadWidgetFont(theme, config.apiBase);
+
+  const ui = createWidgetUi(shadow, theme, {
     onSend: (content) => {
       enqueueMessage(content);
     },
@@ -164,7 +174,21 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     onContactSkip: () => {
       markContactPromptDone(config.token);
     },
+    onTeaserDismiss: () => {
+      markTeaserDismissed(config.token);
+    },
   });
+
+  // Invite ONCE per browser: not for returning chatters, and never a second
+  // time — showing it counts, whether the visitor then closes it, opens the
+  // chat or just moves on to the next page.
+  if (theme.teaser && !isTeaserDismissed(config.token) && !loadStoredSession(config.token)) {
+    window.setTimeout(() => {
+      if (ui.isOpen() || isTeaserDismissed(config.token)) return;
+      ui.showTeaser();
+      markTeaserDismissed(config.token);
+    }, TEASER_DELAY_MS);
+  }
 
   const realtime = new RealtimeConnection(bootData.realtime, handleReply);
 
@@ -195,7 +219,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     if (message.content_type !== 'text') return;
     if (renderedIds.has(message.id)) return;
     renderedIds.add(message.id);
-    ui.addAgentMessage(message.content);
+    ui.addAgentMessage(message.content, { at: message.created_at });
     void appendReplyImages(message.id);
   }
 
@@ -252,9 +276,9 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
       if (message.content_type !== 'text') continue;
       renderedIds.add(message.id);
       if (message.sender_type === 'contact') {
-        ui.addContactMessage(message.content).setState('sent');
+        ui.addContactMessage(message.content, message.created_at).setState('sent');
       } else {
-        ui.addAgentMessage(message.content, { notify: false });
+        ui.addAgentMessage(message.content, { notify: false, at: message.created_at });
         void appendReplyImages(message.id);
       }
     }

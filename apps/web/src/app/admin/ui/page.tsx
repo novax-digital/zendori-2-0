@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
+import Segmented from '@/components/ui/Segmented';
 import { Skeleton } from '@/components/ui/Skeleton';
 
 export const metadata = { title: 'UI-Bausteine' };
@@ -158,6 +159,18 @@ export default async function UiKitPage({
                     { value: 'intake_only', title: 'Reine Annahme', help: 'Der Agent nimmt das Anliegen auf und legt ein Ticket an.' },
                   ]}
                 />
+                <Field label="Fenster" htmlFor="kit-scheme-light" help="Segmented: zwei bis fünf kurze Alternativen nebeneinander. Braucht jede eine Erklärung, nimm die Auswahlgruppe darüber.">
+                  <Segmented
+                    label="Helles oder dunkles Fenster"
+                    name="kit-scheme"
+                    value="auto"
+                    options={[
+                      { value: 'light', label: 'Hell' },
+                      { value: 'dark', label: 'Dunkel' },
+                      { value: 'auto', label: 'Automatisch' },
+                    ]}
+                  />
+                </Field>
                 <div>
                   <SettingRow
                     label="Auch bei Unsicherheit eskalieren"

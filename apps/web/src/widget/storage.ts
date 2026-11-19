@@ -69,6 +69,19 @@ export function clearStoredSession(token: string): void {
   removeItem(sessionKey(token));
 }
 
+function teaserKey(token: string): string {
+  return `zendori-widget-${token}:teaser-dismissed`;
+}
+
+/** The teaser was shown (or closed) — do not invite again in this browser. */
+export function isTeaserDismissed(token: string): boolean {
+  return readItem(teaserKey(token)) === '1';
+}
+
+export function markTeaserDismissed(token: string): void {
+  writeItem(teaserKey(token), '1');
+}
+
 export function isContactPromptDone(token: string): boolean {
   return readItem(contactPromptKey(token)) === '1';
 }
