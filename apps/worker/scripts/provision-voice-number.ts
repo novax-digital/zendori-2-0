@@ -12,6 +12,9 @@
 //     --org <org-uuid> --name "Telefon Strong Energy" \
 //     --type local|mobile|national [--number +49…] [--dry-run]
 //
+// Since 0033 customer requests are fulfilled AUTOMATICALLY: Admin →
+// Telefonnummern → „Kostenpflichtig bestellen" hands them to the worker
+// (src/numbers/). This CLI stays as the operator fallback.
 // Fulfil a customer request from the Telefonnummern UI (0016) — org/type come
 // from the request row, the row is flipped provisioning→active on success:
 //   npx tsx --env-file=../../.env scripts/provision-voice-number.ts \
@@ -24,6 +27,7 @@
 // The one-time trunk + bundle setup is documented in docs/phase-9-voice.md.
 import { encryptSecret, createServiceRoleClient } from '@zendori/core';
 import { voiceChannelConfigSchema } from '@zendori/channels';
+import { addressSidForBundle } from '../src/numbers/twilio-address.js';
 
 const TWILIO_BASE = process.env.TWILIO_API_BASE?.replace(/\/+$/, '') || 'https://api.twilio.com';
 const XAI_BASE = process.env.XAI_API_BASE?.replace(/\/+$/, '') || 'https://api.x.ai';
@@ -236,6 +240,27 @@ async function registerAndActivate(d: RegisterDeps): Promise<{ xaiPhoneNumberId?
   return { xaiPhoneNumberId: xaiId };
 }
 
+/**
+ * --request status write. 'provisioning' also sets the 0033 claim marker
+ * (provision_started_at) so the worker's provisioner never picks the row up in
+ * parallel; 'requested' clears it. Pre-0033 databases lack the column
+ * (PGRST204/42703) — then the plain status write is enough (no worker poll yet).
+ */
+async function setRequestStatus(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  requestId: string,
+  status: 'provisioning' | 'requested'
+): Promise<void> {
+  const claim = { provision_started_at: status === 'provisioning' ? new Date().toISOString() : null };
+  const { error } = await supabase
+    .from('phone_numbers')
+    .update({ status, ...claim })
+    .eq('id', requestId);
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    await supabase.from('phone_numbers').update({ status }).eq('id', requestId);
+  }
+}
+
 async function main(): Promise<void> {
   // Deps shared by the full flow and the --complete-channel resume.
   const xaiKey = requireEnv('XAI_API_KEY');
@@ -326,8 +351,15 @@ async function main(): Promise<void> {
     }
     const row = data as { org_id: string; number_type: string; status: string };
     if (row.status === 'active') throw new Error(`request ${requestId} is already active`);
+    // Since 0033 the worker provisions approved requests itself (Admin →
+    // Telefonnummern). Never race it: a 'provisioning' row belongs to the worker.
+    if (row.status === 'provisioning') {
+      throw new Error(
+        `request ${requestId} is being provisioned automatically — use Admin → Telefonnummern`
+      );
+    }
     requestRow = row;
-    await supabase.from('phone_numbers').update({ status: 'provisioning' }).eq('id', requestId);
+    await setRequestStatus(supabase, requestId, 'provisioning');
   }
 
   const orgId = arg('--org') ?? requestRow?.org_id;
@@ -363,7 +395,7 @@ async function main(): Promise<void> {
   const voiceLimit = (limitRow as { max_count: number } | null)?.max_count;
   if (voiceLimit !== undefined && voiceLimit !== null && (voiceCount ?? 0) >= voiceLimit) {
     if (requestId) {
-      await supabase.from('phone_numbers').update({ status: 'requested' }).eq('id', requestId);
+      await setRequestStatus(supabase, requestId, 'requested');
     }
     throw new Error(
       `voice channel limit reached for org ${orgId} (${voiceCount}/${voiceLimit}) — raise the quota in Admin → Kunde first`
@@ -390,9 +422,24 @@ async function main(): Promise<void> {
   if (dryRun) return;
 
   // 2. buy + attach to the trunk (TrunkSid ⇒ all voice URLs are ignored).
+  //    Local numbers additionally need the bundle's (in-area) AddressSid.
+  const purchase = new URLSearchParams({
+    PhoneNumber: phoneNumber,
+    BundleSid: bundleSid,
+    TrunkSid: trunkSid,
+  });
+  if (type === 'local') {
+    purchase.set(
+      'AddressSid',
+      await addressSidForBundle(bundleSid, {
+        accountSid: requireEnv('TWILIO_ACCOUNT_SID'),
+        authToken: requireEnv('TWILIO_AUTH_TOKEN'),
+      })
+    );
+  }
   const bought = (await twilioRequest(
     `/2010-04-01/Accounts/${accountSid}/IncomingPhoneNumbers.json`,
-    new URLSearchParams({ PhoneNumber: phoneNumber, BundleSid: bundleSid, TrunkSid: trunkSid })
+    purchase
   )) as { sid: string; phone_number: string };
   console.log(`Bought ${bought.phone_number} (${bought.sid}), attached to trunk ${trunkSid}`);
   void trunkingRequest; // trunk attach via TrunkSid on purchase; helper kept for per-number trunks
@@ -450,7 +497,7 @@ async function main(): Promise<void> {
       `  … --org ${orgId} --name "${name}" --type ${type} --number ${bought.phone_number}`
     );
     if (requestId) {
-      await supabase.from('phone_numbers').update({ status: 'requested' }).eq('id', requestId);
+      await setRequestStatus(supabase, requestId, 'requested');
       console.error(`  Request ${requestId} reset to 'requested'.`);
     }
     throw err;

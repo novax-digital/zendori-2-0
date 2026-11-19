@@ -40,9 +40,12 @@ const TYPE_LABELS: Record<PhoneNumberType, string> = {
   national: 'National (032)',
 };
 
+// 'failed' (0033) is an operator-internal state — the admin retries it, so the
+// customer just sees the setup still in progress (no internal error text).
 const STATUS_LABELS: Record<PhoneNumberStatus, string> = {
   requested: 'Angefragt',
   provisioning: 'Wird eingerichtet',
+  failed: 'Wird eingerichtet',
   active: 'Aktiv',
   released: 'Gekündigt',
 };
@@ -50,6 +53,7 @@ const STATUS_LABELS: Record<PhoneNumberStatus, string> = {
 const STATUS_TONE: Record<PhoneNumberStatus, BadgeTone> = {
   requested: 'warn',
   provisioning: 'warn',
+  failed: 'warn',
   active: 'success',
   released: 'danger',
 };

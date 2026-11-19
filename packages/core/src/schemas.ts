@@ -95,12 +95,38 @@ export function sanitizeIntakeFields(value: unknown): IntakeField[] {
 export const channelKindSchema = z.enum(['form', 'email', 'whatsapp', 'voice', 'chat', 'test']);
 export type ChannelKind = z.infer<typeof channelKindSchema>;
 
-/** Phone number inventory/request lifecycle (0016). */
-export const phoneNumberStatusSchema = z.enum(['requested', 'provisioning', 'active', 'released']);
+/** Phone number inventory/request lifecycle (0016; 'failed' since 0033 auto-provisioning). */
+export const phoneNumberStatusSchema = z.enum([
+  'requested',
+  'provisioning',
+  'failed',
+  'active',
+  'released',
+]);
 export type PhoneNumberStatus = z.infer<typeof phoneNumberStatusSchema>;
 
 export const phoneNumberTypeSchema = z.enum(['local', 'mobile', 'national']);
 export type PhoneNumberType = z.infer<typeof phoneNumberTypeSchema>;
+
+/**
+ * Area code for automatic provisioning (0033 phone_numbers.area_code): German
+ * area code WITHOUT the trunk zero. Accepts "0511", "511", "+49 511", "0049511".
+ * Empty → null (no restriction); anything else unparsable → 'invalid'.
+ */
+export function normalizeAreaCode(raw: string | null | undefined): string | null | 'invalid' {
+  let digits = (raw ?? '').replace(/[\s\-/()]/g, '');
+  if (digits.length === 0) return null;
+  if (digits.startsWith('+49')) digits = digits.slice(3);
+  else if (digits.startsWith('0049')) digits = digits.slice(4);
+  if (digits.startsWith('0')) digits = digits.slice(1);
+  return /^[1-9]\d{1,4}$/.test(digits) ? digits : 'invalid';
+}
+
+/** Best-effort area code from a customer's free-text wish ("Hannover (0511)" → "511"). */
+export function areaCodeFromWish(wish: string | null | undefined): string | null {
+  const match = /(?:^|[^\d+])0([1-9]\d{1,4})(?!\d)/.exec(wish ?? '');
+  return match?.[1] ?? null;
+}
 
 export const kbSourceTypeSchema = z.enum(['url', 'file', 'text']);
 export type KbSourceType = z.infer<typeof kbSourceTypeSchema>;

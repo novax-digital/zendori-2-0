@@ -23,6 +23,7 @@ import {
   startScan,
 } from './scan.js';
 import { startVoiceDispatch } from './voice/dispatch.js';
+import { startNumberProvisioner } from './numbers/runner.js';
 import {
   POST_CALL_QUEUE,
   POST_CALL_RETRY_LIMIT,
@@ -271,6 +272,8 @@ async function main(): Promise<void> {
   const stopScan = startScan(boss, logger);
   // Voice dispatch: Realtime-subscribed call intake + WS sessions (Phase 9).
   const voice = startVoiceDispatch(logger);
+  // Number provisioning (0033): admin-approved phone_numbers rows → Twilio/xAI.
+  const numbers = startNumberProvisioner(logger);
 
   // initial heartbeat so the container reports healthy right after boot
   await writeHeartbeat();
@@ -279,11 +282,18 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
     stopScan();
-    void voice
-      .stop()
-      .catch((err: unknown) =>
-        logger.error({ err: toErrorInfo(err) }, 'error during voice dispatch stop')
-      )
+    void Promise.all([
+      voice
+        .stop()
+        .catch((err: unknown) =>
+          logger.error({ err: toErrorInfo(err) }, 'error during voice dispatch stop')
+        ),
+      numbers
+        .stop()
+        .catch((err: unknown) =>
+          logger.error({ err: toErrorInfo(err) }, 'error during number provisioner stop')
+        ),
+    ])
       .then(() => boss.stop())
       .catch((err: unknown) => logger.error({ err: toErrorInfo(err) }, 'error during pg-boss stop'))
       .finally(() => process.exit(0));

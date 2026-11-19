@@ -151,9 +151,11 @@ englischer Aussprache gesprochen — mit expliziter Beispielliste im Prompt.
 
 - **Kunde** (Settings → Telefonnummern): sieht seine Nummern, beantragt neue
   (Typ/Wunschregion/Notiz, Owner-only per RLS), zieht offene Anfragen zurück.
-- **Operator** (Admin → Nummern): offene Anfragen mit fertigem CLI-Kommando; erfüllen mit
-  `provision-voice-number.ts --request <id> --name "…"` — kauft/registriert und setzt die
-  Anfrage auf `active` (inkl. Inventar-Feldern e164/SIDs/channel_id).
+- **Operator** (Admin → Telefonnummern, seit 0033 automatisch): pro offener Anfrage
+  Kanalname / Nummerntyp / Vorwahl (vorbelegt aus dem Kundenwunsch) und
+  **„Kostenpflichtig bestellen"** — der Worker kauft, verbindet, registriert und setzt die
+  Anfrage auf `active` (inkl. e164/SIDs/channel_id). **„Anfrage ablehnen"** entfernt eine
+  Anfrage, solange nichts gekauft ist. Details unten unter „Nummern-Provisionierung".
 - **Kontingente** (Admin → Kunde): max. Kanäle je Kanalart (form/email/whatsapp/voice/
   chat/test); leer = unbegrenzt, 0 = gesperrt. App-seitige Vorprüfung + BEFORE-INSERT-
   Trigger als Backstop.
@@ -184,7 +186,40 @@ werden jetzt geloggt (`voice ws closed`).
    from-transferee die Nummer des ANRUFERS. Kostenhinweis: das transferierte
    Bein ist eine normale Twilio-Outbound-Minute.
 
-**Pro Kunde (CLI):**
+**Pro Kunde (automatisch, 0033):** Admin → Telefonnummern → „Kostenpflichtig bestellen".
+Die Server-Action setzt die Anfrage nur auf `provisioning` (nichts Langlaufendes auf
+Vercel); der Worker (`apps/worker/src/numbers/`, Poll alle 5 s, eine Anfrage nach der
+anderen, atomarer Claim über `provision_started_at`) führt die Schritte aus:
+
+1. Kontingent-Vorprüfung (`org_channel_limits`, voice) — nur solange nichts gekauft ist
+2. Twilio: erst Nummer mit FriendlyName `zendori-pn-<id>` suchen (Idempotenz nach
+   Absturz zwischen Kauf und Speichern), sonst DE-Suche des Typs (mit Vorwahl:
+   `Contains=+49<vorwahl>` + Präfix-Filter, live geprüft 2026-11-13) und Kauf mit
+   typ-passendem Bundle, `TrunkSid`, bei Ortsnetz `AddressSid` aus dem Bundle.
+   e164/SIDs werden **sofort** auf der Anfrage gespeichert.
+3. Voice-Kanal anlegen (Entwurf, inaktiv; Name = Kanalname, Default „Telefon <Org>") —
+   ein vorhandener Voice-Kanal der Org mit derselben Nummer wird wiederverwendet.
+4. xAI: evtl. alte Registrierung der Nummer löschen (das Secret gibt es nur einmal),
+   neu registrieren (`byo_trunk`, Webhook `/api/hooks/voice?channel=…`), Secret
+   verschlüsselt in die Channel-Config, Kanal aktivieren.
+5. Anfrage → `active`.
+
+Fehler ⇒ `failed` mit deutscher Fehlermeldung im Admin (nie Secrets; Kunde sieht weiter
+„Wird eingerichtet"). **„Erneut versuchen"** setzt an der Stelle fort — eine gekaufte
+Nummer / ein angelegter Kanal wird nie doppelt erzeugt. Ohne Kauf lassen sich Typ und
+Vorwahl dabei korrigieren. Worker-Neustart mitten im Lauf ⇒ beim Boot `failed`
+(„Unterbrochen …"), dann ebenfalls „Erneut versuchen".
+
+**Worker-Env auf dem VPS** (`/opt/zendori-worker/.env`): `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, `TWILIO_VOICE_TRUNK_SID`, `TWILIO_BUNDLE_SID_LOCAL` / `_MOBILE`
+(/ `_NATIONAL`), optional `TWILIO_ADDRESS_SID_LOCAL`, `XAI_API_KEY`,
+`MASTER_ENCRYPTION_KEY` und `APP_URL=https://app.zendori.ai` (https Pflicht — xAI
+registriert die Webhook-URL fest pro Nummer). Fehlt etwas, schlägt die bestellte Anfrage
+mit den Variablennamen fehl; der Worker selbst läuft weiter.
+
+**Fallback (CLI, Operator):** das Script bleibt für Sonderfälle (z. B. Nummer ohne
+Kundenanfrage). Eine Anfrage, die der Worker gerade bearbeitet (`provisioning`), lehnt es
+ab; mit `--request` beansprucht es die Anfrage wie der Worker.
 
 ```bash
 cd apps/worker
@@ -200,11 +235,6 @@ APP_URL=https://app.zendori.ai npx tsx --env-file=../../.env scripts/provision-v
 #     scripts/provision-voice-number.ts --complete-channel <channel-uuid>
 ```
 
-Das Script: DE-Nummer des gewählten Typs suchen/kaufen (typ-passendes Bundle + Trunk) →
-Voice-Channel anlegen →
-Nummer bei xAI registrieren (`POST /v2/phone-numbers`, origin `byo_trunk`, Webhook-URL
-`/api/hooks/voice?channel=…`) → das **einmalig** zurückgegebene `dispatch_signing_secret`
-sofort verschlüsselt in die Channel-Config schreiben → Kanal aktivieren.
 Der Kunde richtet nur eine Rufumleitung auf die Twilio-Nummer ein (keine Portierung).
 
 ## Live-Gate (was NUR mit echtem xAI-Key + Testanruf verifizierbar ist)
