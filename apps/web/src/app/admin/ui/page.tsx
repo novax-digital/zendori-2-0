@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
+import { Skeleton } from '@/components/ui/Skeleton';
 
 export const metadata = { title: 'UI-Bausteine' };
 
@@ -187,6 +188,20 @@ export default async function UiKitPage({
               <div className="row">
                 <button type="button" role="switch" aria-checked="true" aria-label="Kanal aktiv" className="switch-btn" />
                 <span className="muted small">Schalter als Absende-Button (ein Klick schaltet um)</span>
+              </div>
+            </Section>
+
+            <Section
+              title="Lade-Zustand"
+              help="Während eine Seite ihre Daten lädt, steht an ihrer Stelle ein Skelett in derselben Form (Kopf, Tabelle, Abschnitte, Inbox-Spalten). Es wird je Route automatisch gewählt; eigene Balken nur dort, wo ein Teil einer Seite nachlädt."
+            >
+              <div className="cell-main">
+                <Skeleton shape="icon" />
+                <div className="grow skeleton-lines">
+                  <Skeleton width="lg" />
+                  <Skeleton width="sm" />
+                </div>
+                <Skeleton shape="button" />
               </div>
             </Section>
 
