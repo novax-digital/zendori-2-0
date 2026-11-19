@@ -42,14 +42,29 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  // refresh the session; do not run logic between client creation and getUser()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Refresh the session; do not run logic between client creation and this
+  // check. getClaims() refreshes an expired session like getUser() does, but
+  // verifies the access token's signature locally against the project's public
+  // signing keys (JWKS cached in memory) — no auth-server round trip on every
+  // navigation. When it yields nothing we still ask the auth server before
+  // redirecting, so a verification hiccup never bounces a signed-in user.
+  let signedIn = false;
+  try {
+    const { data } = await supabase.auth.getClaims();
+    signedIn = typeof data?.claims?.sub === 'string' && data.claims.sub !== '';
+  } catch {
+    // fall through to the auth server
+  }
+  if (!signedIn) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    signedIn = Boolean(user);
+  }
 
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
 
-  if (!user && !isPublic) {
+  if (!signedIn && !isPublic) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = '/login';
     loginUrl.searchParams.set('next', path);
@@ -62,7 +77,9 @@ export async function middleware(request: NextRequest) {
 export const config = {
   // wav/mp3: static voice-preview samples under /voice-samples — public assets,
   // never a login redirect (an <audio> element cannot follow one meaningfully).
+  // webmanifest: browsers fetch it without cookies, so it used to be redirected
+  // to /login on every page load (a wasted auth check, and no manifest).
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|wav|mp3)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|wav|mp3|webmanifest)$).*)',
   ],
 };

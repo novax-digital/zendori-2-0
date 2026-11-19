@@ -1,4 +1,5 @@
 import 'server-only';
+import { cache } from 'react';
 import { redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
@@ -9,8 +10,11 @@ export type PlatformAdmin = { userId: string; email: string };
  * signed in, or to / when the user is not a platform admin. The self-select RLS
  * policy on platform_admins lets a user read only their own row; a missing row
  * (or the table not existing yet, pre-migration) fails closed → bounced to /.
+ *
+ * React cache(): the /admin layout and the page below it share one lookup per
+ * request. Stays on auth.getUser() — the same guard protects the admin actions.
  */
-export async function requirePlatformAdmin(): Promise<PlatformAdmin> {
+export const requirePlatformAdmin = cache(async (): Promise<PlatformAdmin> => {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -25,4 +29,4 @@ export async function requirePlatformAdmin(): Promise<PlatformAdmin> {
   if (!data) redirect('/');
 
   return { userId: user.id, email: user.email ?? '' };
-}
+});

@@ -12,7 +12,6 @@ import { href } from '@/lib/href';
 import { formatRelativeTime } from '@/lib/inbox/format';
 import { listChannels, listMembers } from '@/lib/inbox/queries';
 import { requireActiveOrg } from '@/lib/org';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   PRIORITY_LABELS,
   PRIORITY_TONE,
@@ -67,19 +66,14 @@ export default async function TicketsPage({
   }>;
 }) {
   const params = await searchParams;
-  const { orgId, access } = await requireActiveOrg(params.org);
+  const { orgId, access, userId } = await requireActiveOrg(params.org);
   if (!canViewArea(access, 'tickets')) return <NoAccessPanel title="Tickets" />;
   const scope = allowedChannelIds(access);
   const filters = parseFilters(params);
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
   const [tickets, counts, channels, members] = await Promise.all([
-    listTickets(orgId, filters, user?.id ?? null, scope),
-    countTicketsByStatus(orgId, filters, user?.id ?? null, scope),
+    listTickets(orgId, filters, userId, scope),
+    countTicketsByStatus(orgId, filters, userId, scope),
     listChannels(orgId, scope),
     listMembers(orgId),
   ]);

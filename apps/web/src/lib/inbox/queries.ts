@@ -299,14 +299,45 @@ export async function getConversationDetail(
 ): Promise<ConversationDetail | null> {
   const supabase = await createSupabaseServerClient();
 
-  const { data: conversationData } = await supabase
-    .from('conversations')
-    .select(
-      '*, channel:channels(id, name, type, agent:agents(id, name, confidence_threshold, is_active)), contact:contacts(*)'
-    )
-    .eq('org_id', orgId)
-    .eq('id', conversationId)
-    .maybeSingle();
+  // The conversation and its thread load in ONE round trip instead of two. The
+  // thread queries are keyed by the conversation id and guarded by RLS; when
+  // the conversation is missing or outside the member's channel scope, their
+  // results are dropped by the early returns below.
+  const [
+    { data: conversationData },
+    { data: messageData },
+    { data: noteData },
+    { data: draftData },
+  ] = await Promise.all([
+    supabase
+      .from('conversations')
+      .select(
+        '*, channel:channels(id, name, type, agent:agents(id, name, confidence_threshold, is_active)), contact:contacts(*)'
+      )
+      .eq('org_id', orgId)
+      .eq('id', conversationId)
+      .maybeSingle(),
+    supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('notes')
+      .select('id, content, author_id, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true }),
+    // newest pending AI draft (the unique index guarantees at most one pending)
+    supabase
+      .from('ai_drafts')
+      .select('id, content, confidence, sources, model, created_at')
+      .eq('org_id', orgId)
+      .eq('conversation_id', conversationId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
   if (!conversationData) return null;
   if (
     allowedChannelIds !== null &&
@@ -329,29 +360,6 @@ export async function getConversationDetail(
   const channel = channelRow
     ? { id: channelRow.id, name: channelRow.name, type: channelRow.type }
     : null;
-
-  const [{ data: messageData }, { data: noteData }, { data: draftData }] = await Promise.all([
-    supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('notes')
-      .select('id, content, author_id, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true }),
-    // newest pending AI draft (the unique index guarantees at most one pending)
-    supabase
-      .from('ai_drafts')
-      .select('id, content, confidence, sources, model, created_at')
-      .eq('org_id', orgId)
-      .eq('conversation_id', conversationId)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
 
   const messageRows = (messageData ?? []) as unknown as Message[];
   const noteRows = (noteData ?? []) as unknown as NoteRow[];

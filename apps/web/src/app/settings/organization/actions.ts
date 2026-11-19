@@ -27,7 +27,7 @@ const renameSchema = z.object({
  */
 export async function updateOrganizationName(formData: FormData): Promise<void> {
   const raw = typeof formData.get('org') === 'string' ? (formData.get('org') as string) : '';
-  const { orgId, role } = await requireActiveOrg(raw);
+  const { orgId, role } = await requireActiveOrg(raw, { strict: true });
   if (!isAdminRole(role)) {
     redirect(orgUrl(orgId, { error: 'Nur Inhaber und Admins können die Organisation ändern.' }));
   }

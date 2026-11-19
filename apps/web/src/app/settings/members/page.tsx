@@ -51,7 +51,7 @@ export default async function MembersPage({
   }>;
 }) {
   const { org, error, notice, panel, member } = await searchParams;
-  const { orgId, role, orgs } = await requireActiveOrg(org);
+  const { orgId, role, orgs, userId: selfId } = await requireActiveOrg(org);
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const manager = isAdminRole(role);
   const supabase = await createSupabaseServerClient();
@@ -72,11 +72,6 @@ export default async function MembersPage({
     memberData = retry.data as unknown as typeof memberData;
   }
   const members = (memberData ?? []) as MemberRow[];
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const selfId = user?.id ?? '';
 
   // e-mails + invite status via service role (key never reaches the client)
   const admin = createSupabaseAdminClient();

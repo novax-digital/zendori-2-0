@@ -51,7 +51,7 @@ function membersUrl(
 
 /** The caller must be owner/admin of the org; returns caller context + admin client. */
 async function requireTeamManager(requestedOrgId: string) {
-  const { orgId, role } = await requireActiveOrg(requestedOrgId);
+  const { orgId, role } = await requireActiveOrg(requestedOrgId, { strict: true });
   if (!isAdminRole(role)) {
     redirect(membersUrl(orgId, { error: 'Nur Inhaber und Admins verwalten das Team.' }));
   }

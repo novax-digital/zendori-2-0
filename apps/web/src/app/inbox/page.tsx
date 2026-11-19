@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { HandoffReason } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getSessionUser } from '@/lib/supabase/session';
 import {
   getConversationDetail,
   getHubspotSidebarInfo,
@@ -78,9 +79,7 @@ async function resolveHandoffHint(orgId: string, conversationId: string): Promis
 
   const row = data as { reason: string; triggered_by: string | null };
   if (row.reason === 'manual' && row.triggered_by) {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (user?.id === row.triggered_by) return 'Bot pausiert — von Ihnen übernommen.';
   }
   // defensive lookup: the reason column could grow values this UI predates
