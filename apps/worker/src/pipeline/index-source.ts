@@ -689,7 +689,7 @@ async function fetchText(target: string): Promise<string> {
  * redirects manually so a 3xx to an internal address is re-validated instead of
  * silently followed by the fetch runtime.
  */
-async function safeFetch(target: string): Promise<Response> {
+export async function safeFetch(target: string): Promise<Response> {
   let currentUrl = target;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const url = await assertPublicUrl(currentUrl);

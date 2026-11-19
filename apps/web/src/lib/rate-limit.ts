@@ -16,7 +16,13 @@ export type RateLimitName =
   | 'widget-attachment-ip'
   | 'form-bootstrap-ip'
   | 'form-submit-ip'
-  | 'form-submit-token';
+  | 'form-submit-token'
+  | 'demo-bootstrap-ip'
+  | 'demo-request-ip'
+  | 'demo-request-email'
+  | 'demo-status-ip'
+  | 'demo-verify-ip'
+  | 'demo-resend-ip';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -72,6 +78,42 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(30, '1 m'),
       prefix: 'zendori:rl:form-submit-token',
+    }),
+    // Demo-Anruf (0032): every request sends a paid verification code and every
+    // verified one costs real call minutes, so the limits are tight. The DB
+    // caps in lib/demo/server.ts are the fail-closed backstop when Upstash is
+    // unavailable.
+    'demo-bootstrap-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(30, '1 m'),
+      prefix: 'zendori:rl:demo-bootstrap-ip',
+    }),
+    'demo-request-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(5, '1 h'),
+      prefix: 'zendori:rl:demo-request-ip',
+    }),
+    'demo-request-email': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(3, '24 h'),
+      prefix: 'zendori:rl:demo-request-email',
+    }),
+    // the embed polls every 4 s per open tab
+    'demo-status-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(60, '1 m'),
+      prefix: 'zendori:rl:demo-status-ip',
+    }),
+    // code entry: Twilio allows 5 checks per code, the row 5 attempts in total
+    'demo-verify-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(20, '10 m'),
+      prefix: 'zendori:rl:demo-verify-ip',
+    }),
+    'demo-resend-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(6, '10 m'),
+      prefix: 'zendori:rl:demo-resend-ip',
     }),
   };
   return limiters;

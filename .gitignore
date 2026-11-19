@@ -8,6 +8,7 @@ dist/
 *.tsbuildinfo
 apps/web/public/widget.js
 apps/web/public/form.js
+apps/web/public/demo.js
 
 # env & secrets — never commit
 .env
@@ -30,6 +31,9 @@ old-bridge/
 old-n8n-flows/
 # reference marketing site (separate Astro project, design reference only)
 Zendori-Website/
+# Zauberanruf reference app (Demo-Anruf reference, docs/demo-call.md): contains
+# a real .env and a database backup — never commit
+Referenz-App/
 
 # supabase local dev
 supabase/.temp/

@@ -1877,3 +1877,76 @@ describe.skipIf(enabled)('RLS (skipped)', () => {
     expect(enabled).toBe(false);
   });
 });
+
+describe.skipIf(!enabled)('RLS: demo_calls (0032) — service role only', () => {
+  let admin: SupabaseClient;
+  let user: SupabaseClient;
+  let anon: SupabaseClient;
+  let userId: string;
+  let demoId: string;
+  const email = `demo-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    userId = created.data.user!.id;
+    user = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await user.auth.signInWithPassword({ email, password })).error).toBeNull();
+
+    // service role (web routes / worker) writes leads
+    const { data, error } = await admin
+      .from('demo_calls')
+      .insert({
+        source: 'admin',
+        company_name: 'RLS GmbH',
+        contact_name: 'Test',
+        phone_e164: '+491701234567',
+        status: 'queued',
+      })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    demoId = (data as { id: string }).id;
+  });
+
+  afterAll(async () => {
+    if (demoId) await admin.from('demo_calls').delete().eq('id', demoId);
+    if (userId) await admin.auth.admin.deleteUser(userId);
+  });
+
+  it('authenticated users and anon read nothing', async () => {
+    const { data: asUser } = await user.from('demo_calls').select('id');
+    expect(asUser ?? []).toHaveLength(0);
+    const { data: asAnon } = await anon.from('demo_calls').select('id');
+    expect(asAnon ?? []).toHaveLength(0);
+  });
+
+  it('clients cannot insert, update or delete', async () => {
+    const lead = {
+      source: 'admin',
+      company_name: 'Hack',
+      contact_name: 'x',
+      phone_e164: '+491701234567',
+      status: 'queued',
+    };
+    expect((await user.from('demo_calls').insert(lead)).error).not.toBeNull();
+    expect((await anon.from('demo_calls').insert(lead)).error).not.toBeNull();
+    await user.from('demo_calls').update({ status: 'failed' }).eq('id', demoId);
+    await user.from('demo_calls').delete().eq('id', demoId);
+    const { data } = await admin.from('demo_calls').select('status').eq('id', demoId).single();
+    expect((data as { status: string }).status).toBe('queued');
+  });
+
+  it('a public lead without consent or e-mail is rejected by the check constraint', async () => {
+    const { error } = await admin.from('demo_calls').insert({
+      source: 'public',
+      company_name: 'No Consent',
+      contact_name: 'x',
+      phone_e164: '+491701234567',
+      status: 'awaiting_confirmation',
+    });
+    expect(error).not.toBeNull();
+  });
+});

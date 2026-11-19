@@ -41,6 +41,20 @@ export const workerEnvSchema = z.object({
   TWILIO_ADDRESS_SID_LOCAL: optionalEnv(z.string().min(1)),
   /** Public https app URL — xAI webhook of provisioned numbers, links in mails. */
   APP_URL: optionalEnv(z.string().min(1)),
+  /**
+   * Demo-Anruf (0032): the operator's demo number (E.164) — Twilio caller id
+   * AND the number registered at xAI that the SIP leg dials. Absent (or no
+   * XAI_API_KEY / Twilio creds) disables the demo runner.
+   */
+  DEMO_VOICE_NUMBER: optionalEnv(z.string().regex(/^\+[1-9]\d{6,14}$/)),
+  DEMO_MAX_CONCURRENT_CALLS: optionalEnv(z.coerce.number().int().positive()),
+  DEMO_MAX_CALL_SECONDS: optionalEnv(z.coerce.number().int().min(60).max(900)),
+  /** xAI voice for demo calls (default eve). */
+  DEMO_VOICE: optionalEnv(z.string().min(1)),
+  /** SIP URI params for the Twilio <Dial><Sip> leg to xAI (live-gate tunable). */
+  DEMO_SIP_PARAMS: optionalEnv(z.string()),
+  /** Sales inbox for public demo leads; absent = no lead mails (admin list only). */
+  DEMO_NOTIFY_EMAIL: optionalEnv(z.email()),
   LOG_LEVEL: z.string().optional(),
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

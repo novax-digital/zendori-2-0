@@ -14,10 +14,13 @@ export default tseslint.config(
       'old-n8n-flows/**',
       // reference marketing site (separate Astro project, not part of this app)
       'Zendori-Website/**',
+      // Zauberanruf reference app (read-only reference for the Demo-Anruf, docs/demo-call.md)
+      'Referenz-App/**',
       'apps/web/next-env.d.ts',
       // generated embed bundles (esbuild output, see apps/web/scripts/build-embeds.mjs)
       'apps/web/public/widget.js',
       'apps/web/public/form.js',
+      'apps/web/public/demo.js',
     ],
   },
   ...tseslint.configs.recommended,

@@ -12,10 +12,14 @@ export async function middleware(request: NextRequest) {
   // public surfaces that authenticate themselves and are called by third
   // parties (customer sites, Resend/WhatsApp/voice webhooks) — never redirect
   // these to /login. Widget API + script, and provider webhooks under /api/hooks/.
+  // Demo-Anruf: embed script, public demo API, hosted demo page.
   const path = request.nextUrl.pathname;
   if (
     path === '/widget.js' ||
     path === '/form.js' ||
+    path === '/demo.js' ||
+    path === '/demo' ||
+    path.startsWith('/api/demo/') ||
     path.startsWith('/api/widget/') ||
     path.startsWith('/api/forms/') ||
     path.startsWith('/api/hooks/') ||

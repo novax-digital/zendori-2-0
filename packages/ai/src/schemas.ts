@@ -86,6 +86,15 @@ export const LearnedPairSchema = z.object({
 });
 export type LearnedPair = z.infer<typeof LearnedPairSchema>;
 
+/** Demo-Anruf: company briefing distilled from the lead's website (Haiku). */
+export const CompanyProfileSchema = z.object({
+  /** False when the page text says nothing usable about the company (parked domain, cookie wall, …). */
+  usable: z.boolean(),
+  /** German briefing for the voice assistant; empty when not usable. */
+  profile: z.string().max(3000),
+});
+export type CompanyProfile = z.infer<typeof CompanyProfileSchema>;
+
 /** A knowledge-base chunk returned by the match_kb_chunks RPC. */
 export const KbChunkMatchSchema = z.object({
   id: z.string(),

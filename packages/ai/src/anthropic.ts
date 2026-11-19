@@ -11,6 +11,8 @@ import { AI_MODELS } from './index.js';
 import { anthropicCost, type TokenUsage } from './cost.js';
 import {
   buildClassifyPrompt,
+  buildCompanyProfilePrompt,
+  buildCompanyProfileUserMessage,
   buildDescribeImagePrompt,
   buildDraftPrompt,
   buildExtractPrompt,
@@ -24,11 +26,13 @@ import {
 } from './prompts.js';
 import {
   ClassificationResultSchema,
+  CompanyProfileSchema,
   DraftResultSchema,
   ExtractionResultSchema,
   LearnedPairSchema,
   RerankResultSchema,
   type ClassificationResult,
+  type CompanyProfile,
   type DraftResult,
   type ExtractionResult,
   type LearnedPair,
@@ -390,6 +394,45 @@ export async function learn(input: LearnInput): Promise<AiCallResult<LearnedPair
   });
   const result = message.parsed_output;
   if (!result) throw new Error('Die Wissens-Destillation lieferte kein gültiges Ergebnis.');
+  const usage = toUsage(message.usage);
+  return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
+}
+
+export interface CompanyProfileInput {
+  companyName: string;
+  /** Plain text of the company's homepage (already HTML-stripped). */
+  pageText: string;
+}
+
+/** Input cap: a homepage's useful text fits easily; bounds cost on huge pages. */
+const COMPANY_PROFILE_INPUT_CHARS = 12_000;
+
+/**
+ * Demo-Anruf (Haiku): distills a short company briefing from the lead's
+ * homepage so the demo voice assistant can speak knowledgeably in the
+ * company's name. Callers treat failures as non-fatal (demo runs without).
+ */
+export async function summarizeCompanyWebsite(
+  input: CompanyProfileInput
+): Promise<AiCallResult<CompanyProfile>> {
+  const client = getClient();
+  const message = await client.messages.parse({
+    model: AI_MODELS.classify,
+    max_tokens: 1024,
+    temperature: 0,
+    system: buildCompanyProfilePrompt({ companyName: input.companyName }),
+    messages: [
+      {
+        role: 'user',
+        content: buildCompanyProfileUserMessage(
+          input.pageText.slice(0, COMPANY_PROFILE_INPUT_CHARS)
+        ),
+      },
+    ],
+    output_config: { format: zodOutputFormat(CompanyProfileSchema) },
+  });
+  const result = message.parsed_output;
+  if (!result) throw new Error('Das Firmenprofil lieferte kein gültiges Ergebnis.');
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
 }

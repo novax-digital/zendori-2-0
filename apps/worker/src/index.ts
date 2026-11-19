@@ -23,6 +23,7 @@ import {
   startScan,
 } from './scan.js';
 import { startVoiceDispatch } from './voice/dispatch.js';
+import { startDemoRunner } from './demo/runner.js';
 import { startNumberProvisioner } from './numbers/runner.js';
 import {
   POST_CALL_QUEUE,
@@ -272,6 +273,8 @@ async function main(): Promise<void> {
   const stopScan = startScan(boss, logger);
   // Voice dispatch: Realtime-subscribed call intake + WS sessions (Phase 9).
   const voice = startVoiceDispatch(logger);
+  // Demo-Anruf (0032): outbound demo calls — disabled without DEMO_VOICE_NUMBER.
+  const demo = startDemoRunner(logger);
   // Number provisioning (0033): admin-approved phone_numbers rows → Twilio/xAI.
   const numbers = startNumberProvisioner(logger);
 
@@ -287,6 +290,11 @@ async function main(): Promise<void> {
         .stop()
         .catch((err: unknown) =>
           logger.error({ err: toErrorInfo(err) }, 'error during voice dispatch stop')
+        ),
+      demo
+        .stop()
+        .catch((err: unknown) =>
+          logger.error({ err: toErrorInfo(err) }, 'error during demo runner stop')
         ),
       numbers
         .stop()

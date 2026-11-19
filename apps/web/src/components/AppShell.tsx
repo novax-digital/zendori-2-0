@@ -510,7 +510,9 @@ function Sidebar() {
  */
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const bare = pathname === '/' || BARE_PREFIXES.some((p) => pathname.startsWith(p));
+  const bare =
+    // Demo-Anruf: hosted demo form (exact match — /demo* must stay app routes)
+    pathname === '/' || pathname === '/demo' || BARE_PREFIXES.some((p) => pathname.startsWith(p));
 
   if (bare) return <>{children}</>;
 
