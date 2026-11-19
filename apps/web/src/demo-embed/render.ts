@@ -16,9 +16,12 @@ import type {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PROMPT_MAX = 1000;
-const SUBMIT_LABEL = 'Demo-Anruf anfordern';
-const INTRO =
-  'Geben Sie Ihre Daten ein – unser KI-Telefonassistent ruft Sie gleich im Namen Ihres Unternehmens an. Zur Sicherheit bestätigen Sie Ihre Nummer vorher mit einem Code per SMS.';
+const SUBMIT_LABEL = 'Code anfordern & anrufen lassen';
+const SUBTITLE = 'Dauert ca. 1 Minute';
+/** Brand defaults (zendori.ai): readable teal for links/focus, darkened brand gradient for buttons. */
+const BRAND_ACCENT = '#0b7480';
+const BRAND_BUTTON = 'linear-gradient(135deg, #00805a 0%, #0070c4 100%)';
+// First-person wording (unchanged since DEMO_CONSENT_VERSION 2026-11-13).
 const CONSENT_TEXT =
   'Ich möchte auf die angegebene Nummer einen Bestätigungscode (per SMS oder Anruf) und einen Demo-Anruf eines KI-Assistenten erhalten und willige in die Verarbeitung meiner Angaben zu diesem Zweck und zur Kontaktaufnahme durch Zendori ein. Der Anruf wird von einer KI geführt; dabei werden Daten auch durch xAI und Twilio (USA) verarbeitet. Mehr in der ';
 const VERIFY_LABEL = 'Bestätigen & Anruf starten';
@@ -60,6 +63,50 @@ export interface DemoRenderHandles {
   showEmptyForm(): void;
 }
 
+/** Stroke icons (Lucide geometry, 24×24 viewBox) — static path data only. */
+const ICON_PATHS = {
+  phone:
+    'M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z',
+  message: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
+  check: 'M20 6 9 17l-5-5',
+} as const;
+
+function icon(name: keyof typeof ICON_PATHS, size: number): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', ICON_PATHS[name]);
+  svg.appendChild(path);
+  return svg;
+}
+
+function badge(name: keyof typeof ICON_PATHS, size: number): HTMLElement {
+  const node = el('span', 'zd-badge');
+  node.appendChild(icon(name, size));
+  return node;
+}
+
+/** Pill button with a leading icon; returns the label node for state texts. */
+function iconButton(label: string, name: keyof typeof ICON_PATHS | null): {
+  button: HTMLButtonElement;
+  label: HTMLSpanElement;
+} {
+  const button = el('button', 'zd-button');
+  if (name) button.appendChild(icon(name, 17));
+  const text = el('span', undefined, label);
+  button.appendChild(text);
+  return { button, label: text };
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -88,9 +135,10 @@ function textControl(
     placeholder?: string;
     hint?: string;
     multiline?: boolean;
+    full?: boolean;
   }
 ): Control {
-  const wrap = el('div', 'zd-field');
+  const wrap = el('div', options.full ? 'zd-field zd-full' : 'zd-field');
   const id = `${idPrefix}-${key}`;
   const errorId = `${id}-err`;
   const labelNode = el('label', 'zd-label', label);
@@ -145,15 +193,23 @@ export function renderDemo(
   root.appendChild(style);
 
   const container = el('div', 'zd');
-  container.style.setProperty('--zd-accent', options.accent);
-  container.style.setProperty('--zd-accent-text', buttonTextColor(options.accent));
+  container.style.setProperty('--zd-accent', options.accent ?? BRAND_ACCENT);
+  container.style.setProperty('--zd-button', options.accent ?? BRAND_BUTTON);
+  container.style.setProperty(
+    '--zd-button-text',
+    options.accent ? buttonTextColor(options.accent) : '#ffffff'
+  );
   root.appendChild(container);
 
   const idPrefix = `zd${Math.floor(Math.random() * 1e6)}`;
 
   // --- form view ---------------------------------------------------------------
   const formView = el('div');
-  formView.append(el('div', 'zd-title', options.title), el('p', 'zd-intro', INTRO));
+  const head = el('div', 'zd-head');
+  const headText = el('div');
+  headText.append(el('div', 'zd-title', options.title), el('p', 'zd-sub', SUBTITLE));
+  head.append(badge('phone', 17), headText);
+  formView.appendChild(head);
   const banner = el('div', 'zd-banner');
   banner.style.display = 'none';
   banner.setAttribute('role', 'alert');
@@ -163,36 +219,42 @@ export function renderDemo(
   form.noValidate = true;
   formView.appendChild(form);
 
-  const company = textControl(idPrefix, 'company', 'Unternehmen', {
+  const company = textControl(idPrefix, 'company', 'Firma', {
     required: true,
     autocomplete: 'organization',
+    placeholder: 'Mustermann Solar GmbH',
   });
-  const contactName = textControl(idPrefix, 'contactName', 'Ihr Name', {
+  const contactName = textControl(idPrefix, 'contactName', 'Dein Name', {
     required: true,
     autocomplete: 'name',
+    placeholder: 'Alex Mustermann',
   });
   const email = textControl(idPrefix, 'email', 'Geschäftliche E-Mail', {
     required: true,
     type: 'email',
     autocomplete: 'email',
+    placeholder: 'alex@mustermann-solar.de',
   });
   const phone = textControl(idPrefix, 'phone', 'Telefonnummer', {
     required: true,
     type: 'tel',
     autocomplete: 'tel',
-    hint: 'Deutsche Mobil- oder Festnetznummer, z. B. 0170 1234567',
+    placeholder: '0170 1234567',
+    hint: 'Deutsche Mobil- oder Festnetznummer',
   });
-  const websiteUrl = textControl(idPrefix, 'websiteUrl', 'Website', {
+  const websiteUrl = textControl(idPrefix, 'websiteUrl', 'Website (optional)', {
     required: false,
     autocomplete: 'url',
-    placeholder: 'www.ihre-firma.de',
-    hint: 'Optional – der Assistent liest Ihre Startseite und kennt dann Ihr Angebot.',
+    placeholder: 'www.mustermann-solar.de',
+    hint: 'Der Agent liest deine Startseite und kennt dann dein Angebot.',
+    full: true,
   });
-  const prompt = textControl(idPrefix, 'prompt', 'Was soll der Assistent im Anruf tun?', {
+  const prompt = textControl(idPrefix, 'prompt', 'Was soll der Agent tun? (optional)', {
     required: false,
     multiline: true,
+    full: true,
     placeholder:
-      'z. B. Ruf mich als Kunde an, der einen Termin für eine Heizungswartung vereinbaren möchte, und frag nach meiner Adresse.',
+      'z. B. Ruf mich als Kunde an, der einen Beratungstermin für eine PV-Anlage möchte, und frag nach meiner Adresse.',
   });
   const counter = el('div', 'zd-counter', `0/${PROMPT_MAX}`);
   prompt.input.after(counter);
@@ -200,11 +262,9 @@ export function renderDemo(
     counter.textContent = `${prompt.input.value.length}/${PROMPT_MAX}`;
   });
 
-  const rowOne = el('div', 'zd-row');
-  rowOne.append(company.wrap, contactName.wrap);
-  const rowTwo = el('div', 'zd-row');
-  rowTwo.append(email.wrap, phone.wrap);
-  form.append(rowOne, rowTwo, websiteUrl.wrap, prompt.wrap);
+  const grid = el('div', 'zd-grid');
+  grid.append(company.wrap, contactName.wrap, email.wrap, phone.wrap, websiteUrl.wrap, prompt.wrap);
+  form.appendChild(grid);
 
   // consent checkbox
   const consentWrap = el('div', 'zd-field');
@@ -250,7 +310,7 @@ export function renderDemo(
   form.appendChild(honeypot);
 
   form.appendChild(el('p', 'zd-legend', '* Pflichtfeld'));
-  const submit = el('button', 'zd-button', SUBMIT_LABEL);
+  const { button: submit, label: submitLabel } = iconButton(SUBMIT_LABEL, 'phone');
   submit.type = 'submit';
   form.appendChild(submit);
 
@@ -260,9 +320,9 @@ export function renderDemo(
   });
 
   // --- code view (phone verification) --------------------------------------------
-  const codeView = el('div', 'zd-code');
+  const codeView = el('div', 'zd-center');
   codeView.style.display = 'none';
-  const codeText = el('p', 'zd-success-text');
+  const codeText = el('p', 'zd-center-text');
   const codeForm = el('form', 'zd-code-form');
   codeForm.noValidate = true;
   const codeLabel = el('label', 'zd-label', 'Bestätigungscode');
@@ -280,7 +340,7 @@ export function renderDemo(
   codeError.style.display = 'none';
   const codeInfo = el('div', 'zd-info');
   codeInfo.setAttribute('aria-live', 'polite');
-  const verifyButton = el('button', 'zd-button', VERIFY_LABEL);
+  const { button: verifyButton, label: verifyLabel } = iconButton(VERIFY_LABEL, 'phone');
   verifyButton.type = 'submit';
   codeForm.append(codeLabel, codeInput, codeError, verifyButton, codeInfo);
   codeForm.addEventListener('submit', (event) => {
@@ -304,15 +364,15 @@ export function renderDemo(
   const codeFatal = el('div', 'zd-reset');
   codeFatal.style.display = 'none';
   const codeFatalText = el('p', 'zd-banner');
-  const codeFatalButton = el('button', 'zd-button', 'Neue Demo anfordern');
+  const { button: codeFatalButton } = iconButton('Neue Demo anfordern', null);
   codeFatalButton.type = 'button';
   codeFatal.append(codeFatalText, codeFatalButton);
   let fatalHandler: (() => void) | null = null;
   codeFatalButton.addEventListener('click', () => fatalHandler?.());
 
   codeView.append(
-    el('div', 'zd-success-icon', '✉'),
-    el('div', 'zd-success-title', 'Bestätigen Sie Ihre Nummer'),
+    badge('message', 22),
+    el('div', 'zd-center-title', 'Bestätige deine Nummer'),
     codeText,
     codeForm,
     codeActions,
@@ -322,29 +382,29 @@ export function renderDemo(
   const describeChannel = (): void => {
     codeText.textContent =
       codeChannel === 'sms'
-        ? `Wir haben Ihnen eine SMS mit einem Code an ${codePhone} geschickt. Geben Sie ihn hier ein – dann ruft Sie der Assistent sofort an.`
-        : `Sie erhalten gleich einen Anruf an ${codePhone}, der Ihnen einen Code ansagt. Geben Sie ihn hier ein – dann ruft Sie der Assistent sofort an.`;
+        ? `Wir haben dir eine SMS mit einem Code an ${codePhone} geschickt. Gib ihn hier ein – dann ruft dich der Agent sofort an.`
+        : `Du bekommst gleich einen Anruf an ${codePhone}, der dir einen Code ansagt. Gib ihn hier ein – dann ruft dich der Agent sofort an.`;
     // landlines cannot receive SMS: "erneut senden" means another call there
     callButton.style.display = codeChannel === 'sms' ? '' : 'none';
   };
 
   // --- success view ------------------------------------------------------------
-  const successView = el('div', 'zd-success');
+  const successView = el('div', 'zd-center');
   successView.style.display = 'none';
-  const successText = el('p', 'zd-success-text');
+  const successText = el('p', 'zd-center-text');
   const status = el('div', 'zd-status');
   status.setAttribute('aria-live', 'polite');
   const dot = el('span', 'zd-dot');
   const statusText = el('span');
   status.append(dot, statusText);
   const resetWrap = el('div', 'zd-reset');
-  const resetButton = el('button', 'zd-button', 'Neue Demo anfordern');
+  const { button: resetButton } = iconButton('Neue Demo anfordern', null);
   resetButton.type = 'button';
   resetWrap.appendChild(resetButton);
   resetWrap.style.display = 'none';
   successView.append(
-    el('div', 'zd-success-icon', '✓'),
-    el('div', 'zd-success-title', 'Nummer bestätigt!'),
+    badge('check', 22),
+    el('div', 'zd-center-title', 'Nummer bestätigt!'),
     successText,
     status,
     resetWrap
@@ -386,7 +446,7 @@ export function renderDemo(
         errors.email = 'Bitte eine gültige E-Mail-Adresse angeben.';
       }
       if (!values.phone) errors.phone = 'Bitte ausfüllen.';
-      if (!values.consent) errors.consent = 'Bitte stimmen Sie zu, um fortzufahren.';
+      if (!values.consent) errors.consent = 'Bitte stimme zu, um fortzufahren.';
       handles.setFieldErrors(errors);
       return Object.keys(errors).length === 0;
     },
@@ -406,14 +466,15 @@ export function renderDemo(
     },
     setSubmitting(submitting) {
       submit.disabled = submitting;
-      submit.textContent = submitting ? 'Wird gesendet …' : SUBMIT_LABEL;
+      submitLabel.textContent = submitting ? 'Wird gesendet …' : SUBMIT_LABEL;
     },
     showBanner(text) {
       banner.textContent = text ?? '';
       banner.style.display = text ? 'block' : 'none';
     },
     showCodeStep(phone, channel) {
-      codePhone = phone;
+      // non-breaking spaces: the masked number never wraps mid-way
+      codePhone = phone.replace(/ /g, '\u00a0');
       codeChannel = channel;
       describeChannel();
       codeInput.value = '';
@@ -447,7 +508,7 @@ export function renderDemo(
     },
     setVerifying(verifying) {
       verifyButton.disabled = verifying;
-      verifyButton.textContent = verifying ? 'Wird geprüft …' : VERIFY_LABEL;
+      verifyLabel.textContent = verifying ? 'Wird geprüft …' : VERIFY_LABEL;
     },
     setResendState({ secondsLeft, exhausted }) {
       const waiting = secondsLeft > 0;
@@ -475,7 +536,7 @@ export function renderDemo(
     },
     showSuccess() {
       successText.textContent =
-        'Der Assistent ruft Sie gleich an – halten Sie Ihr Telefon bereit.';
+        'Der Agent ruft dich gleich an – halt dein Telefon bereit.';
       formView.style.display = 'none';
       codeView.style.display = 'none';
       successView.style.display = 'block';

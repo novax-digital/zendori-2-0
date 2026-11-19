@@ -46,14 +46,14 @@ export function OPTIONS(): Response {
 }
 
 const UNAVAILABLE = {
-  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es gleich erneut.',
+  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuch es gleich erneut.',
   code: 'unavailable',
 };
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!(await checkRateLimit('demo-resend-ip', clientIp(request)))) {
     return json(
-      { error: 'Zu viele Anfragen. Bitte warten Sie einen Moment.', code: 'rate_limited' },
+      { error: 'Zu viele Anfragen. Bitte warte einen Moment.', code: 'rate_limited' },
       429
     );
   }
@@ -84,7 +84,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     await closeUnverifiedDemo(admin, row.id, 'verify_expired');
     return json(
       {
-        error: 'Die Anfrage ist abgelaufen. Bitte fordern Sie die Demo erneut an.',
+        error: 'Die Anfrage ist abgelaufen. Bitte fordere die Demo erneut an.',
         code: 'expired',
       },
       410
@@ -94,7 +94,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json(
       {
         error:
-          'Es wurden bereits mehrere Codes gesendet. Bitte prüfen Sie Ihre Nachrichten oder fordern Sie die Demo später erneut an.',
+          'Es wurden bereits mehrere Codes gesendet. Bitte prüf deine Nachrichten oder fordere die Demo später erneut an.',
         code: 'resend_limit',
       },
       429
@@ -107,7 +107,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const retryAfter = Math.ceil(DEMO_CODE_RESEND_COOLDOWN_SECONDS - sinceLast);
     return json(
       {
-        error: `Bitte warten Sie noch ${retryAfter} Sekunden, bevor Sie einen neuen Code anfordern.`,
+        error: `Bitte warte noch ${retryAfter} Sekunden, bevor du einen neuen Code anforderst.`,
         code: 'cooldown',
         retryAfterSeconds: retryAfter,
       },
@@ -132,7 +132,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     .select('id');
   if (claimError) return json(UNAVAILABLE, 503);
   if (!claimed || claimed.length === 0) {
-    return json({ error: 'Bitte versuchen Sie es erneut.', code: 'retry' }, 409);
+    return json({ error: 'Bitte versuch es erneut.', code: 'retry' }, 409);
   }
 
   const sent = await sendDemoCode(row.phone_e164, wanted);

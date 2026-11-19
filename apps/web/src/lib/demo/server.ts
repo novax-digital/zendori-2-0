@@ -52,12 +52,12 @@ export type DemoCapVerdict =
 
 export const DEMO_CAP_MESSAGES: Record<Exclude<DemoCapVerdict, 'ok'>, string> = {
   request_limit:
-    'Für diese Telefonnummer wurden heute bereits mehrere Demos angefordert. Bitte versuchen Sie es morgen erneut.',
+    'Für diese Telefonnummer wurden heute bereits mehrere Demos angefordert. Bitte versuch es morgen erneut.',
   phone_limit:
-    'Für diese Telefonnummer wurden heute bereits Demo-Anrufe durchgeführt. Bitte versuchen Sie es morgen erneut.',
+    'Für diese Telefonnummer wurden heute bereits Demo-Anrufe durchgeführt. Bitte versuch es morgen erneut.',
   daily_limit:
-    'Heute sind leider keine Demo-Anrufe mehr verfügbar. Bitte versuchen Sie es morgen erneut.',
-  db_error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es gleich erneut.',
+    'Heute sind leider keine Demo-Anrufe mehr verfügbar. Bitte versuch es morgen erneut.',
+  db_error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuch es gleich erneut.',
 };
 
 /**
@@ -172,31 +172,31 @@ export const DEMO_SEND_FAILURES: Record<
   landline: {
     status: 400,
     code: 'invalid_number',
-    error: 'An diese Nummer können wir keinen Code senden. Bitte prüfen Sie die Nummer.',
+    error: 'An diese Nummer können wir keinen Code senden. Bitte prüf die Nummer.',
     phoneField: true,
   },
   invalid_number: {
     status: 400,
     code: 'invalid_number',
-    error: 'An diese Nummer können wir keinen Code senden. Bitte prüfen Sie die Nummer.',
+    error: 'An diese Nummer können wir keinen Code senden. Bitte prüf die Nummer.',
     phoneField: true,
   },
   blocked: {
     status: 400,
     code: 'blocked',
-    error: 'An diese Nummer können wir leider keinen Code senden. Bitte verwenden Sie eine andere Nummer.',
+    error: 'An diese Nummer können wir leider keinen Code senden. Bitte nutze eine andere Nummer.',
     phoneField: true,
   },
   rate_limited: {
     status: 429,
     code: 'rate_limited',
-    error: 'Für diese Nummer wurden gerade zu viele Codes angefordert. Bitte warten Sie einige Minuten.',
+    error: 'Für diese Nummer wurden gerade zu viele Codes angefordert. Bitte warte einige Minuten.',
     phoneField: false,
   },
   unavailable: {
     status: 503,
     code: 'unavailable',
-    error: 'Der Code konnte gerade nicht gesendet werden. Bitte versuchen Sie es gleich erneut.',
+    error: 'Der Code konnte gerade nicht gesendet werden. Bitte versuch es gleich erneut.',
     phoneField: false,
   },
 };

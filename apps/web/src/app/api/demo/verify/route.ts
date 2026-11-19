@@ -46,22 +46,22 @@ export function OPTIONS(): Response {
 }
 
 const UNAVAILABLE = {
-  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es gleich erneut.',
+  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuch es gleich erneut.',
   code: 'unavailable',
 };
 const CLOSED = {
-  error: 'Zu viele Fehlversuche. Bitte fordern Sie die Demo erneut an.',
+  error: 'Zu viele Fehlversuche. Bitte fordere die Demo erneut an.',
   code: 'too_many_attempts',
 };
 const EXPIRED = {
-  error: 'Die Anfrage ist abgelaufen. Bitte fordern Sie die Demo erneut an.',
+  error: 'Die Anfrage ist abgelaufen. Bitte fordere die Demo erneut an.',
   code: 'expired',
 };
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!(await checkRateLimit('demo-verify-ip', clientIp(request)))) {
     return json(
-      { error: 'Zu viele Versuche. Bitte warten Sie einen Moment.', code: 'rate_limited' },
+      { error: 'Zu viele Versuche. Bitte warte einen Moment.', code: 'rate_limited' },
       429
     );
   }
@@ -73,7 +73,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
-    return json({ error: 'Bitte geben Sie den Code aus der SMS ein.', code: 'invalid_code' }, 400);
+    return json({ error: 'Bitte gib den Code aus der SMS ein.', code: 'invalid_code' }, 400);
   }
   const { token, code } = parsed.data;
 
@@ -113,7 +113,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     .select('id');
   if (countError) return json(UNAVAILABLE, 503);
   if (!counted || counted.length === 0) {
-    return json({ error: 'Bitte versuchen Sie es erneut.', code: 'retry' }, 409);
+    return json({ error: 'Bitte versuch es erneut.', code: 'retry' }, 409);
   }
   const remaining = DEMO_CODE_MAX_ATTEMPTS - (row.verify_attempts + 1);
 
@@ -128,8 +128,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         {
           error:
             remaining === 1
-              ? 'Der Code stimmt nicht. Sie haben noch einen Versuch.'
-              : `Der Code stimmt nicht. Sie haben noch ${remaining} Versuche.`,
+              ? 'Der Code stimmt nicht. Du hast noch einen Versuch.'
+              : `Der Code stimmt nicht. Du hast noch ${remaining} Versuche.`,
           code: 'wrong_code',
         },
         400
@@ -137,7 +137,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     case 'code_expired':
       return json(
         {
-          error: 'Dieser Code ist nicht mehr gültig. Bitte fordern Sie einen neuen Code an.',
+          error: 'Dieser Code ist nicht mehr gültig. Bitte fordere einen neuen Code an.',
           code: 'code_expired',
         },
         400

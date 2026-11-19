@@ -8,8 +8,9 @@ import type { DemoMountOptions } from './types';
  *   <div data-zendori-demo></div>
  *   <script src="https://app.zendori.ai/demo.js" async></script>
  *
- * Optional div attributes: data-accent (#rgb / #rrggbb), data-title (heading),
- * data-privacy-url (http(s) link in the consent text). Optional on the script:
+ * Optional div attributes: data-accent (#rgb / #rrggbb — replaces the brand
+ * gradient with one solid color), data-title (heading), data-privacy-url
+ * (http(s) link in the consent text). Optional on the script:
  * data-zendori-url overrides the API base (default: script origin). Multiple
  * mounts per page are supported. If the API is unreachable at bootstrap the
  * placeholder stays empty (no error box on the host site).
@@ -21,8 +22,7 @@ declare global {
   }
 }
 
-const DEFAULT_ACCENT = '#12c7c4';
-const DEFAULT_TITLE = 'Erleben Sie Zendori am Telefon';
+const DEFAULT_TITLE = 'Demo-Anruf anfordern';
 
 // Captured at module evaluation — inside DOMContentLoaded handlers
 // document.currentScript is already null.
@@ -61,12 +61,12 @@ function resolveApiBase(): string {
   return '';
 }
 
-/** #rgb / #rrggbb only (expanded to #rrggbb), anything else → default. */
-function parseAccent(raw: string | undefined): string {
+/** #rgb / #rrggbb only (expanded to #rrggbb); absent/anything else → null (brand gradient). */
+function parseAccent(raw: string | undefined): string | null {
   const value = raw?.trim() ?? '';
   const short = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(value);
   if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
-  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : DEFAULT_ACCENT;
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : null;
 }
 
 function readOptions(host: HTMLElement): DemoMountOptions {

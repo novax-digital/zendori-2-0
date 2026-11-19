@@ -25,15 +25,15 @@ const POLL_MAX_FAILURES = 5;
 const RESEND_COOLDOWN_SECONDS = 30;
 
 const STATUS_TEXT: Record<DemoPublicStatus, string> = {
-  awaiting_confirmation: 'Wartet auf Ihren Bestätigungscode …',
-  queued: 'Bestätigt – Ihr Anruf wird vorbereitet …',
-  calling: 'Ihr Telefon klingelt gleich – bitte nehmen Sie ab.',
+  awaiting_confirmation: 'Wartet auf deinen Bestätigungscode …',
+  queued: 'Bestätigt – dein Anruf wird vorbereitet …',
+  calling: 'Dein Telefon klingelt gleich – bitte nimm ab.',
   in_call: 'Der Demo-Anruf läuft.',
-  completed: 'Danke! Der Demo-Anruf ist beendet. Wir melden uns bei Ihnen.',
-  no_answer: 'Sie haben leider nicht abgenommen. Fordern Sie die Demo gern erneut an.',
-  busy: 'Ihre Leitung war besetzt. Fordern Sie die Demo gern erneut an.',
-  failed: 'Der Anruf konnte nicht durchgeführt werden. Bitte versuchen Sie es später erneut.',
-  expired: 'Die Anfrage ist abgelaufen. Bitte fordern Sie die Demo erneut an.',
+  completed: 'Danke! Der Demo-Anruf ist beendet. Wir melden uns bei dir.',
+  no_answer: 'Du hast leider nicht abgenommen. Fordere die Demo gern erneut an.',
+  busy: 'Deine Leitung war besetzt. Fordere die Demo gern erneut an.',
+  failed: 'Der Anruf konnte nicht durchgeführt werden. Bitte versuch es später erneut.',
+  expired: 'Die Anfrage ist abgelaufen. Bitte fordere die Demo erneut an.',
 };
 
 const TERMINAL: readonly DemoPublicStatus[] = [
@@ -44,7 +44,7 @@ const TERMINAL: readonly DemoPublicStatus[] = [
   'expired',
 ];
 
-const NETWORK_ERROR = 'Verbindung fehlgeschlagen. Bitte versuchen Sie es erneut.';
+const NETWORK_ERROR = 'Verbindung fehlgeschlagen. Bitte versuch es erneut.';
 /** Codes after which the request can never be verified any more. */
 const FATAL_CODE_ERRORS = [
   'expired',
@@ -54,7 +54,7 @@ const FATAL_CODE_ERRORS = [
   'phone_limit',
   'daily_limit',
 ];
-const GENERIC_ERROR = 'Die Anfrage konnte nicht gesendet werden. Bitte versuchen Sie es erneut.';
+const GENERIC_ERROR = 'Die Anfrage konnte nicht gesendet werden. Bitte versuch es erneut.';
 
 // One mount per host (closed shadow roots cannot be re-attached).
 const mountedHosts = new WeakSet<HTMLElement>();
@@ -205,7 +205,7 @@ export async function mountDemo(
           } catch {
             // next submit will surface the error again
           }
-          ui.showBanner('Bitte senden Sie das Formular erneut ab.');
+          ui.showBanner('Bitte sende das Formular erneut ab.');
         } else {
           if (Object.keys(error.fields).length > 0) ui.setFieldErrors(error.fields);
           ui.showBanner(error.serverMessage ?? GENERIC_ERROR);
@@ -256,7 +256,7 @@ export async function mountDemo(
     if (verifying || !statusToken) return;
     const code = ui.readCode();
     if (!/^\d{4,10}$/.test(code)) {
-      ui.setCodeError('Bitte geben Sie den Code aus der SMS ein (nur Ziffern).');
+      ui.setCodeError('Bitte gib den Code aus der SMS ein (nur Ziffern).');
       return;
     }
     verifying = true;
@@ -290,7 +290,7 @@ export async function mountDemo(
       ui.setCodeInfo(
         result.channel === 'sms'
           ? 'Ein neuer Code ist per SMS unterwegs.'
-          : 'Sie erhalten gleich einen Anruf mit Ihrem Code.'
+          : 'Du bekommst gleich einen Anruf mit deinem Code.'
       );
       startCooldown(result.resendAfterSeconds);
     } catch (error) {

@@ -60,7 +60,8 @@ export interface DemoRequestPayload extends Omit<DemoFormValues, 'consent'> {
 
 /** Per-mount options read from the placeholder div's data attributes. */
 export interface DemoMountOptions {
-  accent: string;
+  /** data-accent (#rrggbb) — null = the zendori.ai brand gradient. */
+  accent: string | null;
   title: string;
   privacyUrl: string | null;
 }

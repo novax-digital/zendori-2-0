@@ -57,7 +57,7 @@ export function OPTIONS(): Response {
 }
 
 const UNAVAILABLE = {
-  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es gleich erneut.',
+  error: 'Der Dienst ist vorübergehend nicht verfügbar. Bitte versuch es gleich erneut.',
   code: 'unavailable',
 };
 
@@ -77,7 +77,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!(await checkRateLimit('demo-request-ip', ip))) {
     return json(
       {
-        error: 'Zu viele Anfragen von Ihrem Anschluss. Bitte versuchen Sie es später erneut.',
+        error: 'Zu viele Anfragen von deinem Anschluss. Bitte versuch es später erneut.',
         code: 'rate_limited',
       },
       429
@@ -107,14 +107,14 @@ export async function POST(request: Request): Promise<NextResponse> {
   const verdict = verifyRenderToken(masterKey, DEMO_RENDER_SCOPE, body.renderToken);
   if (verdict === 'expired') {
     return json(
-      { error: 'Bitte senden Sie das Formular erneut ab.', code: 'render_expired' },
+      { error: 'Bitte sende das Formular erneut ab.', code: 'render_expired' },
       400
     );
   }
   if (verdict === 'too_fast') {
     return json(
       {
-        error: 'Bitte warten Sie einen kurzen Moment und senden Sie das Formular dann erneut ab.',
+        error: 'Bitte warte einen kurzen Moment und sende das Formular dann erneut ab.',
         code: 'too_fast',
       },
       400
@@ -127,10 +127,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const validation = validateDemoLead(body, { requireEmail: true });
   const fields: Record<string, string> = validation.ok ? {} : { ...validation.errors };
   if (body.consent !== true) {
-    fields.consent = 'Bitte stimmen Sie dem Demo-Anruf zu.';
+    fields.consent = 'Bitte stimme dem Demo-Anruf zu.';
   }
   if (!validation.ok || Object.keys(fields).length > 0) {
-    return json({ error: 'Bitte prüfen Sie Ihre Eingaben.', code: 'invalid', fields }, 400);
+    return json({ error: 'Bitte prüf deine Eingaben.', code: 'invalid', fields }, 400);
   }
   const lead = validation.lead;
   const email = lead.email as string; // requireEmail: true
@@ -138,7 +138,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!(await checkRateLimit('demo-request-email', email))) {
     return json(
       {
-        error: 'Für diese E-Mail-Adresse wurden heute schon Demos angefordert. Bitte versuchen Sie es morgen erneut.',
+        error: 'Für diese E-Mail-Adresse wurden heute schon Demos angefordert. Bitte versuch es morgen erneut.',
         code: 'rate_limited',
       },
       429

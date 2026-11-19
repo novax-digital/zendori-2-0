@@ -65,11 +65,11 @@ Operator, nicht einem Mandanten.
 ## Einbetten
 
 ```html
-<div data-zendori-demo data-accent="#12c7c4" data-privacy-url="https://zendori.ai/datenschutz"></div>
+<div data-zendori-demo data-privacy-url="https://zendori.ai/datenschutzerklaerung"></div>
 <script src="https://app.zendori.ai/demo.js" async></script>
 ```
 
-Optional: `data-title` (Überschrift) am div, `data-zendori-url` am Script (API-Basis).
+Optional: `data-title` (Überschrift) am div, `data-zendori-url` am Script (API-Basis), `data-accent` (#rrggbb) am div ersetzt den Marken-Verlauf durch eine Volltonfarbe. Ohne `data-accent` trägt das Formular den zendori.ai-Markenlook (Sora/Inter, Verlaufs-Button) und duzt wie die Website.
 
 ## Schutz gegen Missbrauch
 

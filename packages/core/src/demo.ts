@@ -232,20 +232,20 @@ export function validateDemoLead(
 
   const company = singleLine(input.company);
   if (company.length < 2 || company.length > 120) {
-    errors.company = 'Bitte geben Sie den Namen Ihres Unternehmens an (2–120 Zeichen).';
+    errors.company = 'Bitte gib den Namen deiner Firma an (2–120 Zeichen).';
   }
 
   const contactName = singleLine(input.contactName);
   if (contactName.length < 2 || contactName.length > 120) {
-    errors.contactName = 'Bitte geben Sie Ihren Namen an (2–120 Zeichen).';
+    errors.contactName = 'Bitte gib deinen Namen an (2–120 Zeichen).';
   }
 
   const rawEmail = singleLine(input.email ?? '').toLowerCase();
   let email: string | null = null;
   if (rawEmail.length === 0) {
-    if (options.requireEmail) errors.email = 'Bitte geben Sie Ihre E-Mail-Adresse an.';
+    if (options.requireEmail) errors.email = 'Bitte gib deine E-Mail-Adresse an.';
   } else if (rawEmail.length > 200 || !emailSchema.safeParse(rawEmail).success) {
-    errors.email = 'Bitte geben Sie eine gültige E-Mail-Adresse an.';
+    errors.email = 'Bitte gib eine gültige E-Mail-Adresse an.';
   } else {
     email = rawEmail;
   }
@@ -255,17 +255,17 @@ export function validateDemoLead(
     errors.phone =
       phone.reason === 'not_allowed'
         ? 'Demo-Anrufe sind nur an deutsche Mobil- oder Festnetznummern möglich (keine Sonder- oder Servicenummern).'
-        : 'Bitte geben Sie eine gültige deutsche Telefonnummer an, z. B. 0170 1234567.';
+        : 'Bitte gib eine gültige deutsche Telefonnummer an, z. B. 0170 1234567.';
   }
 
   const website = normalizeDemoWebsite(input.websiteUrl);
   if (website === 'invalid') {
-    errors.websiteUrl = 'Bitte geben Sie eine gültige Website-Adresse an, z. B. www.beispiel.de.';
+    errors.websiteUrl = 'Bitte gib eine gültige Website-Adresse an, z. B. www.beispiel.de.';
   }
 
   const prompt = multiLine(input.prompt ?? '');
   if (prompt.length > DEMO_PROMPT_MAX_CHARS) {
-    errors.prompt = `Bitte fassen Sie sich kürzer (maximal ${DEMO_PROMPT_MAX_CHARS} Zeichen).`;
+    errors.prompt = `Bitte fass dich kürzer (maximal ${DEMO_PROMPT_MAX_CHARS} Zeichen).`;
   }
 
   if (Object.keys(errors).length > 0 || !phone.ok || website === 'invalid') {

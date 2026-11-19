@@ -20,7 +20,7 @@ export function OPTIONS(): Response {
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!(await checkRateLimit('demo-bootstrap-ip', clientIp(request)))) {
-    return json({ error: 'Zu viele Anfragen. Bitte versuchen Sie es gleich erneut.' }, 429);
+    return json({ error: 'Zu viele Anfragen. Bitte versuch es gleich erneut.' }, 429);
   }
   const masterKey = process.env.MASTER_ENCRYPTION_KEY;
   if (!masterKey) {
