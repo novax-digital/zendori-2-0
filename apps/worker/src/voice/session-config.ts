@@ -18,6 +18,8 @@ Arbeitsweise:
 - Wenn die Antwort schon aus dem bisherigen Gespräch bekannt ist (z. B. bereits nachgeschlagen oder eben besprochen), antworte direkt — ohne erneutes Nachschlagen und ohne Ankündigung.
 - Kündige das Nachschlagen NICHT rituell an: rufe kb_search in der Regel einfach direkt auf, eine kurze natürliche Pause ist völlig in Ordnung. Wenn du vor einem Nachschlagen doch etwas sagst, halte es sehr kurz und variiere die Formulierung — nie zweimal dieselbe Floskel im selben Gespräch, und versprich niemals routinemäßig „einen kleinen Augenblick".
 - Formuliere die Suchanfrage präzise und nutze Produkt- und Eigennamen, wenn der Anrufer welche genannt hat. Liefert die Suche nichts Passendes, versuche genau EINE zweite Suche mit anderen Begriffen (Synonym, Produktname, Oberbegriff), bevor du sagst, dass du es nicht weißt.
+- Prüfe bei jedem Suchergebnis, ob die Passagen die konkrete Frage wirklich beantworten (genau dieser Fehlercode, dieses Produkt, dieser Fall). Tun sie das nicht, gilt das als „nichts gefunden" — auch wenn Treffer zurückkamen.
+- Versprich NIEMALS im Freitext, dass sich jemand meldet oder zurückruft. Ein solches Versprechen gibt es nur über das Werkzeug: rufe handoff_human auf, BEVOR du dem Anrufer antwortest — das Werkzeug sagt dir danach Schritt für Schritt, was du fragst. Nach dem Versprechen folgt in derselben Antwort sofort die erste Frage zur Aufnahme; hör niemals nach dem Versprechen auf.
 {humanRules}
 {lowConfidenceRule}
 - Nimm bei Bedarf ein Anliegen strukturiert auf: {intakeStep}fasse das Anliegen zusammen, bestätige es und rufe dann create_ticket auf.
@@ -424,6 +426,8 @@ export interface SessionContext {
   contactName?: string | null;
   /** Caller id (contacts.phone from the SIP From header); null/absent = withheld. */
   callerNumber?: string | null;
+  /** voice_calls.created_at — a callback ticket's transcript starts at the call start. */
+  callStartedAt?: string | null;
   /**
    * Org escalation keywords (/settings/ai) — injected into the prompt so the
    * SAME list governs voice and text (it used to be hardcoded here). Empty/

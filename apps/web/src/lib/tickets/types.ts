@@ -28,11 +28,15 @@ export type TicketDetail = {
   messages: MessageWithAttachments[];
   /** Messages of the conversation BEFORE opened_at (earlier tickets / history). */
   earlierMessageCount: number;
+  /** The last few messages before opened_at — the request's run-up, shown muted. */
+  contextMessages: MessageWithAttachments[];
   notes: NoteItem[];
   events: TicketEvent[];
 };
 
 export type TicketStatusFilter = 'active' | TicketStatus | 'all';
+/** Tickets per status — the numbers on the status tabs of the list. */
+export type TicketStatusCounts = Record<TicketStatus, number>;
 export type TicketAssigneeFilter = 'all' | 'me' | 'none';
 
 export type TicketFilters = {
@@ -52,6 +56,3 @@ export type TicketSettings = {
   counterStarted: boolean;
   nextNumber: number;
 };
-
-/** Tickets per status — the numbers on the status tabs of the list. */
-export type TicketStatusCounts = Record<TicketStatus, number>;

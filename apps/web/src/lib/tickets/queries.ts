@@ -25,6 +25,8 @@ import type {
 // web deploy can precede the db push.
 
 const ACTIVE_STATUSES = ['open', 'in_progress', 'waiting'];
+/** Run-up messages shown (muted) above a ticket's own transcript. */
+const CONTEXT_MESSAGES = 6;
 const LIST_SELECT =
   '*, channel:channels(id, name, type), contact:contacts(id, name, email, company)';
 
@@ -170,7 +172,7 @@ export async function getTicketDetail(
   if (allowedChannelIds && !allowedChannelIds.includes(row.channel_id)) return null;
   const { channel, contact, ...ticket } = row;
 
-  const [convRes, messagesRes, earlierRes, notesRes, eventsRes] = await Promise.all([
+  const [convRes, messagesRes, earlierRes, notesRes, eventsRes, contextRes] = await Promise.all([
     supabase
       .from('conversations')
       .select('id, subject, status, mode')
@@ -202,9 +204,23 @@ export async function getTicketDetail(
       .eq('org_id', orgId)
       .eq('ticket_id', ticket.id)
       .order('created_at', { ascending: true }),
+    // run-up: the last messages before the ticket opened (the customer's
+    // request usually sits right there — owner feedback 2026-09-04)
+    supabase
+      .from('messages')
+      .select('*')
+      .eq('org_id', orgId)
+      .eq('conversation_id', ticket.conversation_id)
+      .lt('created_at', ticket.opened_at)
+      .order('created_at', { ascending: false })
+      .limit(CONTEXT_MESSAGES),
   ]);
 
   const messages = await attachMessageAttachments(orgId, (messagesRes.data ?? []) as Message[]);
+  const contextMessages = await attachMessageAttachments(
+    orgId,
+    ([...((contextRes.data ?? []) as Message[])].reverse())
+  );
   const rawNotes = (notesRes.data ?? []) as {
     id: string;
     content: string;
@@ -226,6 +242,7 @@ export async function getTicketDetail(
     conversation: (convRes.data as TicketDetail['conversation']) ?? null,
     messages,
     earlierMessageCount: earlierRes.count ?? 0,
+    contextMessages,
     notes,
     events: eventsRes.error ? [] : ((eventsRes.data ?? []) as TicketEvent[]),
   };

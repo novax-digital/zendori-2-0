@@ -55,6 +55,24 @@ Nachricht **kein Themenwechsel** ist (`classification.is_new_topic === false`) *
 Nachjustieren. HubSpot-Folge-Notizen gehen nur ans neueste offene Ticket; die SLA-Erinnerung prüft
 bevorzugt das Ticket aus `handoff_events.details.ticket_id`.
 
+## Nachbesserung aus dem Live-Test (2026-09-04, Voice)
+
+Befund: Wissensdatenbank lieferte Treffer, die den Fehlercode nicht enthielten; das Modell versprach im
+Freitext „ein Kollege meldet sich" **ohne** `handoff_human`, und nach dem späteren Tool-Aufruf startete
+es die Aufnahme nicht. Fixes:
+
+- Prompt (`ANSWER_TEMPLATE`): Treffer müssen die konkrete Frage abdecken, sonst gilt „nichts gefunden";
+  **kein Rückruf-Versprechen im Freitext** — nur über `handoff_human`, das VOR der Antwort aufgerufen
+  wird; nach dem Versprechen folgt in derselben Antwort die erste Frage.
+- Tool-Anweisung (`callbackInstruction` in `voice/tools.ts`): ein Satz Versprechen, dann sofort die
+  Aufnahme als nummerierter Plan (`callbackIntakePlan`): bekannte Daten werden **bestätigt** (Name des
+  gematchten Kontakts, Anrufnummer), fehlende konfigurierte Felder erfragt, dann Zusammenfassung →
+  `create_ticket` → `end_call`. Gilt für Ziel `ticket`, den Rückruf-Zweig unter Ziel `human` und den
+  fehlgeschlagenen Transfer.
+- Ticket-Verlauf: Voice-Tickets beginnen beim **Anrufbeginn** (`openedAt = voice_calls.created_at`),
+  nicht beim Versprechen; die Post-Call-Extraktion füllt eine fehlende Beschreibung nach. Die
+  Ticket-Detailseite zeigt außerdem die letzten Nachrichten **vor** dem Ticket als „Vorgeschichte".
+
 ## Manueller Test
 
 1. Migration 0031 angewendet, Web + Worker deployt. Agenten-Editor zeigt „Wenn der Agent nicht

@@ -309,3 +309,14 @@ describe('attach rule v2', () => {
     expect(shouldAttachToTicket({ opened_at: 'garbage', opened_message_id: null }, {}, now)).toBe(true);
   });
 });
+
+describe('openedAt (voice: the whole call is the ticket context)', () => {
+  it('sets opened_at on create when given and ignores it on attach', async () => {
+    const fake = makeFake({ openTicket: null });
+    await ensureTicket(fake.client, { ...BASE, origin: 'voice', openedAt: '2026-09-04T20:10:26Z' });
+    expect(fake.inserts.find((i) => i.table === 'tickets')?.row.opened_at).toBe('2026-09-04T20:10:26Z');
+    const attach = makeFake({ openTicket: OPEN });
+    await ensureTicket(attach.client, { ...BASE, origin: 'voice', attach: 'always', openedAt: '2026-09-04T20:10:26Z' });
+    expect(attach.updates.find((u) => u.table === 'tickets')?.patch).not.toHaveProperty('opened_at');
+  });
+});

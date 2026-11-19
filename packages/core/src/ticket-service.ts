@@ -24,6 +24,12 @@ export interface EnsureTicketInput {
   assigneeId?: string | null;
   /** First message that belongs to the ticket (transcript starts there). */
   openedMessageId?: string | null;
+  /**
+   * Explicit start of the ticket's transcript slice (ISO). Voice passes the
+   * call start: the whole call is the context of a callback ticket, not just
+   * the turns after the promise. Ignored on attach.
+   */
+  openedAt?: string | null;
   /** auth user for manual creation; null/absent = system/bot. */
   createdBy?: string | null;
   /** Content-free extras for ticket_events.details (reasons, ids). */
@@ -243,6 +249,7 @@ export async function ensureTicket(
       assignee_id: input.assigneeId ?? null,
       status: input.assigneeId ? 'in_progress' : 'open',
       opened_message_id: input.openedMessageId ?? null,
+      ...(input.openedAt ? { opened_at: input.openedAt } : {}),
       created_by: input.createdBy ?? null,
     })
     .select('id, number, display_id, status, subject, channel_id')
@@ -283,6 +290,8 @@ export interface RefineOpenTicketInput {
   /** Always applied when given (a refinement of the same request). */
   priority?: ConversationPriority | null;
   subject?: string | null;
+  /** Filled only when the ticket has none yet (post-call extraction). */
+  description?: string | null;
   /** 'gapfill' replaces only placeholder subjects; 'overwrite' always. */
   mode?: 'gapfill' | 'overwrite';
 }
@@ -302,6 +311,10 @@ export async function refineOpenTicket(
   const subject = nonEmpty(input.subject);
   if (subject && (input.mode === 'overwrite' || isPlaceholderSubject(open.subject))) {
     patch.subject = subject.slice(0, 200);
+  }
+  const description = nonEmpty(input.description);
+  if (description && (input.mode === 'overwrite' || !open.description)) {
+    patch.description = description.slice(0, 4000);
   }
   if (Object.keys(patch).length === 0) return;
   const { error } = await supabase

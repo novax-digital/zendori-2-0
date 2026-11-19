@@ -14,7 +14,7 @@ import {
 } from '@zendori/channels';
 import { isMissingColumnError } from '../db.js';
 import { ensureTicketForConversation } from '../pipeline/tickets.js';
-import { escalatesLowConfidence, intakeFieldsPhrase } from './session-config.js';
+import { escalatesLowConfidence, formatPhoneForSpeech, intakeFieldsPhrase } from './session-config.js';
 
 // Voice function-tool handlers. All run in the worker with the org_id bound
 // from the voice_calls row (server truth — never from the model), so RLS-scoped
@@ -52,6 +52,10 @@ export interface ToolContext {
   phoneGate: PhoneGateState;
   /** Caller id (contacts.phone from SIP From); null = withheld. Steers callback storage. */
   callerNumber: string | null;
+  /** Known contact name (matched by caller id) — confirmed, not re-asked, during intake. */
+  contactName: string | null;
+  /** voice_calls.created_at — callback tickets span the whole call. */
+  callStartedAt: string | null;
   /**
    * Session-owned (Phase 11): the ticket this call already created/attached.
    * A second create_ticket in the same call is a correction and OVERWRITES
@@ -309,6 +313,69 @@ export function callbackIntakeStep(fields: IntakeField[]): string {
 }
 
 /**
+ * The callback intake as an imperative plan for the model (owner test
+ * 2026-09-04: the agent said "ein Kollege meldet sich" — and then silence).
+ * Known data is CONFIRMED, not re-asked; missing configured fields are asked;
+ * the plan is numbered so the model walks it step by step. Pure.
+ */
+export function callbackIntakePlan(
+  ctx: Pick<ToolContext, 'intakeFields' | 'contactName' | 'callerNumber'>
+): string {
+  const steps: string[] = [];
+  for (const field of ctx.intakeFields) {
+    switch (field) {
+      case 'name':
+        steps.push(
+          ctx.contactName
+            ? `Name: bekannt als „${ctx.contactName}" — nur bestätigen lassen („Sie sind …, richtig?"), nicht neu erfragen`
+            : 'Name: erfragen'
+        );
+        break;
+      case 'phone':
+        steps.push(
+          ctx.callerNumber
+            ? `Rückrufnummer: die Anrufnummer ${formatPhoneForSpeech(ctx.callerNumber)} nennen und fragen, ob wir darunter zurückrufen dürfen (dann use_caller_number=true); nennt er eine andere, in Zifferngruppen wiederholen und bestätigen lassen (callback_confirmed=true)`
+            : 'Rückrufnummer: erfragen, in Zifferngruppen wiederholen und bestätigen lassen (callback_confirmed=true)'
+        );
+        break;
+      case 'email':
+        steps.push(
+          'E-Mail-Adresse: erfragen, buchstabiert wiederholen und bestätigen lassen (email_confirmed=true)'
+        );
+        break;
+      case 'company':
+        steps.push('Unternehmen: erfragen');
+        break;
+    }
+  }
+  return steps.map((step, i) => `${i + 1}. ${step}`).join(' ');
+}
+
+/**
+ * The spoken instruction after a callback promise: ONE sentence of promise,
+ * then — in the same answer — the first intake question. Ends with the ticket
+ * steps so the model never stops after the promise.
+ */
+export function callbackInstruction(
+  ctx: Pick<ToolContext, 'intakeFields' | 'contactName' | 'callerNumber'>,
+  when: 'asap' | 'next_business_day'
+): string {
+  const plan = callbackIntakePlan(ctx);
+  const timing =
+    when === 'next_business_day'
+      ? 'am nächsten Werktag zurückmeldet (wir sind gerade außerhalb der Geschäftszeiten)'
+      : 'schnellstmöglich zurückmeldet';
+  return (
+    `Sage in EINEM Satz, dass du das Anliegen aufnimmst und sich ein Mitarbeiter ${timing} — versprich keine Verbindung. ` +
+    `Frage dann SOFORT in derselben Antwort das Erste ab; beende deine Antwort NIE nach dem Versprechen. ` +
+    (plan
+      ? `Nacheinander: ${plan}. `
+      : 'Kontaktdaten sind nicht nötig. ') +
+    `Danach: fasse das Anliegen in einem Satz zusammen, lass es bestätigen, rufe create_ticket mit allen bestätigten Angaben auf und beende dann das Gespräch mit end_call.`
+  );
+}
+
+/**
  * Spoken numbers arrive with spaces, slashes or dashes ("0170 / 123-4567");
  * store and compare them compact. "00…" becomes "+…"; anything without at
  * least four digits is not a number and is dropped.
@@ -440,6 +507,7 @@ export async function createTicketTool(ctx: ToolContext, rawArgs: unknown): Prom
     subject: args.subject,
     description: args.description,
     attach: 'always',
+    openedAt: ctx.callStartedAt ?? undefined,
     attachMode: ctx.ticketState.ticketId ? 'overwrite' : 'gapfill',
   });
   if (ticket) ctx.ticketState.ticketId = ticket.id;
@@ -728,6 +796,7 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
       conversationId: ctx.conversationId,
       origin: 'voice',
       attach: 'always',
+      openedAt: ctx.callStartedAt ?? undefined,
       details: { reason, outcome: 'callback_ticket', target: 'ticket' },
     });
     if (promised) ctx.ticketState.ticketId = promised.id;
@@ -743,13 +812,10 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
     }
     const outside =
       hasConfiguredHours(ctx.businessHours) && !isWithinBusinessHours(new Date(), ctx.businessHours!);
-    const intakeStep = callbackIntakeStep(ctx.intakeFields);
     return {
       ok: true,
       action: 'callback',
-      instruction: outside
-        ? `Sage ehrlich, dass du das Anliegen aufnimmst und sich ein Mitarbeiter am nächsten Werktag zurückmeldet — versprich keine Verbindung: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`
-        : `Sage ehrlich, dass du das Anliegen aufnimmst und sich ein Mitarbeiter schnellstmöglich zurückmeldet — versprich keine Verbindung: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`,
+      instruction: callbackInstruction(ctx, outside ? 'next_business_day' : 'asap'),
     };
   }
 
@@ -787,18 +853,19 @@ export async function handoffTool(ctx: ToolContext, rawArgs: unknown): Promise<H
     conversationId: ctx.conversationId,
     origin: 'voice',
     attach: 'always',
+    openedAt: ctx.callStartedAt ?? undefined,
     details: { reason, outcome: 'callback_ticket' },
   });
   if (promised) ctx.ticketState.ticketId = promised.id;
   const hoursConfigured = hasConfiguredHours(ctx.businessHours);
   const outsideHours =
     hoursConfigured && !isWithinBusinessHours(new Date(), ctx.businessHours!);
-  const intakeStep = callbackIntakeStep(ctx.intakeFields);
   return {
     ok: true,
     action: 'callback',
-    instruction: outsideHours
-      ? `Wir sind gerade außerhalb der Geschäftszeiten — kein Live-Transfer. Sage das ehrlich, biete einen Rückruf am nächsten Werktag an: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`
-      : `Kein Live-Transfer verfügbar. Biete dem Anrufer einen Rückruf an: ${intakeStep}, rufe create_ticket auf und beende dann das Gespräch mit end_call.`,
+    instruction:
+      (outsideHours
+        ? 'Kein Live-Transfer — wir sind außerhalb der Geschäftszeiten. '
+        : 'Kein Live-Transfer verfügbar. ') + callbackInstruction(ctx, outsideHours ? 'next_business_day' : 'asap'),
   };
 }

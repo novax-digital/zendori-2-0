@@ -39,6 +39,7 @@ const {
   PHONE_INVALID_ERROR,
   PHONE_DROPPED_NOTE,
   TICKET_CREATED_INSTRUCTION,
+  callbackIntakePlan,
   newConfirmGateState,
   newPhoneGateState,
   newTicketState,
@@ -155,6 +156,8 @@ function ctxWith(
     phoneGate: newPhoneGateState(),
     // caller id known unless a test says otherwise
     callerNumber: '+493022334455',
+    contactName: null,
+    callStartedAt: '2026-09-04T20:10:26.867Z',
     ticketState: newTicketState(),
     ...over,
   };
@@ -687,12 +690,20 @@ describe('handoffTool', () => {
     const instruction = (result as { instruction: string }).instruction;
     expect(instruction).toContain('versprich keine Verbindung');
     expect(instruction).not.toContain('Live-Transfer');
+    // the promise must be followed by the intake IN THE SAME ANSWER (owner test 2026-09-04)
+    expect(instruction).toContain('Frage dann SOFORT in derselben Antwort');
+    expect(instruction).toContain('rufe create_ticket');
     // no mode/status flip
     expect(fake.updates.some((u) => u.table === 'conversations')).toBe(false);
-    // ticket at the promise, attached within the call
+    // ticket at the promise, attached within the call, spanning the WHOLE call
     expect(ensureTicketMock).toHaveBeenCalledWith(
       fake.client,
-      expect.objectContaining({ origin: 'voice', attach: 'always', details: expect.objectContaining({ target: 'ticket' }) })
+      expect.objectContaining({
+        origin: 'voice',
+        attach: 'always',
+        openedAt: '2026-09-04T20:10:26.867Z',
+        details: expect.objectContaining({ target: 'ticket' }),
+      })
     );
     expect(ticketState.ticketId).toBe('ticket-1');
     const event = fake.inserts.find((i) => i.table === 'handoff_events');
@@ -922,5 +933,25 @@ describe('normalizePhone / toE164 / samePhone', () => {
     expect(normalizePhone('keine')).toBeUndefined();
     expect(normalizePhone('12')).toBeUndefined();
     expect(normalizePhone(undefined)).toBeUndefined();
+  });
+});
+
+describe('callbackIntakePlan', () => {
+  it('confirms known data instead of re-asking and asks only configured fields', () => {
+    const plan = callbackIntakePlan({
+      intakeFields: ['name', 'phone', 'company'],
+      contactName: 'Max Muster',
+      callerNumber: '+491701234567',
+    });
+    expect(plan).toContain('1. Name: bekannt als „Max Muster" — nur bestätigen lassen');
+    expect(plan).toContain('2. Rückrufnummer: die Anrufnummer 0170 123 4567 nennen');
+    expect(plan).toContain('3. Unternehmen: erfragen');
+    expect(plan).not.toContain('E-Mail');
+  });
+  it('asks for unknown data and stays empty without configured fields', () => {
+    expect(callbackIntakePlan({ intakeFields: ['name', 'phone'], contactName: null, callerNumber: null })).toBe(
+      '1. Name: erfragen 2. Rückrufnummer: erfragen, in Zifferngruppen wiederholen und bestätigen lassen (callback_confirmed=true)'
+    );
+    expect(callbackIntakePlan({ intakeFields: [], contactName: null, callerNumber: null })).toBe('');
   });
 });

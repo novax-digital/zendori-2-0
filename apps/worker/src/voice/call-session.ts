@@ -23,7 +23,7 @@ import {
   transcriptionUpdatedSchema,
 } from './xai-realtime.js';
 import {
-  callbackIntakeStep,
+  callbackInstruction,
   createTicketTool,
   handoffTool,
   kbSearchTool,
@@ -624,6 +624,7 @@ export class CallSession {
             conversationId: this.p.conversationId,
             origin: 'voice',
             attach: 'always',
+            openedAt: this.p.context.callStartedAt ?? undefined,
             details: { outcome: 'transfer_failed' },
           });
           if (promised) this.ticketState.ticketId = promised.id;
@@ -633,7 +634,14 @@ export class CallSession {
                 ? {
                     ok: true,
                     action: 'callback',
-                    instruction: `Die Weiterleitung ist fehlgeschlagen. Entschuldige dich kurz, biete einen Rückruf an: ${callbackIntakeStep(this.p.agent.intakeFields)}, rufe create_ticket auf und beende dann mit end_call.`,
+                    instruction: `Die Weiterleitung ist fehlgeschlagen. Entschuldige dich kurz. ${callbackInstruction(
+                      {
+                        intakeFields: this.p.agent.intakeFields,
+                        contactName: this.p.context.contactName ?? null,
+                        callerNumber: this.p.context.callerNumber ?? null,
+                      },
+                      'asap'
+                    )}`,
                   }
                 : r.output;
             if (output !== null) this.send(functionCallOutputEvent(r.callId, output));
@@ -764,6 +772,8 @@ export class CallSession {
       emailGate: this.emailGate,
       phoneGate: this.phoneGate,
       callerNumber: this.p.context.callerNumber ?? null,
+      contactName: this.p.context.contactName ?? null,
+      callStartedAt: this.p.context.callStartedAt ?? null,
       ticketState: this.ticketState,
     };
     try {

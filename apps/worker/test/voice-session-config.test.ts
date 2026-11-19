@@ -367,3 +367,12 @@ describe('escalation target (voice)', () => {
     expect(answer.instructions).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 });
+
+describe('no promise without the tool (owner test 2026-09-04)', () => {
+  it('answer mode forbids free-text callback promises and demands a coverage check of search hits', () => {
+    const session = buildSessionConfig(CONFIG, agentWith({ mode: 'answer' }), CONTEXT);
+    expect(session.instructions).toContain('Versprich NIEMALS im Freitext, dass sich jemand meldet oder zurückruft');
+    expect(session.instructions).toContain('rufe handoff_human auf, BEVOR du dem Anrufer antwortest');
+    expect(session.instructions).toContain('gilt das als „nichts gefunden" — auch wenn Treffer zurückkamen');
+  });
+});

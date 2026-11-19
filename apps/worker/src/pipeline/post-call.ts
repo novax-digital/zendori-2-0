@@ -345,6 +345,8 @@ export async function processPostCall(voiceCallId: string): Promise<void> {
         conversationId: call.conversation_id,
         priority: classification.priority,
         subject: extraction.subject,
+        // a caller who hung up before create_ticket still leaves a usable ticket
+        description: extraction.description,
         mode: 'gapfill',
       });
     } catch (err) {
