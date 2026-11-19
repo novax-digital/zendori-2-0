@@ -67,7 +67,7 @@ export function toPublicDemoStatus(status: DemoStatus): DemoPublicStatus {
 }
 
 /** Bumped whenever the consent wording in the embed changes (stored per lead). */
-export const DEMO_CONSENT_VERSION = '2026-11-13';
+export const DEMO_CONSENT_VERSION = '2026-11-19';
 
 /** Render-token scope for the demo embed (HMAC input; never collides with 32-hex form tokens). */
 export const DEMO_RENDER_SCOPE = 'demo-call';

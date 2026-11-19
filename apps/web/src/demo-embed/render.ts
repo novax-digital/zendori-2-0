@@ -21,9 +21,11 @@ const SUBTITLE = 'Dauert ca. 1 Minute';
 /** Brand defaults (zendori.ai): readable teal for links/focus, darkened brand gradient for buttons. */
 const BRAND_ACCENT = '#0b7480';
 const BRAND_BUTTON = 'linear-gradient(135deg, #00805a 0%, #0070c4 100%)';
-// First-person wording (unchanged since DEMO_CONSENT_VERSION 2026-11-13).
+// Any change to this wording bumps DEMO_CONSENT_VERSION (@zendori/core demo.ts).
+// 2026-11-19 (owner): the processors are named in the linked privacy policy
+// (section "Demo-Anruf") instead of in the consent line itself.
 const CONSENT_TEXT =
-  'Ich möchte auf die angegebene Nummer einen Bestätigungscode (per SMS oder Anruf) und einen Demo-Anruf eines KI-Assistenten erhalten und willige in die Verarbeitung meiner Angaben zu diesem Zweck und zur Kontaktaufnahme durch Zendori ein. Der Anruf wird von einer KI geführt; dabei werden Daten auch durch xAI und Twilio (USA) verarbeitet. Mehr in der ';
+  'Ich möchte auf die angegebene Nummer einen Bestätigungscode (per SMS oder Anruf) und einen Demo-Anruf eines KI-Assistenten erhalten und willige in die Verarbeitung meiner Angaben zu diesem Zweck und zur Kontaktaufnahme durch Zendori ein. Der Anruf wird von einer KI geführt; dabei werden Daten im Rahmen unserer ';
 const VERIFY_LABEL = 'Bestätigen & Anruf starten';
 
 export interface DemoRenderCallbacks {
@@ -285,7 +287,7 @@ export function renderDemo(
   } else {
     consentText.appendChild(document.createTextNode('Datenschutzerklärung'));
   }
-  consentText.appendChild(document.createTextNode('.'));
+  consentText.appendChild(document.createTextNode(' verarbeitet.'));
   consentText.appendChild(el('span', 'zd-req', '*'));
   consentLabel.append(consentInput, consentText);
   const consentError = el('div', 'zd-error');

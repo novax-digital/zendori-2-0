@@ -178,5 +178,8 @@ auslöst, ist ein Missbrauchsziel.
 - Die IP wird nur als HMAC gespeichert.
 - xAI und Twilio sind US-Prozessoren (freigegebene §7-Ausnahme, DPA-Auflage wie Phase 9).
   Twilio Verify bekommt dabei nur die Telefonnummer. Die
-  Einwilligung im Embed nennt das ausdrücklich (`consent_version` wird pro Lead gespeichert).
+  Einwilligung im Embed verweist dafür auf die Datenschutzerklärung (Abschnitt „Demo-Anruf“ nennt
+  die Dienstleister); bis `consent_version` 2026-11-13 standen xAI und Twilio (USA) im
+  Einwilligungstext selbst, seit 2026-11-19 nicht mehr (Entscheidung Owner). Die Version wird pro
+  Lead gespeichert.
 - Eine automatische Löschfrist für Demo-Leads gibt es noch nicht (offener Punkt).

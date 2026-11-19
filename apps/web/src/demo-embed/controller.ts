@@ -11,11 +11,13 @@ import { renderDemo } from './render';
 import type { DemoMountOptions, DemoPublicStatus, DemoVerifyChannel } from './types';
 
 /**
- * Demo embed controller: bootstrap (render token) → render into a closed
- * shadow root → submit (server sends an SMS/voice code to the number) → code
- * step → success panel with live status polling. Returns false when the
- * bootstrap failed so the caller can retry later (the placeholder stays
- * empty — no error box on the host site).
+ * Demo embed controller: render into a closed shadow root right away → submit
+ * (server sends an SMS/voice code to the number) → code step → success panel
+ * with live status polling. The render token (bot check: proves the form was
+ * rendered, min-time) is only needed on submit, so it is fetched in the
+ * background — the form used to wait for that round trip before painting.
+ * The host gets data-zendori-state="ready" once the form is in the DOM (host
+ * pages hide their own loading placeholder on it).
  */
 
 const POLL_INTERVAL_MS = 4_000;
@@ -59,21 +61,26 @@ const GENERIC_ERROR = 'Die Anfrage konnte nicht gesendet werden. Bitte versuch e
 // One mount per host (closed shadow roots cannot be re-attached).
 const mountedHosts = new WeakSet<HTMLElement>();
 
-export async function mountDemo(
-  host: HTMLElement,
-  apiBase: string,
-  options: DemoMountOptions
-): Promise<boolean> {
-  if (mountedHosts.has(host)) return true;
+export function mountDemo(host: HTMLElement, apiBase: string, options: DemoMountOptions): void {
+  if (mountedHosts.has(host)) return;
   mountedHosts.add(host);
 
-  let renderToken: string;
-  try {
-    renderToken = await fetchRenderToken(apiBase);
-  } catch {
-    mountedHosts.delete(host); // allow the 'online' retry to mount again
-    return false;
+  let renderToken: string | null = null;
+  let tokenRequest: Promise<string | null> | null = null;
+  /** Fetches a fresh token (one request at a time); null when the API is unreachable. */
+  function loadRenderToken(): Promise<string | null> {
+    tokenRequest ??= fetchRenderToken(apiBase)
+      .then((token) => {
+        renderToken = token;
+        return token;
+      })
+      .catch(() => null)
+      .finally(() => {
+        tokenRequest = null;
+      });
+    return tokenRequest;
   }
+  void loadRenderToken();
 
   const shadow = host.attachShadow({ mode: 'closed' });
   // one id per fill attempt — reused on resubmits so the server dedupes,
@@ -93,6 +100,7 @@ export async function mountDemo(
     onResend: (channel) => void handleResend(channel),
     onChangeNumber: () => void changeNumber(),
   });
+  host.setAttribute('data-zendori-state', 'ready');
 
   function stopCooldown(): void {
     if (cooldownTimer !== null) {
@@ -163,11 +171,8 @@ export async function mountDemo(
     stopPolling();
     stopCooldown();
     statusToken = null;
-    try {
-      renderToken = await fetchRenderToken(apiBase);
-    } catch {
-      // keep the old token; a stale one is answered with render_expired and refreshed then
-    }
+    // on failure the old token stays; a stale one is answered with render_expired and refreshed then
+    await loadRenderToken();
     ui.showEmptyForm();
   }
 
@@ -179,8 +184,14 @@ export async function mountDemo(
     submitting = true;
     ui.setSubmitting(true);
     try {
+      // usually there since mount; a slow or failed background fetch is awaited/retried here
+      const token = renderToken ?? (await loadRenderToken());
+      if (!token) {
+        ui.showBanner(NETWORK_ERROR);
+        return;
+      }
       const result = await submitDemoRequest(apiBase, {
-        renderToken,
+        renderToken: token,
         clientRequestId,
         company: values.company,
         contactName: values.contactName,
@@ -200,11 +211,9 @@ export async function mountDemo(
       if (error instanceof DemoApiError) {
         if (error.code === 'render_expired') {
           // stale tab: refresh the token silently, the user just resubmits
-          try {
-            renderToken = await fetchRenderToken(apiBase);
-          } catch {
-            // next submit will surface the error again
-          }
+          // (if that fails too, the next submit surfaces the error again)
+          renderToken = null;
+          await loadRenderToken();
           ui.showBanner('Bitte sende das Formular erneut ab.');
         } else {
           if (Object.keys(error.fields).length > 0) ui.setFieldErrors(error.fields);
@@ -304,13 +313,9 @@ export async function mountDemo(
   async function changeNumber(): Promise<void> {
     stopCooldown();
     statusToken = null;
-    try {
-      renderToken = await fetchRenderToken(apiBase);
-    } catch {
-      // a stale token is answered with render_expired and refreshed then
-    }
+    // on failure the old token stays; a stale one is answered with render_expired and refreshed then
+    await loadRenderToken();
     ui.showForm();
   }
 
-  return true;
 }

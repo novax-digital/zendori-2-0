@@ -12,8 +12,9 @@ import type { DemoMountOptions } from './types';
  * gradient with one solid color), data-title (heading), data-privacy-url
  * (http(s) link in the consent text). Optional on the script:
  * data-zendori-url overrides the API base (default: script origin). Multiple
- * mounts per page are supported. If the API is unreachable at bootstrap the
- * placeholder stays empty (no error box on the host site).
+ * mounts per page are supported. The form paints as soon as the script runs
+ * and marks its placeholder with data-zendori-state="ready"; an unreachable
+ * API surfaces as a message on submit.
  */
 
 declare global {
@@ -79,20 +80,12 @@ function readOptions(host: HTMLElement): DemoMountOptions {
   };
 }
 
-function mountWithRetry(host: HTMLElement, apiBase: string): void {
-  void mountDemo(host, apiBase, readOptions(host)).then((mounted) => {
-    if (mounted) return;
-    // API down: placeholder stays empty — retry once connectivity returns
-    window.addEventListener('online', () => mountWithRetry(host, apiBase), { once: true });
-  });
-}
-
 function init(): void {
   if (window.__zendoriDemoLoaded) return;
   window.__zendoriDemoLoaded = true;
   const apiBase = resolveApiBase();
   document.querySelectorAll<HTMLElement>('[data-zendori-demo]').forEach((host) => {
-    mountWithRetry(host, apiBase);
+    mountDemo(host, apiBase, readOptions(host));
   });
 }
 
