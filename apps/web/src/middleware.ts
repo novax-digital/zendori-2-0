@@ -6,7 +6,8 @@ import { publicSupabaseEnv } from './lib/env';
 // Public: /login, /register (redirects to /login — self-registration is
 // disabled) and /invite (team invitees open their password-setup link without a
 // session; the page authenticates itself by redeeming the mailed OTP token).
-const PUBLIC_PATHS = ['/login', '/register', '/invite'];
+// '/passwort-*': forgot password + the reset link target (signed out by definition)
+const PUBLIC_PATHS = ['/login', '/register', '/invite', '/passwort-vergessen', '/passwort-neu'];
 
 export async function middleware(request: NextRequest) {
   // public surfaces that authenticate themselves and are called by third

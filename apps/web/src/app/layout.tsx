@@ -10,6 +10,7 @@ import './styles/forms-team.css';
 import './styles/settings.css';
 import './styles/admin.css';
 import './styles/inbox.css';
+import './styles/auth.css';
 import { inter } from '@/lib/fonts';
 import AppShell from '@/components/AppShell';
 

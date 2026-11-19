@@ -22,7 +22,9 @@ export type RateLimitName =
   | 'demo-request-email'
   | 'demo-status-ip'
   | 'demo-verify-ip'
-  | 'demo-resend-ip';
+  | 'demo-resend-ip'
+  | 'password-reset-ip'
+  | 'password-reset-email';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -115,6 +117,17 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       limiter: Ratelimit.slidingWindow(6, '10 m'),
       prefix: 'zendori:rl:demo-resend-ip',
     }),
+    // "Passwort vergessen": every allowed request may send a mail
+    'password-reset-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(10, '1 h'),
+      prefix: 'zendori:rl:password-reset-ip',
+    }),
+    'password-reset-email': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(3, '1 h'),
+      prefix: 'zendori:rl:password-reset-email',
+    }),
   };
   return limiters;
 }
@@ -147,9 +160,14 @@ export async function checkRateLimit(name: RateLimitName, identifier: string): P
  * either, all requests share the fixed 'unknown' bucket instead of no limit.
  */
 export function clientIp(request: Request): string {
-  const realIp = request.headers.get('x-real-ip')?.trim();
+  return clientIpFromHeaders(request.headers);
+}
+
+/** Same as clientIp, for server actions (next/headers). */
+export function clientIpFromHeaders(headers: Headers): string {
+  const realIp = headers.get('x-real-ip')?.trim();
   if (realIp) return realIp;
-  const forwarded = request.headers.get('x-forwarded-for');
+  const forwarded = headers.get('x-forwarded-for');
   if (forwarded) {
     const entries = forwarded.split(',');
     const last = entries[entries.length - 1]?.trim();

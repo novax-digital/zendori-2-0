@@ -13,3 +13,14 @@ export const inter = localFont({
     { path: '../fonts/Inter-Bold.ttf', weight: '700', style: 'normal' },
   ],
 });
+
+// Sora — the brand headline face (zendori.ai, Brand Guidelines v1.0). Only the
+// sign-in pages use it (auth headlines); exposed as --font-sora on their root.
+export const sora = localFont({
+  variable: '--font-sora',
+  display: 'swap',
+  src: [
+    { path: '../fonts/Sora-Regular.woff2', weight: '400', style: 'normal' },
+    { path: '../fonts/Sora-SemiBold.woff2', weight: '600', style: 'normal' },
+  ],
+});

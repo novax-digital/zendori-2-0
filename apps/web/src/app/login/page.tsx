@@ -1,8 +1,10 @@
+import Link from 'next/link';
 import { signIn } from '../actions';
-import AuthCard from '@/components/ui/AuthCard';
-import Button from '@/components/ui/Button';
+import AuthSplit from '@/components/auth/AuthSplit';
+import { AuthPasswordField, AuthSubmit, AuthTextField } from '@/components/auth/AuthFields';
 import Callout from '@/components/ui/Callout';
-import { Field } from '@/components/ui/Field';
+
+export const metadata = { title: 'Anmelden' };
 
 export default async function LoginPage({
   searchParams,
@@ -12,27 +14,46 @@ export default async function LoginPage({
   const { error, notice, next } = await searchParams;
 
   return (
-    <AuthCard title="Willkommen zurück" subtitle="Melde dich bei deinem Konto an.">
+    <AuthSplit
+      chip="Anmeldung"
+      title="Willkommen zurück."
+      subtitle="Melde dich an, um deinen Posteingang, deine Agenten und Kanäle zu verwalten."
+      footer={
+        <>
+          Noch kein Zugang?{' '}
+          <a href="https://zendori.ai/demo">Demo-Anruf anfordern</a>
+        </>
+      }
+    >
       {error ? <Callout tone="danger">{error}</Callout> : null}
       {notice ? <Callout tone="success">{notice}</Callout> : null}
-      <form className="stack" action={signIn}>
+      <form className="authx-form" action={signIn}>
         <input type="hidden" name="next" value={next ?? '/'} />
-        <Field label="E-Mail" htmlFor="email">
-          <input id="email" name="email" type="email" autoComplete="email" required />
-        </Field>
-        <Field label="Passwort" htmlFor="password">
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-          />
-        </Field>
-        <Button type="submit" variant="primary">
-          Anmelden
-        </Button>
+        <AuthTextField
+          id="email"
+          name="email"
+          type="email"
+          label="E-Mail"
+          icon="mail"
+          autoComplete="email"
+          placeholder="du@firma.de"
+          required
+        />
+        <AuthPasswordField
+          id="password"
+          name="password"
+          label="Passwort"
+          autoComplete="current-password"
+          placeholder="••••••••"
+          required
+          aside={
+            <Link className="authx-link" href="/passwort-vergessen">
+              Passwort vergessen?
+            </Link>
+          }
+        />
+        <AuthSubmit label="Anmelden" pendingLabel="Wird angemeldet …" />
       </form>
-    </AuthCard>
+    </AuthSplit>
   );
 }

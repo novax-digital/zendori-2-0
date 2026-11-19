@@ -25,6 +25,8 @@ import {
 // Routes that render without the app chrome (auth + embeddable/demo surfaces).
 const BARE_PREFIXES = [
   '/login',
+  '/passwort-vergessen',
+  '/passwort-neu',
   '/register',
   '/onboarding',
   '/invite',
