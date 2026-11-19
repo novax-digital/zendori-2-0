@@ -37,7 +37,7 @@ export type ChannelFlavor =
   | 'test';
 
 export const FLAVOR_LABELS: Record<ChannelFlavor, string> = {
-  webform: 'Web-Formular',
+  webform: 'Formular',
   form: 'Formular-Weiterleitung',
   email: 'E-Mail-Weiterleitung',
   whatsapp: 'WhatsApp',

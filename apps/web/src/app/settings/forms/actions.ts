@@ -21,16 +21,23 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** `panel` keeps a drawer of the list page open (e.g. 'new' after a failed create). */
+/**
+ * The list a form lives in is the channel list (forms are a channel type).
+ * `panel: 'new'` reopens the "Neuer Kanal" drawer on the form type, e.g. after
+ * a failed create.
+ */
 function formsUrl(
   org: string,
-  message?: { error?: string; notice?: string; panel?: string }
+  message?: { error?: string; notice?: string; panel?: 'new' }
 ): string {
   const params = new URLSearchParams({ org });
-  if (message?.panel) params.set('panel', message.panel);
+  if (message?.panel) {
+    params.set('panel', message.panel);
+    params.set('type', 'webform');
+  }
   if (message?.error) params.set('error', message.error);
   if (message?.notice) params.set('notice', message.notice);
-  return `/settings/forms?${params.toString()}`;
+  return `/settings/channels?${params.toString()}`;
 }
 
 function builderUrl(org: string, formId: string, message?: { error?: string; notice?: string }): string {
@@ -68,8 +75,9 @@ export async function createForm(formData: FormData): Promise<void> {
     org: formData.get('org'),
     name: textField(formData.get('name')),
   });
-  // The create form lives in the "Neues Formular" drawer (?panel=new): errors
-  // lead back INTO the drawer, success leaves it.
+  // The create form lives in the "Neuer Kanal" drawer of the channel list
+  // (?panel=new&type=webform): errors lead back INTO the drawer, success
+  // leaves it for the builder.
   if (!parsed.success) {
     redirect(
       formsUrl(textField(formData.get('org')), {
@@ -82,9 +90,8 @@ export async function createForm(formData: FormData): Promise<void> {
 
   // Builder forms share the 'form' quota kind with e-mail intake addresses
   // (product decision 2026-07-21); the 0017 trigger stays the race-safe backstop.
-  // No panel here: with the quota used up the list page offers no drawer.
   const quotaError = await checkChannelQuota(org, 'form');
-  if (quotaError) redirect(formsUrl(org, { error: quotaError }));
+  if (quotaError) redirect(formsUrl(org, { error: quotaError, panel: 'new' }));
 
   const supabase = await createSupabaseServerClient();
 
@@ -215,6 +222,7 @@ export async function saveFormDefinition(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/forms');
+  revalidatePath('/settings/channels');
   redirect(builderUrl(org, formId, { notice: 'Gespeichert — Änderungen sind sofort live.' }));
 }
 

@@ -55,21 +55,25 @@ Empfänger unter `INBOUND_EMAIL_DOMAIN`.
 
 ## Rollen der Seiten
 
-- **Einstellungen → Formulare:** Liste + Anlegen (Name ⇒ Default-Definition:
-  Name/E-Mail*/Nachricht*/Datenschutz*).
+- **Kanäle → „Neuer Kanal" → Formular → „In Zendori bauen":** Anlegen (Name ⇒
+  Default-Definition: Name/E-Mail*/Nachricht*/Datenschutz*). Die Liste der
+  Formulare ist die Kanalliste (Typ „Formular"); der frühere Sidebar-Punkt
+  „Formulare" ist seit 2026-11-18 entfallen (`/settings/forms` leitet um).
 - **Builder (`/settings/forms/[formId]`):** Tabs Felder | Design | Einbetten |
-  Weiterleitung; Live-Vorschau = exakt der Produktions-Renderer (Shadow-Root,
+  Weiterleitung | Agent und Status; Live-Vorschau = exakt der Produktions-Renderer (Shadow-Root,
   Desktop/Mobil/Erfolgs-Umschalter); explizites Speichern (sofort live) +
   beforeunload-Guard; Löschen mit Namens-Bestätigung (löscht auch die
   Konversationen des Kanals!).
-- **Kanäle → Web-Formular:** Agent-Zuweisung + Aktiv-Schalter (wie überall);
-  bisherige Kachel „Formular" heißt jetzt „Formular-Weiterleitung".
+- **Agent-Zuweisung + Aktiv-Schalter:** im Builder-Tab „Agent und Status" (der
+  Builder ist die Kanalseite des Formulars; der Aktiv-Schalter steht zusätzlich
+  in der Kanalliste). Die Intake-Adresse für bestehende Website-Formulare heißt
+  „Formular-Weiterleitung" und ist die zweite Variante des Typs „Formular".
 
 ## Manuelle Testanleitung
 
 Voraussetzung: 0019 gepusht, Vercel deployed, Worker auf neuem Image.
 
-1. **Anlegen:** Einstellungen → Formulare → „Neues Formular" (Name
+1. **Anlegen:** Kanäle → „Neuer Kanal" → Formular → „In Zendori bauen" (Name
    „Test-Kontakt"). Erwartet: Redirect in den Builder, 4 Default-Felder,
    Live-Vorschau rechts.
 2. **Bauen:** Feld „Telefon" hinzufügen (Zuordnung „Telefon des Kontakts"),

@@ -30,10 +30,12 @@ function channelsUrl(
   // return there. Strictly validated same-section path — never an open redirect.
   // Redesign: the detail page has page tabs (?tab=…); returnToOf() appends the
   // tab the form was on, so a save lands on the same tab again.
+  // A builder form's channel page is /settings/forms/[formId] (its agent and
+  // status rows post to the channel actions), so that path is accepted too.
   let base = '/settings/channels';
   if (returnTo) {
     const [path, query] = returnTo.split('?');
-    if (path && /^\/settings\/channels\/[0-9a-f-]{36}$/.test(path)) {
+    if (path && /^\/settings\/(channels|forms)\/[0-9a-f-]{36}$/.test(path)) {
       base = path;
       const tab = new URLSearchParams(query ?? '').get('tab');
       if (tab && /^[a-z]{1,16}$/.test(tab)) params.set('tab', tab);
@@ -796,7 +798,7 @@ export async function deleteChannel(formData: FormData): Promise<void> {
     redirect(
       channelsUrl(
         org,
-        { error: 'Web-Formulare löschst du im Formular-Builder (Einstellungen → Formulare).' },
+        { error: 'Ein Formular löschst du auf seiner eigenen Seite (Menü oben rechts).' },
         detailReturn
       )
     );

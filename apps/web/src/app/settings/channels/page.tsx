@@ -3,13 +3,22 @@
 // "Neuer Kanal" drawer. The drawer lives in the URL: ?panel=new&type=<flavor>
 // picks the channel type; the page renders the create form of that type on
 // the server. All per-channel settings are on the detail page.
+//
+// Forms are a channel type here (no sidebar entry of their own): "Formular"
+// in the drawer offers both intake ways of CLAUDE.md §2 — built in Zendori
+// (flavor webform) or an existing website form sending to an intake address
+// (flavor form). A built form's row links to its builder,
+// /settings/forms/[formId], which is that channel's page.
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { Channel, ChannelKind } from '@zendori/core';
 import { canEditArea, canViewArea, isAdminRole } from '@zendori/core';
+import { formDefinitionSchema } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
 import { createTestChannel } from '@/app/inbox/actions';
+import { createForm } from '@/app/settings/forms/actions';
 import {
   createWidgetChannel,
   createIntakeAddress,
@@ -42,16 +51,64 @@ const LIST_PATH = '/settings/channels';
 /** id of the create form inside the drawer; the footer button submits it. */
 const CREATE_FORM_ID = 'new-channel';
 
-/** Channel types in the order the drawer offers them, with their one-line pitch. */
-const CREATE_TYPES: { flavor: ChannelFlavor; help: string }[] = [
-  { flavor: 'email', help: 'Bestehendes Postfach per Weiterleitung anbinden' },
-  { flavor: 'form', help: 'Kontaktformular einer bestehenden Website' },
-  { flavor: 'webform', help: 'Im Zendori-Builder gestaltetes Formular' },
-  { flavor: 'chat', help: 'Chat für deine Website, ein Script-Tag' },
-  { flavor: 'whatsapp', help: 'Nummer über Twilio verbinden' },
-  { flavor: 'voice', help: 'Anrufe nimmt der Sprachassistent entgegen' },
-  { flavor: 'test', help: 'Nachrichten manuell einspeisen, zum Ausprobieren' },
+/**
+ * Channel types in the order the drawer offers them, with their one-line pitch.
+ * A type with several flavors ("Formular") asks for the variant in a second
+ * step; the URL always carries the flavor (?type=…).
+ */
+const CREATE_TYPES: { key: string; title: string; help: string; flavors: ChannelFlavor[] }[] = [
+  {
+    key: 'email',
+    title: FLAVOR_LABELS.email,
+    help: 'Bestehendes Postfach per Weiterleitung anbinden',
+    flavors: ['email'],
+  },
+  {
+    key: 'form',
+    title: 'Formular',
+    help: 'In Zendori bauen oder ein bestehendes anbinden',
+    flavors: ['webform', 'form'],
+  },
+  {
+    key: 'chat',
+    title: FLAVOR_LABELS.chat,
+    help: 'Chat für deine Website, ein Script-Tag',
+    flavors: ['chat'],
+  },
+  {
+    key: 'whatsapp',
+    title: FLAVOR_LABELS.whatsapp,
+    help: 'Nummer über Twilio verbinden',
+    flavors: ['whatsapp'],
+  },
+  {
+    key: 'voice',
+    title: FLAVOR_LABELS.voice,
+    help: 'Anrufe nimmt der Sprachassistent entgegen',
+    flavors: ['voice'],
+  },
+  {
+    key: 'test',
+    title: FLAVOR_LABELS.test,
+    help: 'Nachrichten manuell einspeisen, zum Ausprobieren',
+    flavors: ['test'],
+  },
 ];
+
+/** The two ways a form reaches the inbox, as offered inside the type "Formular". */
+const FORM_VARIANTS: Partial<Record<ChannelFlavor, { title: string; help: string }>> = {
+  webform: {
+    title: 'In Zendori bauen',
+    help: 'Felder und Design im Builder, eingebettet per Script oder Link',
+  },
+  form: {
+    title: 'Bestehendes Formular anbinden',
+    help: 'Das Formular deiner Website sendet an eine Zendori-Adresse',
+  },
+};
+
+/** One builder form, as far as the channel list needs it. */
+type FormRef = { id: string; channel_id: string; public_token: string; definition: unknown };
 
 /** Flavors whose identifier is a real address or number worth showing in the list. */
 const ROUTED_FLAVORS = new Set<ChannelFlavor>(['form', 'email', 'whatsapp', 'voice']);
@@ -81,13 +138,23 @@ export default async function ChannelsPage({
   const { orgId, role, access } = await requireActiveOrg(org);
   if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Kanäle" />;
   const isOwner = isAdminRole(role);
+  const canEdit = canEditArea(access, 'channels');
 
-  const [channels, agentOptions, limits] = await Promise.all([
+  const supabase = await createSupabaseServerClient();
+  const [channels, agentOptions, limits, { data: formData }] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),
     loadChannelLimits(orgId),
+    // builder forms: their channel row links to the builder (a missing table on
+    // a pre-0019 database simply yields no rows)
+    supabase.from('forms').select('id, channel_id, public_token, definition').eq('org_id', orgId),
   ]);
   const agentName = new Map(agentOptions.map((a) => [a.id, a.name]));
+  const formOf = new Map(((formData ?? []) as FormRef[]).map((f) => [f.channel_id, f]));
+  const fieldCount = (definition: unknown): number => {
+    const parsed = formDefinitionSchema.safeParse(definition);
+    return parsed.success ? parsed.data.fields.length : 0;
+  };
 
   // Quotas (0017): no limit row = unlimited. `blocked` gates the create forms;
   // a kind with limit 0 and no existing channels is not offered at all.
@@ -114,10 +181,14 @@ export default async function ChannelsPage({
 
   // --- "Neuer Kanal" drawer ---------------------------------------------------
 
-  const offered = CREATE_TYPES.filter(
-    ({ flavor }) => !(quota(quotaKindFor(flavor)).limit === 0 && countOf(flavor) === 0)
+  // a flavor with limit 0 and no existing channels is not offered at all
+  const flavorOffered = (flavor: ChannelFlavor) =>
+    !(quota(quotaKindFor(flavor)).limit === 0 && countOf(flavor) === 0);
+  const offered = CREATE_TYPES.map((t) => ({ ...t, flavors: t.flavors.filter(flavorOffered) })).filter(
+    (t) => t.flavors.length > 0
   );
-  const selected = offered.find(({ flavor }) => flavor === type)?.flavor ?? offered[0]?.flavor;
+  const selectedType = offered.find((t) => t.flavors.some((f) => f === type)) ?? offered[0];
+  const selected = selectedType?.flavors.find((f) => f === type) ?? selectedType?.flavors[0];
 
   /** Hidden fields every create form sends; drawerType brings an error back into the drawer. */
   const formBase = (flavor: ChannelFlavor): ReactNode => (
@@ -251,8 +322,20 @@ export default async function ChannelsPage({
       case 'webform':
         return {
           intro:
-            'Formulare mit eigenem Design, eingebettet per Script oder als gehostete Seite. Anlegen und bearbeiten kannst du sie unter Formulare.',
-          form: null,
+            'Ein Formular mit eigenen Feldern und eigenem Design, eingebettet per Script oder als gehostete Seite. Jede Einsendung landet als Konversation in der Inbox.',
+          submitLabel: 'Formular anlegen',
+          form: (
+            <form id={CREATE_FORM_ID} className="stack" action={createForm}>
+              {formBase('webform')}
+              <Field
+                label="Name"
+                htmlFor="webform-name"
+                help="So heißt das Formular in Zendori und in der Inbox. Felder und Design legst du danach im Builder fest."
+              >
+                <input id="webform-name" name="name" type="text" required minLength={2} maxLength={120} placeholder="z. B. Kontaktformular Website" />
+              </Field>
+            </form>
+          ),
         };
     }
   };
@@ -261,8 +344,12 @@ export default async function ChannelsPage({
   if (panel === 'new') {
     const view = selected ? createView(selected) : null;
     const q = selected ? quota(quotaKindFor(selected)) : null;
-    // a form is only shown (and submittable) to owners/admins below the quota
-    const canSubmit = Boolean(view?.form) && isOwner && q !== null && !q.blocked;
+    // Channels are created by owners/admins. Builder forms are member-managed
+    // content (0019, as on the former Formulare page), so the edit right of the
+    // channels area is enough for them.
+    const mayCreate = selected === 'webform' ? canEdit : isOwner;
+    // a form is only shown (and submittable) to those who may create, below the quota
+    const canSubmit = Boolean(view?.form) && mayCreate && q !== null && !q.blocked;
     drawer = (
       <Drawer
         title="Neuer Kanal"
@@ -287,37 +374,49 @@ export default async function ChannelsPage({
                 Telefonnummern öffnen
               </Button>
             ) : null}
-            {selected === 'webform' ? (
-              <Button href={href('/settings/forms', { org: orgId })} variant="primary">
-                Formulare öffnen
-              </Button>
-            ) : null}
           </>
         }
       >
         {/* a create error returns into the drawer (createErrorUrl) — show it here,
             not on the dimmed page behind */}
         {error ? <Callout tone="danger">{error}</Callout> : null}
-        {selected && view && q ? (
+        {selected && selectedType && view && q ? (
           <>
             <OptionGroup
               label="Kanaltyp"
-              value={selected}
-              options={offered.map(({ flavor, help }) => ({
-                value: flavor,
-                title: FLAVOR_LABELS[flavor],
-                help,
-                href: newHref(flavor),
+              value={selectedType.key}
+              options={offered.map((t) => ({
+                value: t.key,
+                title: t.title,
+                help: t.help,
+                href: newHref(t.flavors[0]),
               }))}
             />
+            {/* a type with two ways in ("Formular"): pick the variant */}
+            {selectedType.flavors.length > 1 ? (
+              <OptionGroup
+                label={`Art: ${selectedType.title}`}
+                value={selected}
+                options={selectedType.flavors.map((flavor) => ({
+                  value: flavor,
+                  title: FORM_VARIANTS[flavor]?.title ?? FLAVOR_LABELS[flavor],
+                  help: FORM_VARIANTS[flavor]?.help,
+                  href: newHref(flavor),
+                }))}
+              />
+            ) : null}
             <p className="muted small">{view.intro}</p>
             {q.blocked ? (
               <Callout tone="warn">
                 Kontingent erreicht ({q.count} von {q.limit}). Für weitere Kanäle wende dich an
                 Zendori.
               </Callout>
-            ) : view.form && !isOwner ? (
-              <Callout>Nur Inhaber und Admins können Kanäle anlegen.</Callout>
+            ) : view.form && !mayCreate ? (
+              <Callout>
+                {selected === 'webform'
+                  ? 'Zum Anlegen von Formularen brauchst du das Bearbeiten-Recht für Kanäle.'
+                  : 'Nur Inhaber und Admins können Kanäle anlegen.'}
+              </Callout>
             ) : (
               view.form
             )}
@@ -379,7 +478,11 @@ export default async function ChannelsPage({
               <tbody>
                 {channels.map((channel: Channel) => {
                   const flavor = flavorOf.get(channel.id) ?? 'test';
-                  const detailHref = href(`${LIST_PATH}/${channel.id}`, { org: orgId });
+                  // a built form's channel page is its builder
+                  const form = flavor === 'webform' ? formOf.get(channel.id) : undefined;
+                  const detailHref = form
+                    ? href(`/settings/forms/${form.id}`, { org: orgId })
+                    : href(`${LIST_PATH}/${channel.id}`, { org: orgId });
                   return (
                     <tr key={channel.id}>
                       <td>
@@ -392,6 +495,9 @@ export default async function ChannelsPage({
                             {/* only real routing identifiers (address, number) */}
                             {ROUTED_FLAVORS.has(flavor) ? (
                               <div className="cell-sub mono">{channelIdentifier(channel)}</div>
+                            ) : null}
+                            {form ? (
+                              <div className="cell-sub">{fieldCount(form.definition)} Felder</div>
                             ) : null}
                           </div>
                         </div>
@@ -416,8 +522,20 @@ export default async function ChannelsPage({
                       <td className="cell-actions">
                         <Menu label={`Aktionen für ${channel.name}`}>
                           <Link className="menu-item" href={detailHref}>
-                            <span className="menu-label">Einstellungen</span>
+                            <span className="menu-label">
+                              {form ? 'Formular bearbeiten' : 'Einstellungen'}
+                            </span>
                           </Link>
+                          {form ? (
+                            <a
+                              className="menu-item"
+                              href={`/f/${form.public_token}`}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <span className="menu-label">Formular ansehen</span>
+                            </a>
+                          ) : null}
                           {flavor === 'test' && canEditArea(access, 'inbox') ? (
                             <Link className="menu-item" href={href('/test-channel', { org: orgId })}>
                               <span className="menu-label">Testnachricht senden</span>

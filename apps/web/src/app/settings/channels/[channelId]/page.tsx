@@ -5,7 +5,7 @@
 // sections and therefore page tabs (?tab=…). Actions return here via the
 // validated returnTo field (plus the tab the form was on).
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { canViewArea, isAdminRole, type Channel } from '@zendori/core';
 import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
@@ -185,7 +185,9 @@ export default async function ChannelDetailPage({
   } else if (widget) {
     flavorSections = conversationSplitSection(widget.splitHours);
   } else if (flavor === 'webform') {
-    // builder-form id for the "Im Builder bearbeiten" link
+    // A built form's channel page is its builder (fields, design, embed,
+    // forwarding, agent and status) — send every link to this channel there.
+    // Only a channel that lost its forms row keeps this generic page.
     const { data: formRow } = await supabase
       .from('forms')
       .select('id')
@@ -193,21 +195,9 @@ export default async function ChannelDetailPage({
       .eq('channel_id', channel.id)
       .maybeSingle();
     const formId = (formRow as { id?: string } | null)?.id;
-    flavorSections = (
-      <Section
-        title="Web-Formular"
-        help="Design, Felder, Einbetten-Code und Weiterleitungs-Empfänger bearbeitest du im Formular-Builder. Dort löschst du das Formular auch, samt diesem Kanal."
-      >
-        <div>
-          <Button
-            href={href(formId ? `/settings/forms/${formId}` : '/settings/forms', { org: orgId })}
-            variant="primary"
-          >
-            Im Builder bearbeiten
-          </Button>
-        </div>
-      </Section>
-    );
+    if (formId) {
+      redirect(href(`/settings/forms/${formId}`, { org: orgId, error, notice }));
+    }
   } else if (flavor === 'test') {
     flavorSections = (
       <Section
@@ -544,7 +534,7 @@ export default async function ChannelDetailPage({
           )
         }
         actions={
-          // Web-Formular channels are deleted in the form builder (name confirmation there)
+          // built forms are deleted on their own page (name confirmation there)
           isOwner && flavor !== 'webform' ? (
             <Menu>
               <p className="menu-note">

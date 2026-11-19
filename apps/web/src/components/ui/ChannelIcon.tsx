@@ -10,7 +10,7 @@ export type ChannelKind = 'email' | 'form' | 'webform' | 'voice' | 'whatsapp' | 
 const MARK: Record<ChannelKind, { icon: IconName; tone: string; label: string }> = {
   email: { icon: 'mail', tone: 'email', label: 'E-Mail' },
   form: { icon: 'form', tone: 'form', label: 'Formular' },
-  webform: { icon: 'webform', tone: 'form', label: 'Web-Formular' },
+  webform: { icon: 'webform', tone: 'form', label: 'Formular' },
   voice: { icon: 'phone', tone: 'voice', label: 'Telefon' },
   whatsapp: { icon: 'whatsapp', tone: 'whatsapp', label: 'WhatsApp' },
   chat: { icon: 'chat', tone: 'chat', label: 'Chat' },

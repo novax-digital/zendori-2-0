@@ -41,7 +41,9 @@ type NavSection = { title?: string; items: NavItem[] };
 // Redesign stage 2 (docs/design-redesign.md §6): three groups, routes
 // unchanged. The former "Werkzeuge" group is gone — MD-Generator lives in the
 // Wissensdatenbank page head, Test-Channel in the Kanäle page head, Widget-Demo
-// on the chat channel page. ONE "Einstellungen" entry leads to the tabbed hub
+// on the chat channel page. Forms are a channel type: they are created in the
+// "Neuer Kanal" drawer and built on /settings/forms/[formId], reached from the
+// Kanäle list. ONE "Einstellungen" entry leads to the tabbed hub
 // (SettingsTabs), ONE "Plattform" entry to the admin area (its own sub-nav).
 const NAV: NavSection[] = [
   {
@@ -56,7 +58,6 @@ const NAV: NavSection[] = [
       { href: '/settings/agents', label: 'Agenten', icon: 'ai' },
       { href: '/settings/knowledge', label: 'Wissen', icon: 'book' },
       { href: '/settings/channels', label: 'Kanäle', icon: 'channels' },
-      { href: '/settings/forms', label: 'Formulare', icon: 'form' },
     ],
   },
   {
@@ -79,7 +80,6 @@ const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'ad
   '/settings/agents': { area: 'agents', level: 'view' },
   '/settings/knowledge': { area: 'knowledge', level: 'view' },
   '/settings/channels': { area: 'channels', level: 'view' },
-  '/settings/forms': { area: 'channels', level: 'view' },
   '/settings/members': 'admin',
   '/settings': 'settings-hub',
 };
@@ -87,7 +87,7 @@ const NAV_ACCESS: Record<string, { area: AreaKey; level: 'view' | 'edit' } | 'ad
 /** Pages without a sidebar entry of their own highlight the entry they are reached from. */
 const NAV_ALSO_ACTIVE: Record<string, string[]> = {
   '/settings/knowledge': ['/tools/md-generator'],
-  '/settings/channels': ['/test-channel'],
+  '/settings/channels': ['/test-channel', '/settings/forms'],
 };
 
 /** Tab routes of the Einstellungen hub — drive the hub's active state + visibility. */

@@ -24,9 +24,13 @@ import { CodeBlock, Section } from '@/components/ui/Layout';
  * page's `.page` — the tabs take over the page head's bottom line
  * (.page-tabs), the body keeps the two columns, saving sits in the save bar.
  * Deleting moved to the page head's menu (DeleteFormDrawer).
+ *
+ * A form is a channel type: the last tab shows the channel's own settings
+ * (agent, active). They are server-rendered mini-forms with server actions, so
+ * the page passes them in as a node (`channelSettings`).
  */
 
-type TabKey = 'fields' | 'design' | 'embed' | 'forwarding';
+type TabKey = 'fields' | 'design' | 'embed' | 'forwarding' | 'channel';
 
 const FIELD_PALETTE: { type: FormFieldType; label: string }[] = [
   { type: 'text', label: 'Text' },
@@ -88,12 +92,16 @@ export default function FormBuilder(props: {
   dailyLimit: number;
   isOwner: boolean;
   embedBase: string;
+  /** Tab to open first (?tab=…); the builder's own state takes over afterwards. */
+  initialTab?: TabKey;
+  /** Agent + active rows of the form's channel; without them the tab is hidden. */
+  channelSettings?: ReactNode;
   /** The page's ?notice= / ?error= banners, shown above both columns. */
   banners?: ReactNode;
 }) {
   const [name, setName] = useState(props.initialName);
   const [definition, setDefinition] = useState<FormDefinition>(props.initialDefinition);
-  const [tab, setTab] = useState<TabKey>('fields');
+  const [tab, setTab] = useState<TabKey>(props.initialTab ?? 'fields');
   const [openField, setOpenField] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [previewMobile, setPreviewMobile] = useState(false);
@@ -187,6 +195,7 @@ export default function FormBuilder(props: {
     { key: 'design', label: 'Design' },
     { key: 'embed', label: 'Einbetten' },
     { key: 'forwarding', label: 'Weiterleitung' },
+    ...(props.channelSettings ? [{ key: 'channel' as const, label: 'Agent und Status' }] : []),
   ];
   const fieldLimitReached = definition.fields.length >= 30;
 
@@ -614,6 +623,9 @@ export default function FormBuilder(props: {
               </Field>
             </form>
           </div>
+
+          {/* ---------- channel tab: agent + active (own forms, own actions) ---------- */}
+          {tab === 'channel' ? props.channelSettings : null}
         </div>
 
         {/* ---------- preview column ---------- */}
