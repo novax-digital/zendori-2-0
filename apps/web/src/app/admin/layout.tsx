@@ -10,6 +10,7 @@ const ITEMS: SubNavItem[] = [
   { href: '/admin/users', label: 'Nutzer' },
   { href: '/admin/phone-numbers', label: 'Telefonnummern' },
   { href: '/admin/demo', label: 'Demo-Anrufe' },
+  { href: '/admin/contact', label: 'Kontaktanfragen' },
   { href: '/admin/billing', label: 'Abrechnung' },
   { href: '/admin/pricing', label: 'Preise & Pakete' },
   // living reference of the redesign's building blocks (docs/design-redesign.md §4)

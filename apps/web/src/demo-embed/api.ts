@@ -20,6 +20,8 @@ export class DemoApiError extends Error {
   /** Server-provided German message, if any. */
   readonly serverMessage: string | null;
   readonly fields: DemoFieldErrors;
+  /** Every per-field message as sent, unfiltered (the contact embed has its own field names). */
+  readonly rawFields: Record<string, string>;
   /** Resend cooldown left, when the server says so. */
   readonly retryAfterSeconds: number | null;
 
@@ -28,7 +30,8 @@ export class DemoApiError extends Error {
     code: string | null,
     serverMessage: string | null,
     fields: DemoFieldErrors,
-    retryAfterSeconds: number | null = null
+    retryAfterSeconds: number | null = null,
+    rawFields: Record<string, string> = {}
   ) {
     super(`Demo API request failed with status ${status}`);
     this.name = 'DemoApiError';
@@ -36,6 +39,7 @@ export class DemoApiError extends Error {
     this.code = code;
     this.serverMessage = serverMessage;
     this.fields = fields;
+    this.rawFields = rawFields;
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
@@ -66,6 +70,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function parseRawFields(value: unknown): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (!isRecord(value)) return fields;
+  for (const [key, message] of Object.entries(value)) {
+    if (typeof message === 'string' && message.length > 0) fields[key] = message;
+  }
+  return fields;
+}
+
 function parseFields(value: unknown): DemoFieldErrors {
   const fields: DemoFieldErrors = {};
   if (!isRecord(value)) return fields;
@@ -76,7 +89,8 @@ function parseFields(value: unknown): DemoFieldErrors {
   return fields;
 }
 
-async function postJson(url: string, body: unknown): Promise<unknown> {
+/** POST JSON; a non-2xx answer becomes a DemoApiError (shared with the contact embed). */
+export async function postJson(url: string, body: unknown): Promise<unknown> {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -95,7 +109,8 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
       typeof record.code === 'string' ? record.code : null,
       typeof record.error === 'string' ? record.error : null,
       parseFields(record.fields),
-      typeof record.retryAfterSeconds === 'number' ? record.retryAfterSeconds : null
+      typeof record.retryAfterSeconds === 'number' ? record.retryAfterSeconds : null,
+      parseRawFields(record.fields)
     );
   }
   return (await response.json()) as unknown;

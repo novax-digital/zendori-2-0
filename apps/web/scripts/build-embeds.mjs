@@ -3,6 +3,7 @@
  *   src/widget/main.ts     → public/widget.js  (chat widget, Phase 2)
  *   src/form-embed/main.ts → public/form.js    (form builder embed, Phase 10)
  *   src/demo-embed/main.ts → public/demo.js    (Demo-Anruf lead form, docs/demo-call.md)
+ *   src/contact-embed/main.ts → public/contact.js (contact form, docs/contact-requests.md)
  * Single self-contained IIFEs. Wired into "predev" / "prebuild" /
  * "build:embeds" in package.json (replaces build-widget.mjs).
  */
@@ -17,6 +18,7 @@ const bundles = [
   { entry: ['src', 'widget', 'main.ts'], out: 'widget.js' },
   { entry: ['src', 'form-embed', 'main.ts'], out: 'form.js' },
   { entry: ['src', 'demo-embed', 'main.ts'], out: 'demo.js' },
+  { entry: ['src', 'contact-embed', 'main.ts'], out: 'contact.js' },
 ];
 
 for (const bundle of bundles) {

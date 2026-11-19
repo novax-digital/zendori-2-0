@@ -21,6 +21,7 @@ export default tseslint.config(
       'apps/web/public/widget.js',
       'apps/web/public/form.js',
       'apps/web/public/demo.js',
+      'apps/web/public/contact.js',
     ],
   },
   ...tseslint.configs.recommended,

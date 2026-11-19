@@ -1950,3 +1950,80 @@ describe.skipIf(!enabled)('RLS: demo_calls (0032) — service role only', () => 
     expect(error).not.toBeNull();
   });
 });
+
+describe.skipIf(!enabled)('RLS: contact_requests (0034) — service role only', () => {
+  let admin: SupabaseClient;
+  let user: SupabaseClient;
+  let anon: SupabaseClient;
+  let userId: string;
+  let requestId: string;
+  const clientRequestId = randomUUID();
+  const email = `contact-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+  const request = {
+    name: 'RLS Test',
+    email: 'rls@test.zendori.dev',
+    message: 'Nachricht aus dem RLS-Test.',
+    consent_at: new Date().toISOString(),
+    consent_version: 'test',
+  };
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    userId = created.data.user!.id;
+    user = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await user.auth.signInWithPassword({ email, password })).error).toBeNull();
+
+    // the public route (service role) stores requests
+    const { data, error } = await admin
+      .from('contact_requests')
+      .insert({ ...request, client_request_id: clientRequestId })
+      .select('id, status, topic')
+      .single();
+    expect(error).toBeNull();
+    const row = data as { id: string; status: string; topic: string };
+    requestId = row.id;
+    expect(row.status).toBe('new');
+    expect(row.topic).toBe('general');
+  });
+
+  afterAll(async () => {
+    if (requestId) await admin.from('contact_requests').delete().eq('id', requestId);
+    if (userId) await admin.auth.admin.deleteUser(userId);
+  });
+
+  it('authenticated users and anon read nothing', async () => {
+    const { data: asUser } = await user.from('contact_requests').select('id');
+    expect(asUser ?? []).toHaveLength(0);
+    const { data: asAnon } = await anon.from('contact_requests').select('id');
+    expect(asAnon ?? []).toHaveLength(0);
+  });
+
+  it('clients cannot insert, update or delete', async () => {
+    const forged = { ...request, client_request_id: randomUUID() };
+    expect((await user.from('contact_requests').insert(forged)).error).not.toBeNull();
+    expect((await anon.from('contact_requests').insert(forged)).error).not.toBeNull();
+    await user.from('contact_requests').update({ status: 'done' }).eq('id', requestId);
+    await anon.from('contact_requests').delete().eq('id', requestId);
+    const { data } = await admin.from('contact_requests').select('status').eq('id', requestId).single();
+    expect((data as { status: string }).status).toBe('new');
+  });
+
+  it('a retried submit (same client_request_id) cannot create a second row', async () => {
+    const { error } = await admin
+      .from('contact_requests')
+      .insert({ ...request, client_request_id: clientRequestId });
+    expect(error?.code).toBe('23505');
+  });
+
+  it('rejects an unknown status and an empty message', async () => {
+    const bad = await admin.from('contact_requests').update({ status: 'archived' }).eq('id', requestId);
+    expect(bad.error).not.toBeNull();
+    const empty = await admin
+      .from('contact_requests')
+      .insert({ ...request, message: '', client_request_id: randomUUID() });
+    expect(empty.error).not.toBeNull();
+  });
+});

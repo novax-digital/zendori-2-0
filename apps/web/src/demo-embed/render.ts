@@ -71,9 +71,14 @@ const ICON_PATHS = {
     'M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z',
   message: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
   check: 'M20 6 9 17l-5-5',
+  send: 'm22 2-7 20-4-9-9-4Z M22 2 11 13',
 } as const;
+export type EmbedIconName = keyof typeof ICON_PATHS;
 
-function icon(name: keyof typeof ICON_PATHS, size: number): SVGSVGElement {
+// el / icon / badge / iconButton / textControl are shared with the contact
+// embed (src/contact-embed) — same look, same DOM helpers.
+
+export function icon(name: EmbedIconName, size: number): SVGSVGElement {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -91,14 +96,14 @@ function icon(name: keyof typeof ICON_PATHS, size: number): SVGSVGElement {
   return svg;
 }
 
-function badge(name: keyof typeof ICON_PATHS, size: number): HTMLElement {
+export function badge(name: EmbedIconName, size: number): HTMLElement {
   const node = el('span', 'zd-badge');
   node.appendChild(icon(name, size));
   return node;
 }
 
 /** Pill button with a leading icon; returns the label node for state texts. */
-function iconButton(label: string, name: keyof typeof ICON_PATHS | null): {
+export function iconButton(label: string, name: EmbedIconName | null): {
   button: HTMLButtonElement;
   label: HTMLSpanElement;
 } {
@@ -109,7 +114,7 @@ function iconButton(label: string, name: keyof typeof ICON_PATHS | null): {
   return { button, label: text };
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(
+export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
   text?: string
@@ -120,19 +125,20 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-interface Control {
+export interface Control {
   wrap: HTMLElement;
   input: HTMLInputElement | HTMLTextAreaElement;
   setError(message: string | null): void;
 }
 
-function textControl(
+export function textControl(
   idPrefix: string,
-  key: DemoFieldKey,
+  key: string,
   label: string,
   options: {
     required: boolean;
     type?: 'text' | 'email' | 'tel';
+    maxLength?: number;
     autocomplete?: string;
     placeholder?: string;
     hint?: string;
@@ -150,12 +156,12 @@ function textControl(
   let input: HTMLInputElement | HTMLTextAreaElement;
   if (options.multiline) {
     const textarea = el('textarea', 'zd-textarea');
-    textarea.maxLength = PROMPT_MAX;
+    textarea.maxLength = options.maxLength ?? PROMPT_MAX;
     input = textarea;
   } else {
     const field = el('input', 'zd-input');
     field.type = options.type ?? 'text';
-    field.maxLength = key === 'websiteUrl' ? 300 : 200;
+    field.maxLength = options.maxLength ?? (key === 'websiteUrl' ? 300 : 200);
     // setAttribute: TS's AutoFill union lacks some valid tokens (e.g. "url")
     if (options.autocomplete) field.setAttribute('autocomplete', options.autocomplete);
     input = field;

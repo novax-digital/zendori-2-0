@@ -51,7 +51,7 @@ export const DEMO_CSS = `
 .zd-field { margin-bottom: 0.85rem; min-width: 0; }
 .zd-label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--zd-ink); margin-bottom: 0.35rem; }
 .zd-req { color: var(--zd-accent); margin-left: 2px; }
-.zd-input, .zd-textarea {
+.zd-input, .zd-textarea, .zd-select {
   width: 100%;
   font: inherit;
   font-size: 0.95rem;
@@ -65,9 +65,18 @@ export const DEMO_CSS = `
 }
 .zd-input::placeholder, .zd-textarea::placeholder { color: var(--zd-faint); opacity: 1; }
 .zd-textarea { min-height: 96px; resize: vertical; }
-.zd-input:hover, .zd-textarea:hover { border-color: var(--zd-line-strong); }
-.zd-input:focus-visible, .zd-textarea:focus-visible {
-  background: #ffffff;
+.zd-textarea--tall { min-height: 140px; }
+/* select (contact embed): native control, own arrow */
+.zd-select {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  padding-right: 2.4rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+}
+.zd-input:hover, .zd-textarea:hover, .zd-select:hover { border-color: var(--zd-line-strong); }
+.zd-input:focus-visible, .zd-textarea:focus-visible, .zd-select:focus-visible {
+  background-color: #ffffff;
   border-color: var(--zd-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--zd-accent) 18%, transparent);
 }

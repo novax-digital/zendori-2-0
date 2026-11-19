@@ -21,6 +21,9 @@ export async function middleware(request: NextRequest) {
     path === '/demo.js' ||
     path === '/demo' ||
     path.startsWith('/api/demo/') ||
+    // Kontaktanfragen: embed script + public contact API
+    path === '/contact.js' ||
+    path.startsWith('/api/contact/') ||
     path.startsWith('/api/widget/') ||
     path.startsWith('/api/forms/') ||
     path.startsWith('/api/hooks/') ||

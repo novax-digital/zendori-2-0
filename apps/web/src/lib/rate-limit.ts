@@ -24,7 +24,10 @@ export type RateLimitName =
   | 'demo-verify-ip'
   | 'demo-resend-ip'
   | 'password-reset-ip'
-  | 'password-reset-email';
+  | 'password-reset-email'
+  | 'contact-bootstrap-ip'
+  | 'contact-submit-ip'
+  | 'contact-submit-email';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -127,6 +130,22 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(3, '1 h'),
       prefix: 'zendori:rl:password-reset-email',
+    }),
+    // Kontaktanfragen (0034): every accepted submit stores a row and sends a mail
+    'contact-bootstrap-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(30, '1 m'),
+      prefix: 'zendori:rl:contact-bootstrap-ip',
+    }),
+    'contact-submit-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(5, '1 h'),
+      prefix: 'zendori:rl:contact-submit-ip',
+    }),
+    'contact-submit-email': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(5, '24 h'),
+      prefix: 'zendori:rl:contact-submit-email',
     }),
   };
   return limiters;
