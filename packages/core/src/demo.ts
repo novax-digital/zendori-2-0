@@ -353,8 +353,14 @@ export function classifyVerifyCheck(
 
 // --- transcript --------------------------------------------------------------------
 
+/** What the demo assistant can DO during a call besides talking (worker demo/tools.ts). */
+export const DEMO_ACTION_KINDS = ['ticket', 'sms', 'email'] as const;
+export type DemoActionKind = (typeof DEMO_ACTION_KINDS)[number];
+
 export const demoTranscriptTurnSchema = z.object({
-  role: z.enum(['assistant', 'caller']),
+  /** 'action' = something the assistant did (kind + a one-line description), in call order. */
+  role: z.enum(['assistant', 'caller', 'action']),
+  kind: z.enum(DEMO_ACTION_KINDS).optional(),
   text: z.string(),
   at: z.string(),
 });

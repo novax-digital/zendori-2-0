@@ -3,6 +3,7 @@ import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { DemoCallSession } from '../src/demo/session.js';
 import { buildDemoSessionConfig, DEMO_FAREWELL_TEXT, DEMO_TIMEOUT_TEXT } from '../src/demo/prompt.js';
+import type { DemoToolResult } from '../src/demo/tools.js';
 
 // Drives a real DemoCallSession against an in-process mock xAI WebSocket:
 // greeting-first handshake (AI disclosure before the model's first turn),
@@ -104,7 +105,10 @@ const GREETING = 'Guten Tag, hier ist der KI-Telefonassistent von Testfirma.';
 
 function startSession(
   fake: ReturnType<typeof makeFakeSupabase>,
-  overrides: { maxCallSeconds?: number } = {}
+  overrides: {
+    maxCallSeconds?: number;
+    runTool?: (name: string, rawArgs: string) => Promise<DemoToolResult>;
+  } = {}
 ): DemoCallSession {
   const maxCallSeconds = overrides.maxCallSeconds ?? 240;
   const session = new DemoCallSession({
@@ -119,6 +123,7 @@ function startSession(
     ),
     greeting: GREETING,
     maxCallSeconds,
+    ...(overrides.runTool ? { runTool: overrides.runTool } : {}),
     onClosed: () => undefined,
     wsUrl: `ws://127.0.0.1:${port}`,
     hangupGraceMs: 30,
@@ -209,6 +214,82 @@ describe('DemoCallSession', () => {
     expect(final.patch.status_detail).toBe('agent_end');
     expect(Array.isArray(final.patch.transcript)).toBe(true);
     expect(typeof final.patch.duration_seconds).toBe('number');
+  });
+
+  it('runs an action tool, answers the model, records the action and lets the call go on', async () => {
+    const fake = makeFakeSupabase();
+    const toolCalls: { name: string; rawArgs: string }[] = [];
+    const session = startSession(fake, {
+      runTool: async (name, rawArgs) => {
+        toolCalls.push({ name, rawArgs });
+        return {
+          output: { ok: true, ticket_id: 'DEMO-4821' },
+          turn: { role: 'action', kind: 'ticket', text: 'Ticket DEMO-4821 aufgenommen', at: 'now' },
+        };
+      },
+    });
+    await handshake();
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.output_audio_transcript.delta', delta: GREETING });
+    serverSend({ type: 'response.done' });
+    await waitFor(() => received.find((e) => e.type === 'response.create'));
+    const createsBefore = received.filter((e) => e.type === 'response.create').length;
+
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.output_audio_transcript.delta', delta: 'Ich nehme das auf.' });
+    serverSend({
+      type: 'response.function_call_arguments.done',
+      call_id: 'fc-ticket',
+      name: 'create_ticket',
+      arguments: '{"subject":"Heizung","description":"Fällt aus."}',
+    });
+    serverSend({ type: 'response.done' });
+
+    const output = await waitFor(() =>
+      received
+        .map((e) => (e as { item?: { type?: string; call_id?: string; output?: string } }).item)
+        .find((item) => item?.type === 'function_call_output' && item.call_id === 'fc-ticket')
+    );
+    expect(JSON.parse(output.output ?? '{}')).toEqual({ ok: true, ticket_id: 'DEMO-4821' });
+    expect(toolCalls).toEqual([
+      { name: 'create_ticket', rawArgs: '{"subject":"Heizung","description":"Fällt aus."}' },
+    ]);
+    // the model gets its next turn — no farewell, no hangup
+    await waitFor(() =>
+      received.filter((e) => e.type === 'response.create').length > createsBefore ? true : undefined
+    );
+    expect(forcedTexts()).not.toContain(DEMO_FAREWELL_TEXT);
+    expect(session.transcript().map((t) => [t.role, t.text])).toEqual([
+      ['assistant', GREETING],
+      ['assistant', 'Ich nehme das auf.'],
+      ['action', 'Ticket DEMO-4821 aufgenommen'],
+    ]);
+    const persisted = fake.updates.filter((u) => Array.isArray(u.patch.transcript)).at(-1);
+    expect((persisted?.patch.transcript as { role: string }[]).map((t) => t.role)).toContain('action');
+    serverSocket?.close(1000);
+    await session.closed;
+  });
+
+  it('answers a tool call with a failure when the tool throws, and keeps the call alive', async () => {
+    const fake = makeFakeSupabase();
+    const session = startSession(fake, {
+      runTool: async () => {
+        throw new Error('provider down');
+      },
+    });
+    await handshake();
+    serverSend({ type: 'response.created' });
+    serverSend({ type: 'response.function_call_arguments.done', call_id: 'fc-sms', name: 'send_sms', arguments: '{"text":"Hallo"}' });
+    serverSend({ type: 'response.done' });
+    const output = await waitFor(() =>
+      received
+        .map((e) => (e as { item?: { type?: string; call_id?: string; output?: string } }).item)
+        .find((item) => item?.type === 'function_call_output' && item.call_id === 'fc-sms')
+    );
+    expect(JSON.parse(output.output ?? '{}')).toMatchObject({ ok: false, error: 'failed' });
+    expect(session.transcript().some((t) => t.role === 'action')).toBe(false);
+    serverSocket?.close(1000);
+    await session.closed;
   });
 
   it('fails the row when the WebSocket closes before the session became active', async () => {

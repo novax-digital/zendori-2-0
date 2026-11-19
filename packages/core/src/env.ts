@@ -53,6 +53,12 @@ export const workerEnvSchema = z.object({
   DEMO_VOICE: optionalEnv(z.string().min(1)),
   /** SIP URI params for the Twilio <Dial><Sip> leg to xAI (live-gate tunable). */
   DEMO_SIP_PARAMS: optionalEnv(z.string()),
+  /**
+   * Sender of the demo assistant's SMS (send_sms tool): alphanumeric sender id
+   * (max. 11 chars, default "Zendori") or an SMS-capable E.164 number; "off"
+   * disables SMS in demo calls.
+   */
+  DEMO_SMS_SENDER: optionalEnv(z.string().regex(/^(?:off|[A-Za-z0-9 ]{1,11}|\+[1-9]\d{6,14})$/i)),
   /** Sales inbox for public demo leads; absent = no lead mails (admin list only). */
   DEMO_NOTIFY_EMAIL: optionalEnv(z.email()),
   LOG_LEVEL: z.string().optional(),

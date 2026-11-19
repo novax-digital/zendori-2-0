@@ -27,6 +27,13 @@ input.pricing-item-name {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* an action of the assistant (ticket, SMS, mail) between the spoken turns */
+.demo-action {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--primary);
+  background: var(--surface-sunken);
+  font-size: var(--fs-small);
+}
 
 /* --- Plan zuweisen: the "remove" form sits below the assignment, behind a line --- */
 .plan-remove {

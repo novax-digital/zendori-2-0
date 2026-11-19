@@ -65,10 +65,10 @@ describe('demo prompt', () => {
     expect(demoAnswerBudget(60)).toBe(4);
   });
 
-  it('builds a session without audio formats and with end_call as the only tool', () => {
+  it('builds a session without audio formats; without SMS/mail only the ticket tool joins end_call', () => {
     const config = buildDemoSessionConfig(BASE, { voice: 'ara' });
     expect(config.voice).toBe('ara');
-    expect(config.tools.map((t) => t.name)).toEqual(['end_call']);
+    expect(config.tools.map((t) => t.name)).toEqual(['create_ticket', 'end_call']);
     expect('format' in config.audio.input).toBe(false);
     expect(config.audio.input.transcription.language_hint).toBe('de');
   });

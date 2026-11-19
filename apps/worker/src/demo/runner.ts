@@ -1,17 +1,27 @@
 import type { Logger, SupabaseClient } from '@zendori/core';
 import { demoTranscriptSchema, loadWorkerEnv, type DemoStatus } from '@zendori/core';
+import { sendEmail } from '@zendori/channels';
 import { getServiceClient, toErrorInfo } from '../db.js';
 import { hangupCall } from '../voice/xai-realtime.js';
 import { buildDemoSessionConfig, demoGreeting } from './prompt.js';
 import { DemoCallSession } from './session.js';
 import {
+  demoCapabilities,
+  newDemoToolState,
+  runDemoTool,
+  type DemoToolContext,
+} from './tools.js';
+import {
   buildDemoTwiml,
   createDemoCall,
   DEFAULT_DEMO_SIP_PARAMS,
+  DEFAULT_DEMO_SMS_SENDER,
   dialingOutcome,
   endDemoCall,
   fetchDemoCallStatus,
+  sendDemoSms,
   TwilioCallError,
+  TwilioSmsError,
   type TwilioCreds,
 } from './twilio.js';
 import { buildWebsiteSummary } from './website.js';
@@ -84,6 +94,13 @@ export function startDemoRunner(logger: Logger): DemoRunnerHandle {
   const voice = env.DEMO_VOICE ?? 'eve';
   const sipParams = env.DEMO_SIP_PARAMS ?? DEFAULT_DEMO_SIP_PARAMS;
   const notifyEmail = env.DEMO_NOTIFY_EMAIL ?? null;
+  // Action tools of the demo assistant (demo/tools.ts). SMS: alphanumeric
+  // sender via the operator Twilio account ('off' disables it). Mail: Resend,
+  // same sender as the lead notification; replies go to the sales inbox.
+  const smsSender = env.DEMO_SMS_SENDER ?? DEFAULT_DEMO_SMS_SENDER;
+  const smsConfigured = smsSender.toLowerCase() !== 'off';
+  const mailFrom = process.env.RESEND_FROM ?? null;
+  const mailConfigured = Boolean(mailFrom && process.env.RESEND_API_KEY);
   const adminUrl = `${(process.env.APP_URL ?? 'https://app.zendori.ai').replace(/\/+$/, '')}/admin/demo`;
 
   const supabase: SupabaseClient = getServiceClient();
@@ -178,6 +195,50 @@ export function startDemoRunner(logger: Logger): DemoRunnerHandle {
         .maybeSingle();
       const row = (data as DemoRow | null) ?? null;
       if (error || !row || row.status !== 'connecting' || !row.provider_call_id) return;
+      const lead = {
+        company: row.company_name,
+        contactName: row.contact_name,
+        phoneE164: row.phone_e164,
+        email: row.email,
+      };
+      const capabilities = demoCapabilities(lead, { sms: smsConfigured, email: mailConfigured });
+      const toolContext: DemoToolContext = {
+        lead,
+        capabilities,
+        state: newDemoToolState(),
+        deps: {
+          sendSms: async (to, body) => {
+            try {
+              await sendDemoSms(creds, { to, from: smsSender, body });
+            } catch (err) {
+              // content-free: Twilio status/code only (21612 = sender not allowed, 21408 = geo permission)
+              logger.warn(
+                {
+                  demoCallId: id,
+                  ...(err instanceof TwilioSmsError ? { status: err.status, code: err.code } : {}),
+                },
+                'demo sms failed'
+              );
+              throw err;
+            }
+          },
+          sendMail: async (to, mail) => {
+            try {
+              await sendEmail({
+                from: mailFrom!,
+                to,
+                ...(notifyEmail ? { replyTo: notifyEmail } : {}),
+                subject: mail.subject,
+                text: mail.text,
+                html: mail.html,
+              });
+            } catch (err) {
+              logger.warn({ demoCallId: id, err: toErrorInfo(err) }, 'demo summary mail failed');
+              throw err;
+            }
+          },
+        },
+      };
       const session = new DemoCallSession({
         supabase,
         logger,
@@ -191,9 +252,11 @@ export function startDemoRunner(logger: Logger): DemoRunnerHandle {
             prompt: row.prompt,
             websiteSummary: row.website_summary,
             maxCallSeconds,
+            capabilities,
           },
           { voice }
         ),
+        runTool: (name, rawArgs) => runDemoTool(toolContext, name, rawArgs),
         greeting: demoGreeting({ company: row.company_name, contactName: row.contact_name }),
         maxCallSeconds,
         onClosed: (closedId) => {

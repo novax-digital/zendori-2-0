@@ -190,3 +190,44 @@ export function dialingOutcome(
       return null;
   }
 }
+
+/** Default SMS sender of the demo: alphanumeric sender id (Germany needs no registration). */
+export const DEFAULT_DEMO_SMS_SENDER = 'Zendori';
+
+export class TwilioSmsError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: number | null
+  ) {
+    super(`Twilio SMS request failed (status ${status}, code ${code ?? 'n/a'})`);
+    this.name = 'TwilioSmsError';
+  }
+}
+
+/**
+ * One SMS from the demo assistant to the lead (demo/tools.ts send_sms). The
+ * sender is an alphanumeric id by default — the demo number is a landline and
+ * cannot send SMS; replies are not possible, which is what a demo wants.
+ */
+export async function sendDemoSms(
+  creds: TwilioCreds,
+  params: { to: string; from: string; body: string }
+): Promise<void> {
+  const res = await fetch(`${API_BASE()}/2010-04-01/Accounts/${creds.accountSid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader(creds),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ To: params.to, From: params.from, Body: params.body }).toString(),
+  });
+  if (res.ok) return;
+  let code: number | null = null;
+  try {
+    const body = (await res.json()) as { code?: unknown };
+    code = typeof body.code === 'number' ? body.code : null;
+  } catch {
+    /* non-JSON error body */
+  }
+  throw new TwilioSmsError(res.status, code);
+}

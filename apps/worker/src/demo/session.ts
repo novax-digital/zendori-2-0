@@ -17,14 +17,17 @@ import {
   type SessionConfig,
 } from '../voice/xai-realtime.js';
 import { DEMO_FAREWELL_TEXT, DEMO_TIMEOUT_TEXT } from './prompt.js';
+import type { DemoToolResult } from './tools.js';
 
 // Demo-Anruf (0032): one lean session per live demo call. Same xAI protocol
 // rules as the Phase-9 CallSession (wait for session.created; greeting via
 // force_message and response.create only after ITS response.done; playback
 // grace before hangup; serialized event handling; OPEN-guarded pings) — but no
-// conversations/messages/tickets/tools beyond end_call: the transcript goes
-// into demo_calls.transcript, nothing touches a tenant org. Never logs
-// transcript content (§7).
+// conversations/messages/tickets: the transcript goes into
+// demo_calls.transcript, nothing touches a tenant org. Besides end_call the
+// model may call the demo action tools (demo/tools.ts: ticket, SMS, summary
+// mail) — the session only forwards them to `runTool` and records the returned
+// marker turn. Never logs transcript content (§7).
 
 const PING_INTERVAL_MS = 15_000;
 const SETUP_TIMEOUT_MS = 15_000;
@@ -32,6 +35,13 @@ const SETUP_TIMEOUT_MS = 15_000;
 const TIMEOUT_NOTICE_MS = 7_000;
 const DRAIN_FAREWELL_MS = 4_000;
 const DRAIN_MAX_WAIT_MS = 10_000;
+/** A tool that hangs (provider timeout) must not leave the caller in silence. */
+const TOOL_TIMEOUT_MS = 8_000;
+const TOOL_FAILED_OUTPUT = {
+  ok: false,
+  error: 'failed',
+  instruction: 'Das hat gerade nicht geklappt. Sage das ehrlich in einem Satz und mach normal weiter.',
+};
 
 /** ~14 chars/s German speech + carrier buffering (live 2026-07-21 cutoff lesson). */
 export function playbackMs(chars: number, minMs = 3_000, maxMs = 12_000): number {
@@ -50,6 +60,11 @@ export interface DemoCallSessionParams {
   /** Opening line spoken verbatim (AI disclosure). */
   greeting: string;
   maxCallSeconds: number;
+  /**
+   * Runs a demo action tool (everything except end_call). Absent = the call
+   * has no action tools; such calls are answered with "unknown tool".
+   */
+  runTool?: (name: string, rawArgs: string) => Promise<DemoToolResult>;
   /** Called exactly once when the session is closed (registry cleanup). */
   onClosed: (demoCallId: string) => void;
   /** Test seams. */
@@ -73,7 +88,7 @@ export class DemoCallSession {
   private readonly flushedIndex = new Map<string, number>();
   private botBuffer = '';
   private sawAudioDelta = false;
-  private pendingToolCalls: { callId: string; name: string }[] = [];
+  private pendingToolCalls: { callId: string; name: string; args: string }[] = [];
   /** The greeting force_message is playing; the first model turn follows its response.done. */
   private greetPending = false;
 
@@ -183,7 +198,11 @@ export class DemoCallSession {
         case type === 'response.function_call_arguments.done': {
           const parsed = functionCallArgsDoneSchema.safeParse(event);
           if (parsed.success) {
-            this.pendingToolCalls.push({ callId: parsed.data.call_id, name: parsed.data.name });
+            this.pendingToolCalls.push({
+              callId: parsed.data.call_id,
+              name: parsed.data.name,
+              args: parsed.data.arguments,
+            });
           }
           break;
         }
@@ -261,14 +280,22 @@ export class DemoCallSession {
     const calls = this.pendingToolCalls;
     this.pendingToolCalls = [];
     const endRequested = calls.some((c) => c.name === 'end_call');
+    let acted = false;
     for (const call of calls) {
-      this.send(
-        functionCallOutputEvent(
-          call.callId,
-          call.name === 'end_call' ? { ok: true } : { ok: false, error: 'unknown tool' }
-        )
-      );
+      if (call.name === 'end_call') {
+        this.send(functionCallOutputEvent(call.callId, { ok: true }));
+        continue;
+      }
+      const result = await this.runTool(call.name, call.args);
+      if (result.turn) {
+        this.turns.push(result.turn);
+        acted = true;
+      }
+      this.send(functionCallOutputEvent(call.callId, result.output));
     }
+    if (acted) await this.persistTranscript();
+    // the caller may have hung up while a tool was running
+    if (this.state !== 'active') return;
     if (!endRequested) {
       this.send(responseCreateEvent());
       return;
@@ -285,6 +312,29 @@ export class DemoCallSession {
         this.ws?.close();
       });
     }, graceMs);
+  }
+
+  /** One action tool call: bounded in time, never throws. */
+  private async runTool(name: string, rawArgs: string): Promise<DemoToolResult> {
+    const run = this.p.runTool;
+    if (!run) return { output: { ok: false, error: 'unknown tool' } };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        run(name, rawArgs),
+        new Promise<DemoToolResult>((resolve) => {
+          timer = setTimeout(() => resolve({ output: TOOL_FAILED_OUTPUT }), TOOL_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      this.p.logger.warn(
+        { demoCallId: this.p.demoCallId, tool: name, err: toErrorInfo(err) },
+        'demo tool failed'
+      );
+      return { output: TOOL_FAILED_OUTPUT };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   // --- transcript -------------------------------------------------------------------

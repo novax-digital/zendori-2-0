@@ -3,6 +3,7 @@ import {
   DEMO_PROMPT_MAX_CHARS,
   demoTranscriptSchema,
   isTerminalDemoStatus,
+  type DemoActionKind,
   type DemoStatus,
 } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
@@ -77,6 +78,13 @@ function duration(seconds: number | null): string {
 }
 
 const BASE = '/admin/demo';
+
+/** Marker turns in the transcript: what the assistant did during the call. */
+const ACTION_LABELS: Record<DemoActionKind, string> = {
+  ticket: 'Ticket',
+  sms: 'SMS',
+  email: 'E-Mail',
+};
 
 export default async function AdminDemoPage({
   searchParams,
@@ -370,12 +378,20 @@ export default async function AdminDemoPage({
           {turns.length > 0 ? (
             <Section title={`Transkript (${turns.length})`}>
               <div className="stack stack--sm">
-                {turns.map((turn, index) => (
-                  <p key={index} className="demo-text">
-                    <strong>{turn.role === 'assistant' ? 'Assistent' : 'Angerufener'}:</strong>{' '}
-                    {turn.text}
-                  </p>
-                ))}
+                {turns.map((turn, index) =>
+                  turn.role === 'action' ? (
+                    // something the assistant DID during the call (worker demo/tools.ts)
+                    <p key={index} className="demo-text demo-action">
+                      <Badge tone="accent">{ACTION_LABELS[turn.kind ?? 'ticket']}</Badge>{' '}
+                      {turn.text}
+                    </p>
+                  ) : (
+                    <p key={index} className="demo-text">
+                      <strong>{turn.role === 'assistant' ? 'Assistent' : 'Angerufener'}:</strong>{' '}
+                      {turn.text}
+                    </p>
+                  )
+                )}
               </div>
             </Section>
           ) : null}

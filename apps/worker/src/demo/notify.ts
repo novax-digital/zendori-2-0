@@ -63,8 +63,9 @@ export function renderDemoLeadEmail(input: DemoLeadMailInput): {
     ['Ergebnis', outcome],
     ['Dauer', formatDuration(input.durationSeconds)],
   ];
+  // 'action' = something the assistant did in the call (ticket, SMS, summary mail)
   const speaker = (turn: DemoTranscriptTurn): string =>
-    turn.role === 'assistant' ? 'Assistent' : 'Lead';
+    turn.role === 'assistant' ? 'Assistent' : turn.role === 'action' ? 'Aktion' : 'Lead';
 
   const text = [
     ...facts.map(([k, v]) => `${k}: ${v}`),
