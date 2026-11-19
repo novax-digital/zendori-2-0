@@ -172,6 +172,7 @@ Alle außer `Drawer` und `Menu` sind reine Server-Komponenten ohne State.
 | Kanal-Icon | `.ch-icon` + `--email` `--form` `--voice` `--whatsapp` `--chat`; `<ChannelIcon type>` | 24 × 24 (Listen) oder 32 × 32 (Kanal-Tabelle), Radius 6 bzw. 8, Fläche `--ch-*-tint`, Icon `--ch-*`. Der Kanalname daneben ist normaler Text. |
 | Feld | `.field` (Label, Control, `.field-help`, `.field-error`); `<Field label help error>` | Label 13/500 über dem Control, Abstand 6. Control 36 hoch, Radius 8, Rahmen `--border-strong`. Fehler: Rahmen und Text `--danger`, `aria-invalid`. Formulare höchstens 720 breit. |
 | Schalter | `input[type=checkbox].switch` | 36 × 20, an = `--primary`. Reines CSS (`appearance: none`), funktioniert in Server-Action-Formularen. |
+| Lade-Zustand | `.skeleton` (Balken), `<Skeleton>`, `ListSkeleton`/`DetailSkeleton`/`SettingsSkeleton`/`InboxSkeleton`; je Route gewählt in `RouteSkeleton`, eingehängt über `loading.tsx` | Graue Balken in der Form der kommenden Seite, gebaut aus denselben Layout-Klassen wie die echte Seite. Sanftes Pulsieren, steht bei „Bewegung reduzieren" still. |
 | Options-Gruppe | `.option-group` > `label.option` | Radio-Zeilen in einem Rahmen (Radius 12), Linie zwischen den Zeilen, gewählte Zeile `--surface-sunken`. Für 2 bis 6 Alternativen mit Erklärung (Antwortmodus, Eskalationsziel, Kanaltyp). |
 | Einstellungs-Zeile | `.setting-row`; `<SettingRow label help>` | Links Label 14/500 und Hilfe 13 gedämpft, rechts das Control. Linie darunter, Innenabstand 16 0. |
 | Abschnitt | `.section`; `<Section title help actions>` | Überschrift 16/600, Hilfe 13 gedämpft, Inhalt. Abstand zwischen Abschnitten 32. **Kein Rahmen, kein Hintergrund.** Ersetzt `.panel`. |
@@ -244,7 +245,7 @@ Aktionen rechts, Primär-Button ganz rechts außen vor dem Menü.
 Außenabstand, keine Karten. Jede Spalte hat einen 56 px hohen Kopf auf gleicher Linie.
 Spalten: Liste 300, Verlauf flexibel, Details 280.
 
-**B · Liste** (Tickets, Kanäle, Agenten, Wissen, Formulare, Team, Textbausteine).
+**B · Liste** (Tickets, Kanäle, Agenten, Wissen, Team, Textbausteine).
 
 ```tsx
 <div className="page">
@@ -311,7 +312,7 @@ Die Rechteprüfung `NAV_ACCESS` bleibt, wie sie ist.
 | Gruppe | Einträge | Route |
 | --- | --- | --- |
 | (ohne Titel) | Inbox, Tickets, jeweils mit Zähler | `/inbox`, `/tickets` |
-| Einrichten | Agenten, Wissen, Kanäle, Formulare | `/settings/agents`, `/settings/knowledge`, `/settings/channels`, `/settings/forms` |
+| Einrichten | Agenten, Wissen, Kanäle | `/settings/agents`, `/settings/knowledge`, `/settings/channels` |
 | Organisation | Team, Einstellungen | `/settings/members`, `/settings` |
 | (nur Plattform-Admins) | Plattform | `/admin` |
 
@@ -357,7 +358,7 @@ So umgesetzt in Stufe 2:
 | Wissensdatenbank (heute Auswahl in der Galerie) | C mit Tabs | Tabs: Quellen, Gelernte Antworten, Einstellungen. „Quelle hinzufügen" öffnet einen Drawer mit Options-Gruppe (Website, Datei, Text, Fragen und Antworten als CSV). Ersetzt `KnowledgeTabs`. Vor dem Umbau prüfen, wie `KbGallery` heute auswählt; bevorzugt eigene Route `/settings/knowledge/[kbId]`. |
 | `/settings/channels` | B | `ChannelGallery` und die sieben Anlegen-Panels entfallen. Drawer „Neuer Kanal": erst Options-Gruppe Kanaltyp, darunter die Felder dieses Typs. Telefon und Web-Formular zeigen im Drawer nur Erklärung und Link, wie heute. |
 | `/settings/channels/[id]` | C | Abschnitte statt Panels und statt aufklappbarer Blöcke. Mehr als drei Abschnitte: Tabs (Allgemein, Einbetten, Erweitert). |
-| `/settings/forms`, `/settings/forms/[id]` | B, C | Liste plus Drawer. Der Builder behält seine zwei Spalten, bekommt Tokens, `.tabs` und die Speichern-Leiste. |
+| `/settings/forms`, `/settings/forms/[id]` | B, C | Liste plus Drawer. Der Builder behält seine zwei Spalten, bekommt Tokens, `.tabs` und die Speichern-Leiste. **Seit 2026-11-18:** Formulare sind ein Kanaltyp, siehe §11 „Formulare als Kanal". |
 | `/settings/members` | B | Tabelle plus Drawer „Mitglied einladen" (`TeamMemberForm`). |
 | `/settings/organization`, `phone-numbers`, `ai`, `tickets`, `canned-responses`, `integrations`, `billing` | D | `SettingsTabs` wird `SubNav`. Panels werden Abschnitte mit Einstellungs-Zeilen. Textbausteine: Tabelle plus Drawer. Integrationen: Zeilen mit Status-Badge und Button statt `IntegrationGallery`. |
 | `/admin/*` | D | Gleiche Bausteine, `SubNav` „Plattform". |
@@ -482,6 +483,50 @@ mitcommittet ist.** In der Arbeitskopie ist alles vollständig.
 - Plattform: Rollen heißen einheitlich Inhaber, Admin, Mitarbeiter; ein Demo-Anruf öffnet seine
   Details mit Transkript im Drawer.
 - Sidebar: Zähler an Inbox (wartend) und Tickets (offen plus in Arbeit).
+
+**Lade-Zustand / Skelette (Owner 2026-11-18)**
+
+Bisher blieb nach einem Klick die alte Seite stehen, bis die neue fertig geladen war. Jetzt
+erscheint sofort ein Skelett in der Form der Zielseite (`components/RouteSkeleton.tsx`,
+`components/ui/Skeleton.tsx`), die Sidebar bleibt stehen.
+
+- Eingehängt über `loading.tsx` in `inbox`, `tickets`, `settings`, `settings/channels`,
+  `settings/agents`, `settings/knowledge`, `admin`, `admin/users`, `admin/billing`, `tools`,
+  `test-channel`. Next wendet die Datei auf die Kinder des Segments an; deshalb braucht jeder
+  Bereich mit Liste und Detailseite eine eigene. Neue Bereiche mit Unterseiten bekommen ebenfalls
+  eine (drei Zeilen, immer `RouteSkeleton`).
+- Welche Form: `skeletonVariant()` liest den Zielpfad (Liste, Detail, Einstellungen mit
+  Unternavigation, Inbox). Neue Listen- oder Hub-Routen dort eintragen.
+- Kein Skelett bei Navigation, die nur die Query ändert (Drawer `?panel=`, Tabs `?tab=`, Filter,
+  andere Konversation in der Inbox, Speichern mit Rücksprung auf dieselbe Seite): Next schlüsselt
+  Lade-Grenzen nach Pfad. Dort bleibt die Seite stehen, bis die neuen Daten da sind.
+- Öffentliche Seiten (`/login`, `/f/…`, `/demo`, Einladung, Onboarding) haben bewusst keine
+  Lade-Datei, ihre Antworten und Statuscodes bleiben unverändert.
+- Folge des Streamings: Beim direkten Aufruf einer App-Seite (Neuladen) kommt zuerst das Skelett,
+  dann der Inhalt; eine Weiterleitung aus der Seite heraus passiert dann im Browser, und „nicht
+  gefunden" liefert die Seite mit Status 200.
+- Im Dev-Modus wartet der erste Aufruf einer Route erst auf das Kompilieren; das Skelett deckt dort
+  nur die Datenladezeit ab. In Produktion lädt Next das Skelett vor und zeigt es sofort.
+
+**Formulare als Kanal (Owner 2026-11-18)**
+
+Ein Builder-Formular war technisch schon immer ein Kanal (`channels.config.builderForm` plus eine
+`forms`-Zeile), hatte aber einen eigenen Sidebar-Eintrag und eine eigene Liste. Das ist
+zusammengeführt, ohne Datenbank- oder Rechte-Änderung:
+
+- Sidebar: „Formulare" entfällt. `/settings/forms/…` markiert „Kanäle" als aktiv.
+- „Neuer Kanal": ein Typ „Formular" mit zwei Varianten, „In Zendori bauen" (Builder-Formular) und
+  „Bestehendes Formular anbinden" (Intake-Adresse). Das Builder-Formular wird direkt im Drawer
+  angelegt; dafür genügt das Bearbeiten-Recht für Kanäle, alle anderen Typen legen weiterhin nur
+  Inhaber und Admins an.
+- Kanalliste: Ein Builder-Formular heißt im Typ „Formular", zeigt die Feldanzahl und führt in den
+  Builder. Das Menü hat „Formular bearbeiten" und „Formular ansehen".
+- Der Builder (`/settings/forms/[formId]`, Adresse unverändert) ist die Kanalseite des Formulars:
+  Pfad „Kanäle / Name", neuer Tab „Agent und Status" mit Agent-Zuweisung und Aktiv-Schalter. Das
+  Abzeichen im Kopf zeigt „Aktiv" nur, wenn Formular und Kanal aktiv sind.
+- `/settings/channels/[channelId]` eines Builder-Formulars leitet in den Builder um;
+  `/settings/forms` leitet auf die Kanalliste um (`?panel=new` öffnet den Drawer auf „Formular").
+- Fehler beim Anlegen und die Meldung nach dem Löschen landen auf der Kanalliste.
 
 **Zwei Stellen mit mehr als einem gefüllten Button:** In der Inbox können „Übernehmen" am
 Antwortvorschlag und „Senden" gleichzeitig sichtbar sein. Auf „Preise & Pakete" ist dafür kein
