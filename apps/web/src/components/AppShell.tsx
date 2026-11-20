@@ -101,6 +101,7 @@ const SETTINGS_TAB_ROUTES = [
   '/settings/canned-responses',
   '/settings/integrations',
   '/settings/billing',
+  '/settings/notifications',
 ];
 
 function navItemVisible(access: MemberAccess | null, href: string): boolean {
@@ -108,12 +109,8 @@ function navItemVisible(access: MemberAccess | null, href: string): boolean {
   const need = NAV_ACCESS[href];
   if (!need) return true;
   if (need === 'admin') return access.role === 'owner' || access.role === 'admin';
-  if (need === 'settings-hub') {
-    if (access.role === 'owner' || access.role === 'admin') return true;
-    return (['channels', 'handoff', 'tickets', 'canned', 'billing'] as AreaKey[]).some((area) =>
-      canViewArea(access, area)
-    );
-  }
+  // every member has at least the personal "Benachrichtigungen" page (0038)
+  if (need === 'settings-hub') return true;
   return need.level === 'edit' ? canEditArea(access, need.area) : canViewArea(access, need.area);
 }
 

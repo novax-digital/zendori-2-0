@@ -2378,3 +2378,159 @@ describe.skipIf(!enabled)('RLS: API-Integration (0035–0037)', () => {
     expect(await countEvents({ connection_id: connectionId })).toBe(0);
   });
 });
+
+describe.skipIf(!enabled)('RLS: member notifications (0038)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let member: SupabaseClient;
+  let stranger: SupabaseClient;
+  let ownerId: string;
+  let memberId: string;
+  let strangerId: string;
+  let orgId: string;
+  let channelId: string;
+  let conversationId: string;
+  const emails = ['owner', 'member', 'stranger'].map(
+    (role) => `notify-${role}-${randomUUID()}@test.zendori.dev`
+  );
+  const password = `pw-${randomUUID()}`;
+
+  const queued = async (filter: Record<string, string>): Promise<{ user_id: string }[]> => {
+    let query = admin.from('member_notifications').select('user_id').eq('org_id', orgId);
+    for (const [column, value] of Object.entries(filter)) query = query.eq(column, value);
+    const { data } = await query;
+    return (data ?? []) as { user_id: string }[];
+  };
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      emails.map((email) => admin.auth.admin.createUser({ email, password, email_confirm: true }))
+    );
+    [ownerId, memberId, strangerId] = created.map((res) => res.data.user!.id) as [
+      string,
+      string,
+      string,
+    ];
+    [owner, member, stranger] = (await Promise.all(
+      emails.map(async (email) => {
+        const client = createClient(url!, anonKey!, { auth: { persistSession: false } });
+        await client.auth.signInWithPassword({ email, password });
+        return client;
+      })
+    )) as [SupabaseClient, SupabaseClient, SupabaseClient];
+
+    const slug = `notify-${randomUUID().slice(0, 8)}`;
+    await owner.from('organizations').insert({ name: 'Notify Org', slug });
+    const { data: org } = await owner.from('organizations').select('id').eq('slug', slug).single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: memberId, role: 'agent' });
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Chat', config: {} })
+      .select('id')
+      .single();
+    channelId = channel!.id as string;
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    for (const id of [ownerId, memberId, strangerId]) {
+      if (id) await admin.auth.admin.deleteUser(id);
+    }
+  });
+
+  it('a member writes and reads only their own preferences', async () => {
+    const own = await member
+      .from('notification_preferences')
+      .insert({ org_id: orgId, user_id: memberId, events: ['ticket.new', 'assigned'] });
+    expect(own.error).toBeNull();
+
+    const forOther = await member
+      .from('notification_preferences')
+      .insert({ org_id: orgId, user_id: ownerId, events: ['ticket.new'] });
+    expect(forOther.error).not.toBeNull();
+
+    await owner
+      .from('notification_preferences')
+      .insert({ org_id: orgId, user_id: ownerId, events: ['conversation.new', 'handoff.pending'] });
+
+    const { data: seenByMember } = await member.from('notification_preferences').select('user_id');
+    expect(seenByMember).toEqual([{ user_id: memberId }]);
+    // even the owner cannot read or change a colleague's choice
+    const { data: seenByOwner } = await owner.from('notification_preferences').select('user_id');
+    expect(seenByOwner).toEqual([{ user_id: ownerId }]);
+    const { data: changed } = await owner
+      .from('notification_preferences')
+      .update({ events: [] })
+      .eq('user_id', memberId)
+      .select('user_id');
+    expect(changed).toEqual([]);
+  });
+
+  it('a stranger neither sees preferences nor can subscribe in a foreign org', async () => {
+    const { data } = await stranger.from('notification_preferences').select('user_id');
+    expect(data).toEqual([]);
+    const res = await stranger
+      .from('notification_preferences')
+      .insert({ org_id: orgId, user_id: strangerId, events: ['ticket.new'] });
+    expect(res.error).not.toBeNull();
+  });
+
+  it('the queue is invisible and unwritable for clients', async () => {
+    const { data } = await owner.from('member_notifications').select('id');
+    expect(data).toEqual([]);
+    const res = await owner.from('member_notifications').insert({
+      org_id: orgId,
+      user_id: ownerId,
+      event_type: 'ticket.new',
+      entity_type: 'ticket',
+      entity_id: randomUUID(),
+    });
+    expect(res.error).not.toBeNull();
+  });
+
+  it('a new conversation queues one row per subscribed member', async () => {
+    const { data: conv } = await admin
+      .from('conversations')
+      .insert({ org_id: orgId, channel_id: channelId, subject: 'Notify', status: 'open', mode: 'bot' })
+      .select('id')
+      .single();
+    conversationId = conv!.id as string;
+    expect(await queued({ entity_id: conversationId, event_type: 'conversation.new' })).toEqual([
+      { user_id: ownerId },
+    ]);
+  });
+
+  it('an assignment notifies the assignee only — and not when they assign themselves', async () => {
+    // the owner assigns the member → the member is told
+    await owner.from('conversations').update({ assignee_id: memberId }).eq('id', conversationId);
+    expect(await queued({ entity_id: conversationId, event_type: 'assigned' })).toEqual([
+      { user_id: memberId },
+    ]);
+    // the member takes it back themselves → nothing new
+    await owner.from('conversations').update({ assignee_id: null }).eq('id', conversationId);
+    await member.from('conversations').update({ assignee_id: memberId }).eq('id', conversationId);
+    expect(await queued({ entity_id: conversationId, event_type: 'assigned' })).toHaveLength(1);
+  });
+
+  it('only a waiting handoff notifies, never a manual takeover', async () => {
+    await admin.from('handoff_events').insert([
+      { org_id: orgId, conversation_id: conversationId, reason: 'low_confidence', outcome: 'pending_human' },
+      { org_id: orgId, conversation_id: conversationId, reason: 'manual', outcome: 'pending_human' },
+      { org_id: orgId, conversation_id: conversationId, reason: 'low_confidence', outcome: 'suppressed' },
+    ]);
+    expect(await queued({ entity_id: conversationId, event_type: 'handoff.pending' })).toEqual([
+      { user_id: ownerId },
+    ]);
+  });
+
+  it('leaving the organization removes the preferences', async () => {
+    await admin.from('org_members').delete().eq('org_id', orgId).eq('user_id', memberId);
+    const { data } = await admin
+      .from('notification_preferences')
+      .select('user_id')
+      .eq('org_id', orgId);
+    expect(data).toEqual([{ user_id: ownerId }]);
+  });
+});

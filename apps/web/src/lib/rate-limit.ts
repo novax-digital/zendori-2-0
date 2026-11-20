@@ -29,7 +29,8 @@ export type RateLimitName =
   | 'contact-submit-ip'
   | 'contact-submit-email'
   | 'api-v1-ip'
-  | 'api-v1-key';
+  | 'api-v1-key'
+  | 'notify-test-user';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -160,6 +161,12 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(120, '1 m'),
       prefix: 'zendori:rl:api-v1-key',
+    }),
+    // "Testmail senden" on the notification settings page, per signed-in member
+    'notify-test-user': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(6, '10 m'),
+      prefix: 'zendori:rl:notify-test-user',
     }),
   };
   return limiters;

@@ -32,6 +32,7 @@ const SETTINGS_HUB = new Set([
   'canned-responses',
   'integrations',
   'billing',
+  'notifications',
 ]);
 /** /admin/<page> that are lists; the sub-navigation there is a layout and stays mounted. */
 const ADMIN_LISTS = new Set(['users', 'phone-numbers', 'demo', 'billing']);

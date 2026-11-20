@@ -96,3 +96,45 @@
   max-height: 22rem;
   overflow: auto;
 }
+
+/* Benachrichtigungen (0038): one event per row — checkbox + text left, test mail right */
+.notify-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.notify-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+.notify-row + .notify-row {
+  border-top: 1px solid var(--border);
+}
+.notify-row label.check-row {
+  align-items: flex-start;
+  min-width: 0;
+  margin: 0;
+}
+.notify-row label.check-row input {
+  margin-top: 3px;
+}
+.notify-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.notify-row .btn {
+  flex-shrink: 0;
+}
+@media (max-width: 560px) {
+  .notify-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

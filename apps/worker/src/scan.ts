@@ -31,6 +31,12 @@ import {
   pruneIntegrationEvents,
   type IntegrationEventJob,
 } from './actions/events.js';
+import {
+  MEMBER_NOTIFY_QUEUE,
+  MEMBER_NOTIFY_RETRY_LIMIT,
+  pruneMemberNotifications,
+  type MemberNotifyJob,
+} from './notifications/deliver.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -46,6 +52,7 @@ const ACTION_RUN_BATCH = 20;
 /** The stale-run sweep is a write — once a minute is plenty. */
 const STALE_RUN_SWEEP_MS = 60_000;
 const INTEGRATION_EVENT_BATCH = 20;
+const MEMBER_NOTIFY_BATCH = 20;
 /** Delivered events are pruned once an hour. */
 const EVENT_PRUNE_MS = 60 * 60_000;
 
@@ -113,10 +120,12 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
         await failStaleRuns(supabase);
       }
       await enqueueDueIntegrationEvents(boss, supabase);
+      await enqueueDueMemberNotifications(boss, supabase);
       if (Date.now() - lastEventPrune >= EVENT_PRUNE_MS) {
         lastEventPrune = Date.now();
         await pruneIntegrationEvents(supabase);
         await pruneApiIdempotencyKeys(supabase);
+        await pruneMemberNotifications(supabase);
       }
       // 0018 v1.5: internally rate-limited to one sweep per minute.
       await remindOverdueHandoffs(supabase, logger);
@@ -338,6 +347,32 @@ async function enqueueDueIntegrationEvents(boss: PgBoss, supabase: SupabaseClien
     await boss.send(INTEGRATION_EVENT_QUEUE, { eventId: row.id } satisfies IntegrationEventJob, {
       singletonKey: row.id,
       retryLimit: INTEGRATION_EVENT_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue member notifications whose time has come (0038). Like the event
+ * outbox, the schedule lives in the row; the job itself never retries.
+ */
+async function enqueueDueMemberNotifications(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('member_notifications')
+    .select('id')
+    .eq('state', 'pending')
+    .lte('next_attempt_at', new Date().toISOString())
+    .order('next_attempt_at', { ascending: true })
+    .limit(MEMBER_NOTIFY_BATCH);
+  if (error) {
+    // member_notifications does not exist until migration 0038 is applied — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(MEMBER_NOTIFY_QUEUE, { notificationId: row.id } satisfies MemberNotifyJob, {
+      singletonKey: row.id,
+      retryLimit: MEMBER_NOTIFY_RETRY_LIMIT,
     });
   }
 }

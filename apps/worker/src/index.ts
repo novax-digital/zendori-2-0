@@ -34,6 +34,7 @@ import {
 import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
 import { ACTION_RUN_QUEUE, executeQueuedRun } from './actions/execute.js';
 import { INTEGRATION_EVENT_QUEUE, deliverIntegrationEvent } from './actions/events.js';
+import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/deliver.js';
 import {
   LEARN_DISTILL_QUEUE,
   LEARN_DISTILL_RETRY_LIMIT,
@@ -54,6 +55,7 @@ const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
 const actionRunJobSchema = z.object({ runId: z.uuid() });
 const integrationEventJobSchema = z.object({ eventId: z.uuid() });
+const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -290,6 +292,34 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), eventId }, 'integration event job failed');
+        }
+      }
+    }
+  );
+
+  // --- member e-mail notifications (0038) ---------------------------------------
+  // deliverMemberNotification leases the queue row, re-checks access, sends once
+  // and writes the outcome into the row — retries are scheduled there.
+  await ensureQueuePolicy(boss, MEMBER_NOTIFY_QUEUE);
+  await boss.work(
+    MEMBER_NOTIFY_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { notificationId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { notificationId } = memberNotifyJobSchema.parse(job.data);
+        try {
+          await deliverMemberNotification(
+            {
+              supabase,
+              logger,
+              from: process.env.RESEND_FROM,
+              appUrl: process.env.APP_URL,
+            },
+            notificationId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), notificationId }, 'member notification job failed');
         }
       }
     }

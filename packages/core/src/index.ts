@@ -17,3 +17,4 @@ export * from './data-actions.js';
 export * from './integration-events.js';
 export * from './api-keys.js';
 export * from './public-api.js';
+export * from './notifications.js';

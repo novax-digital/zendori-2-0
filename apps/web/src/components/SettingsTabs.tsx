@@ -16,7 +16,8 @@ export type SettingsTabKey =
   | 'tickets'
   | 'canned-responses'
   | 'integrations'
-  | 'billing';
+  | 'billing'
+  | 'notifications';
 
 const TABS: { key: SettingsTabKey; href: string; label: string }[] = [
   { key: 'organization', href: '/settings/organization', label: 'Organisation' },
@@ -26,6 +27,8 @@ const TABS: { key: SettingsTabKey; href: string; label: string }[] = [
   { key: 'canned-responses', href: '/settings/canned-responses', label: 'Textbausteine' },
   { key: 'integrations', href: '/settings/integrations', label: 'Integrationen' },
   { key: 'billing', href: '/settings/billing', label: 'Abrechnung' },
+  // personal, not org config: every member manages their own e-mail notifications
+  { key: 'notifications', href: '/settings/notifications', label: 'Benachrichtigungen' },
 ];
 
 export function settingsTabVisible(access: MemberAccess, key: SettingsTabKey): boolean {
@@ -44,6 +47,8 @@ export function settingsTabVisible(access: MemberAccess, key: SettingsTabKey): b
       return canViewArea(access, 'canned');
     case 'billing':
       return canViewArea(access, 'billing');
+    case 'notifications':
+      return true;
   }
 }
 
