@@ -43,7 +43,8 @@ export function skeletonVariant(pathname: string): Variant {
   // /admin itself redirects to the user list
   if (area === 'admin') return !page || (ADMIN_LISTS.has(page) && rest.length === 0) ? 'list' : 'detail';
   if (area === 'settings') {
-    if (!page || SETTINGS_HUB.has(page)) return 'settings';
+    // pages BELOW a hub page (an API connection, a data action) are detail pages
+    if (!page || (SETTINGS_HUB.has(page) && rest.length === 0)) return 'settings';
     return SETTINGS_LISTS.has(page) && rest.length === 0 ? 'list' : 'detail';
   }
   return 'detail';

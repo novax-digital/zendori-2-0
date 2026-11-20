@@ -84,6 +84,40 @@ export async function loadKbLinks(
   return (data ?? []) as { agent_id: string; knowledge_base_id: string }[];
 }
 
+export interface AgentDataAction {
+  id: string;
+  name: string;
+  label: string;
+  kind: 'read' | 'write';
+  requires_confirmation: boolean;
+  is_active: boolean;
+}
+
+/**
+ * Data actions of the org (Phase 13, 0035) for the agent editor. Empty before
+ * the migration (missing table) — the tab then simply has nothing to link.
+ */
+export async function loadDataActions(orgId: string): Promise<AgentDataAction[]> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('data_actions')
+    .select('id, name, label, kind, requires_confirmation, is_active')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: true });
+  return (data ?? []) as AgentDataAction[];
+}
+
+export async function loadActionLinks(
+  orgId: string
+): Promise<{ agent_id: string; data_action_id: string }[]> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('agent_data_actions')
+    .select('agent_id, data_action_id')
+    .eq('org_id', orgId);
+  return (data ?? []) as { agent_id: string; data_action_id: string }[];
+}
+
 /** An answering agent (not intake_only) without a linked KB retrieves nothing (C33). */
 export function agentLacksKb(
   agent: Pick<AgentRow, 'mode'>,

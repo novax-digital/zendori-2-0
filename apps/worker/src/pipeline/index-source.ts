@@ -722,7 +722,7 @@ export async function safeFetch(target: string): Promise<Response> {
  * Reject a URL unless it is http(s) AND every DNS-resolved address is publicly
  * routable. Blocks SSRF into loopback / private / link-local / reserved ranges.
  */
-async function assertPublicUrl(value: string): Promise<URL> {
+export async function assertPublicUrl(value: string): Promise<URL> {
   const url = parseHttpUrl(value);
   const addresses = await resolveAddresses(url.hostname);
   if (addresses.length === 0) {

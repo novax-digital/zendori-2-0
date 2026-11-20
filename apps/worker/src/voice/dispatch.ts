@@ -7,6 +7,8 @@ import {
   type BusinessHours,
 } from '@zendori/channels';
 import { getServiceClient, toErrorInfo } from '../db.js';
+import { loadAgentActions } from '../actions/execute.js';
+import type { VoiceActionSetup } from './action-tool.js';
 import { CallSession } from './call-session.js';
 import type { VoiceAgentBehavior } from './session-config.js';
 
@@ -131,7 +133,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       supabase.from('organizations').select('name').eq('id', call.org_id).maybeSingle(),
       supabase
         .from('conversations')
-        .select('contact_id, contacts(name, phone)')
+        .select('contact_id, contacts(id, name, phone, email)')
         .eq('id', call.conversation_id)
         .maybeSingle(),
       // 0018: handoff needs business hours + the org keyword list. Best-effort —
@@ -193,7 +195,14 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
     }
     const companyName = (orgRes.data as { name: string } | null)?.name ?? 'unserem Unternehmen';
     const contactRow = (
-      contactRes.data as { contacts: { name: string | null; phone?: string | null } | null } | null
+      contactRes.data as {
+        contacts: {
+          id?: string;
+          name: string | null;
+          phone?: string | null;
+          email?: string | null;
+        } | null;
+      } | null
     )?.contacts;
     const contactName = (contactRow?.name ?? null) || null;
     // Caller id (0029): the webhook stored the SIP From number as contacts.phone;
@@ -349,6 +358,38 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       logger.warn({ voiceCallId }, 'voice channel has no agent — falling back to intake mode');
     }
 
+    // Phase 13: data actions of a real, answering agent. Best-effort — a load
+    // problem (or the pre-0035 schema) must never keep the call from being
+    // answered; the agent then simply has no actions. The caller's identity is
+    // bound HERE from the contact row, so the model can never supply it.
+    let actionSetup: VoiceActionSetup | undefined;
+    if (agentId && allowTransfer && agent.mode === 'answer') {
+      try {
+        const actions = await loadAgentActions(supabase, call.org_id, agentId);
+        if (actions.length > 0) {
+          agent = { ...agent, actions };
+          actionSetup = {
+            actions,
+            agentId,
+            masterKey: env.MASTER_ENCRYPTION_KEY,
+            context: {
+              'contact.id': contactRow?.id ?? null,
+              'contact.name': contactName,
+              'contact.email': (contactRow?.email ?? null) || null,
+              'contact.phone': callerNumber,
+              'conversation.id': call.conversation_id,
+              'channel.type': 'voice',
+            },
+          };
+        }
+      } catch (err) {
+        logger.warn(
+          { voiceCallId, err: toErrorInfo(err) },
+          'voice agent data actions could not be loaded — continuing without'
+        );
+      }
+    }
+
     // Recording (opt-in): capture is done trunk-wide at Twilio (Elastic SIP
     // Trunking calls are not recordable via the per-call Voice API). The session
     // only speaks the §201 consent notice; the post-call job fetches the trunk
@@ -375,6 +416,7 @@ export function startVoiceDispatch(logger: Logger): VoiceDispatchHandle {
       },
       businessHours,
       allowTransfer,
+      actionSetup,
       recordingEnabled,
       onClosed: (providerCallId) => {
         sessions.delete(providerCallId);

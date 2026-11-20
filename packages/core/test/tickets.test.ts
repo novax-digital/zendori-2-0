@@ -63,7 +63,9 @@ describe('validateTicketIdFormat', () => {
 describe('enums and helpers', () => {
   it('pins the status/origin sets the migration CHECKs enforce', () => {
     expect(TICKET_STATUSES).toEqual(['open', 'in_progress', 'waiting', 'resolved']);
-    expect(TICKET_ORIGINS).toHaveLength(10);
+    // 0030 defined ten origins; 0035 adds 'action' (a data action awaits confirmation)
+    expect(TICKET_ORIGINS).toHaveLength(11);
+    expect(TICKET_ORIGINS).toContain('action');
   });
 
   it('treats ingest placeholders as empty subjects', () => {

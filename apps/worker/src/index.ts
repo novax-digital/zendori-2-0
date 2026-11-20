@@ -32,6 +32,8 @@ import {
   processPostCall,
 } from './pipeline/post-call.js';
 import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
+import { ACTION_RUN_QUEUE, executeQueuedRun } from './actions/execute.js';
+import { INTEGRATION_EVENT_QUEUE, deliverIntegrationEvent } from './actions/events.js';
 import {
   LEARN_DISTILL_QUEUE,
   LEARN_DISTILL_RETRY_LIMIT,
@@ -50,6 +52,8 @@ const hubspotTicketSyncJobSchema = z.object({ ticketId: z.uuid() });
 const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
 const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
+const actionRunJobSchema = z.object({ runId: z.uuid() });
+const integrationEventJobSchema = z.object({ eventId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -239,6 +243,54 @@ async function main(): Promise<void> {
         // processFormNotification handles the terminal attempt itself (state
         // 'failed' + internal note) and only rethrows for retryable attempts.
         await processFormNotification(supabase, logger, parsed, job.retryCount);
+      }
+    }
+  );
+
+  // --- Phase-13 data actions: test runs + inbox-approved runs --------------------
+  // executeQueuedRun claims the row (queued → running) and always ends it as
+  // succeeded/failed itself; it never rethrows, so pg-boss never redelivers a
+  // (possibly non-idempotent) call to the customer's end system.
+  await ensureQueuePolicy(boss, ACTION_RUN_QUEUE);
+  await boss.work(
+    ACTION_RUN_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { runId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { runId } = actionRunJobSchema.parse(job.data);
+        try {
+          await executeQueuedRun(
+            { supabase, logger, masterKey: env.MASTER_ENCRYPTION_KEY },
+            runId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), runId }, 'action run job failed');
+        }
+      }
+    }
+  );
+
+  // --- Phase-13c outbound events to the customers' end systems ------------------
+  // deliverIntegrationEvent leases the outbox row, sends once and writes the
+  // outcome (sent / next attempt / failed) into the row — retries are scheduled
+  // there, so a job never needs a pg-boss retry.
+  await ensureQueuePolicy(boss, INTEGRATION_EVENT_QUEUE);
+  await boss.work(
+    INTEGRATION_EVENT_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { eventId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { eventId } = integrationEventJobSchema.parse(job.data);
+        try {
+          await deliverIntegrationEvent(
+            { supabase, logger, masterKey: env.MASTER_ENCRYPTION_KEY },
+            eventId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), eventId }, 'integration event job failed');
+        }
       }
     }
   );

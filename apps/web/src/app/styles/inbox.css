@@ -594,3 +594,72 @@
     padding: 24px 0;
   }
 }
+
+/* Data actions of the agent (Phase 13): a run waiting for confirmation is an
+   outlined block like the AI draft; finished runs fold into one line. */
+.inbox-actions-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inbox-action-run {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.inbox-action-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.inbox-action-run-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--ink);
+}
+.inbox-action-run-title svg {
+  color: var(--primary);
+}
+.inbox-action-run-args {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: var(--fs-small);
+}
+.inbox-action-run-args > div {
+  display: contents;
+}
+.inbox-action-run-args dt {
+  color: var(--text-muted);
+}
+.inbox-action-run-args dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.inbox-action-history {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+.inbox-action-history > summary {
+  cursor: pointer;
+}
+.inbox-action-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.inbox-action-run-result {
+  overflow-wrap: anywhere;
+}

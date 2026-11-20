@@ -18,6 +18,19 @@ import {
   LEARN_DISTILL_RETRY_LIMIT,
   type LearnDistillJob,
 } from './pipeline/learn.js';
+import {
+  ACTION_RUN_QUEUE,
+  ACTION_RUN_RETRY_LIMIT,
+  failStaleRuns,
+  type ActionRunJob,
+} from './actions/execute.js';
+import {
+  INTEGRATION_EVENT_QUEUE,
+  INTEGRATION_EVENT_RETRY_LIMIT,
+  pruneApiIdempotencyKeys,
+  pruneIntegrationEvents,
+  type IntegrationEventJob,
+} from './actions/events.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -29,6 +42,12 @@ export const HUBSPOT_SYNC_RETRY_LIMIT = 3;
 const POST_CALL_BATCH = 10;
 const FORM_NOTIFY_BATCH = 20;
 const LEARN_BATCH = 10;
+const ACTION_RUN_BATCH = 20;
+/** The stale-run sweep is a write — once a minute is plenty. */
+const STALE_RUN_SWEEP_MS = 60_000;
+const INTEGRATION_EVENT_BATCH = 20;
+/** Delivered events are pruned once an hour. */
+const EVENT_PRUNE_MS = 60 * 60_000;
 
 // 1 s per CLAUDE.md §4 ("pg-boss-Poll im Sekundentakt"). Trade-off: 1 Hz means
 // five lightweight index-backed queries per second against Supabase — negligible
@@ -74,6 +93,8 @@ export interface HubspotTicketSyncJob {
 export function startScan(boss: PgBoss, logger: Logger): () => void {
   const supabase = getServiceClient();
   let scanning = false;
+  let lastStaleRunSweep = 0;
+  let lastEventPrune = 0;
 
   const tick = async (): Promise<void> => {
     if (scanning) return;
@@ -86,6 +107,17 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueueDuePostCalls(boss, supabase);
       await enqueuePendingFormNotifications(boss, supabase);
       await enqueueLearningCandidates(boss, supabase);
+      await enqueueQueuedActionRuns(boss, supabase);
+      if (Date.now() - lastStaleRunSweep >= STALE_RUN_SWEEP_MS) {
+        lastStaleRunSweep = Date.now();
+        await failStaleRuns(supabase);
+      }
+      await enqueueDueIntegrationEvents(boss, supabase);
+      if (Date.now() - lastEventPrune >= EVENT_PRUNE_MS) {
+        lastEventPrune = Date.now();
+        await pruneIntegrationEvents(supabase);
+        await pruneApiIdempotencyKeys(supabase);
+      }
       // 0018 v1.5: internally rate-limited to one sweep per minute.
       await remindOverdueHandoffs(supabase, logger);
     } catch (err) {
@@ -258,6 +290,54 @@ async function enqueueLearningCandidates(boss: PgBoss, supabase: SupabaseClient)
       singletonKey: row.id,
       retryLimit: LEARN_DISTILL_RETRY_LIMIT,
       retryBackoff: true,
+    });
+  }
+}
+
+/** Enqueue data-action runs waiting for the worker: test runs + approved runs (Phase 13). */
+async function enqueueQueuedActionRuns(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('action_runs')
+    .select('id')
+    .eq('state', 'queued')
+    .order('created_at', { ascending: true })
+    .limit(ACTION_RUN_BATCH);
+  if (error) {
+    // action_runs does not exist until migration 0035 is applied — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(ACTION_RUN_QUEUE, { runId: row.id } satisfies ActionRunJob, {
+      singletonKey: row.id,
+      retryLimit: ACTION_RUN_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue outbox events whose delivery time has come (Phase 13c). The retry
+ * schedule lives in the row (next_attempt_at); the job itself never retries.
+ */
+async function enqueueDueIntegrationEvents(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('integration_events')
+    .select('id')
+    .eq('state', 'pending')
+    .lte('next_attempt_at', new Date().toISOString())
+    .order('next_attempt_at', { ascending: true })
+    .limit(INTEGRATION_EVENT_BATCH);
+  if (error) {
+    // integration_events does not exist until migration 0036 is applied — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(INTEGRATION_EVENT_QUEUE, { eventId: row.id } satisfies IntegrationEventJob, {
+      singletonKey: row.id,
+      retryLimit: INTEGRATION_EVENT_RETRY_LIMIT,
     });
   }
 }

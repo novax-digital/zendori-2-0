@@ -383,6 +383,49 @@ export async function updateAgent(formData: FormData): Promise<void> {
     }
   }
 
+  // Data-action links (Phase 13, 0035): same render-scoped semantics as the
+  // knowledge bases — only unlink actions the form actually showed as linked.
+  // A form that rendered no action checkboxes (pre-0035, or no actions yet)
+  // submits neither field and touches nothing.
+  const selectedActions = new Set(uuidStrings(formData.getAll('actions')));
+  const renderedLinkedActions = new Set(uuidStrings(formData.getAll('renderedLinkedActions')));
+  if (selectedActions.size > 0 || renderedLinkedActions.size > 0) {
+    const ACTION_LINK_ERROR = 'Aktions-Verknüpfung konnte nicht gespeichert werden.';
+    const { data: actionLinkData, error: actionLinkError } = await supabase
+      .from('agent_data_actions')
+      .select('data_action_id')
+      .eq('org_id', org)
+      .eq('agent_id', agentId);
+    if (actionLinkError) redirect(agentDetailUrl(org, agentId, { error: ACTION_LINK_ERROR }));
+    const linkedActions = new Set(
+      ((actionLinkData ?? []) as { data_action_id: string }[]).map((r) => r.data_action_id)
+    );
+    // a stale checkbox for a meanwhile-deleted action must not fail the batch
+    const { data: actionRows } = await supabase.from('data_actions').select('id').eq('org_id', org);
+    const existingActions = new Set(((actionRows ?? []) as { id: string }[]).map((r) => r.id));
+    const actionsToLink = [...selectedActions].filter(
+      (id) => existingActions.has(id) && !linkedActions.has(id)
+    );
+    const actionsToUnlink = [...linkedActions].filter(
+      (id) => !selectedActions.has(id) && renderedLinkedActions.has(id)
+    );
+    if (actionsToLink.length > 0) {
+      const { error } = await supabase.from('agent_data_actions').insert(
+        actionsToLink.map((actionId) => ({ org_id: org, agent_id: agentId, data_action_id: actionId }))
+      );
+      if (error) redirect(agentDetailUrl(org, agentId, { error: ACTION_LINK_ERROR }));
+    }
+    if (actionsToUnlink.length > 0) {
+      const { error } = await supabase
+        .from('agent_data_actions')
+        .delete()
+        .eq('org_id', org)
+        .eq('agent_id', agentId)
+        .in('data_action_id', actionsToUnlink);
+      if (error) redirect(agentDetailUrl(org, agentId, { error: ACTION_LINK_ERROR }));
+    }
+  }
+
   revalidatePath('/settings/agents');
   revalidatePath(`/settings/agents/${agentId}`);
   revalidatePath('/settings/channels');

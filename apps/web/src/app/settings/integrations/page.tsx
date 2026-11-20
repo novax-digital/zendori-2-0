@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { z } from 'zod';
 import { decryptSecret, parseHubspotSyncRules } from '@zendori/core';
 import type { Channel, SyncRules } from '@zendori/core';
@@ -6,17 +7,19 @@ import { requireActiveOrg } from '@/lib/org';
 import { listChannels } from '@/lib/inbox/queries';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { connectHubspot, disconnectHubspot, saveHubspotConfig } from './actions';
-import { isAdminRole } from '@zendori/core';
+import { createApiConnection } from './api/actions';
+import { isAdminRole, isMissingRelationError } from '@zendori/core';
 import { href } from '@/lib/href';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import SettingsFrame from '@/components/SettingsTabs';
+import ApiAuthFields from '@/components/api-integration/ApiAuthFields';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Drawer from '@/components/ui/Drawer';
 import { Field, SettingRow } from '@/components/ui/Field';
-import { Section } from '@/components/ui/Layout';
+import { EmptyState, Section } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
 
@@ -124,6 +127,33 @@ export default async function IntegrationsPage({
   const ticketRules: SyncRules = streams.tickets;
   const ticketChannelIds = new Set(ticketRules.mode === 'channels' ? ticketRules.channel_ids : []);
 
+  // Phase 13: the org's own end systems. Before migration 0035 the table is
+  // missing — the section then explains itself instead of failing the page.
+  const apiRes = await supabase
+    .from('api_connections')
+    .select('id, name, base_url, is_active')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: true });
+  const apiAvailable = !apiRes.error || !isMissingRelationError(apiRes.error);
+  const apiConnections = (apiRes.data ?? []) as {
+    id: string;
+    name: string;
+    base_url: string;
+    is_active: boolean;
+  }[];
+  const actionCounts = new Map<string, number>();
+  if (apiConnections.length > 0) {
+    const { data: actionRows } = await supabase
+      .from('data_actions')
+      .select('connection_id')
+      .eq('org_id', orgId);
+    for (const row of (actionRows ?? []) as { connection_id: string }[]) {
+      actionCounts.set(row.connection_id, (actionCounts.get(row.connection_id) ?? 0) + 1);
+    }
+  }
+  const apiNewHref = href(PATH, { org: orgId, panel: 'api-new' });
+  const apiDrawerOpen = panel === 'api-new' && apiAvailable;
+
   const channels: Channel[] = connected ? await listChannels(orgId) : [];
   const { pipelines, failed: pipelinesFailed } =
     connected && config.token_encrypted
@@ -156,7 +186,7 @@ export default async function IntegrationsPage({
 
         <div className="page-body">
           {/* while the drawer is open its own banner shows the message */}
-          {drawerOpen ? null : <DismissibleBanners error={error} notice={notice} />}
+          {drawerOpen || apiDrawerOpen ? null : <DismissibleBanners error={error} notice={notice} />}
 
           <Section
             title="Verfügbare Integrationen"
@@ -224,6 +254,67 @@ export default async function IntegrationsPage({
                 </tbody>
               </table>
             </div>
+          </Section>
+
+          <Section
+            title="Eigene Endsysteme (API)"
+            help="Verbinde eigene Systeme wie Shop, ERP oder Terminbuchung. KI-Agenten rufen sie über Aktionen auf, Zendori meldet Ereignisse dorthin und dein System kann Änderungen zurückmelden."
+            actions={
+              apiAvailable ? (
+                <Button href={apiNewHref} size="sm" icon="plus" scroll={false}>
+                  Neue Verbindung
+                </Button>
+              ) : null
+            }
+          >
+            {!apiAvailable ? (
+              <Callout>
+                Diese Funktion ist noch nicht freigeschaltet (Datenbank-Migration 0035 steht aus).
+              </Callout>
+            ) : apiConnections.length === 0 ? (
+              <EmptyState
+                title="Noch keine Verbindung"
+                text="Lege die erste Verbindung zu einem eigenen System an."
+              />
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Verbindung</th>
+                      <th>Aktionen</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {apiConnections.map((connection) => (
+                      <tr key={connection.id}>
+                        <td>
+                          <div className="cell-title">
+                            <Link href={href(`${PATH}/api/${connection.id}`, { org: orgId })}>
+                              {connection.name}
+                            </Link>
+                          </div>
+                          <div className="cell-sub mono">{connection.base_url}</div>
+                        </td>
+                        <td>{actionCounts.get(connection.id) ?? 0}</td>
+                        <td>
+                          {connection.is_active ? (
+                            <Badge tone="success" dot>
+                              Aktiv
+                            </Badge>
+                          ) : (
+                            <Badge tone="muted" dot>
+                              Pausiert
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Section>
 
           {connected ? (
@@ -449,6 +540,54 @@ export default async function IntegrationsPage({
                   placeholder="pat-eu1-…"
                 />
               </Field>
+            </form>
+          </Drawer>
+        ) : null}
+
+        {apiDrawerOpen ? (
+          <Drawer
+            title="Neue Verbindung"
+            closeHref={listHref}
+            footer={
+              <>
+                <Button href={listHref} scroll={false}>
+                  Abbrechen
+                </Button>
+                <Button type="submit" form="api-connection-form" variant="primary">
+                  Verbindung anlegen
+                </Button>
+              </>
+            }
+          >
+            <DismissibleBanners error={error} notice={notice} />
+            <form id="api-connection-form" className="stack" action={createApiConnection}>
+              <input type="hidden" name="org" value={orgId} />
+              <Field label="Name" htmlFor="api-new-name" help="So heißt das System in Zendori.">
+                <input
+                  id="api-new-name"
+                  name="name"
+                  type="text"
+                  required
+                  minLength={2}
+                  maxLength={80}
+                  placeholder="z. B. Shop-System"
+                />
+              </Field>
+              <Field
+                label="Basis-URL"
+                htmlFor="api-new-url"
+                help="Adresse der API ohne einzelne Endpunkte, nur https. Die Pfade legst du pro Aktion fest."
+              >
+                <input
+                  id="api-new-url"
+                  name="baseUrl"
+                  type="url"
+                  required
+                  maxLength={500}
+                  placeholder="https://api.example.com/v1"
+                />
+              </Field>
+              <ApiAuthFields idPrefix="api-new" />
             </form>
           </Drawer>
         ) : null}

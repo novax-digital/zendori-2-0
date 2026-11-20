@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import type { Logger, SupabaseClient } from '@zendori/core';
 import type { BusinessHours, VoiceChannelConfig } from '@zendori/channels';
 import { toErrorInfo } from '../db.js';
+import { dataActionTool, findVoiceAction, type VoiceActionSetup } from './action-tool.js';
 import {
   buildSessionConfig,
   type SessionContext,
@@ -127,6 +128,11 @@ export interface CallSessionParams {
   /** False in the agent-less safe-intake fallback: never live-transfer. */
   allowTransfer?: boolean;
   /**
+   * Phase 13: the agent's data actions plus the caller's server-side identity
+   * (resolved once by dispatch). Absent = the agent has no actions.
+   */
+  actionSetup?: VoiceActionSetup;
+  /**
    * True when the channel opted into recording. The actual capture is done at
    * the Twilio trunk level (Elastic SIP Trunking calls are not recordable via
    * the per-call Voice API); the session only speaks the mandatory §201 consent
@@ -163,6 +169,8 @@ export class CallSession {
   private readonly emailGate = newConfirmGateState();
   private readonly phoneGate = newPhoneGateState();
   private readonly ticketState = newTicketState();
+  /** Data-action calls made in this call (bounded by VOICE_ACTION_MAX_CALLS). */
+  private actionCalls = 0;
   /** Persisted user turns: item_id → { messageId, content } (for late corrections). */
   private readonly flushedItems = new Map<string, { messageId: string | null; content: string }>();
   /** Assistant transcript accumulator for the in-flight response. */
@@ -526,12 +534,18 @@ export class CallSession {
       // end_call must never be talked over. The timer fires OUTSIDE the
       // serialized event chain, but only performs a socket write (send) — it
       // never touches chain-owned state, so existing ordering is untouched.
+      // Phase 13: a data action is a round trip to the customer's end system —
+      // exactly the kind of wait the filler exists for.
+      const actionOf = (name: string) => findVoiceAction(this.p.actionSetup, name);
       const fillerEligible = calls.every(
-        (c) => c.name === 'kb_search' || c.name === 'create_ticket'
+        (c) => c.name === 'kb_search' || c.name === 'create_ticket' || actionOf(c.name) !== null
       );
-      // Wording per batch: any lookup present → lookup phrasing; ticket-only →
-      // recording phrasing (shared fillerIndex keeps rotation call-wide).
-      const fillerTexts = calls.some((c) => c.name === 'kb_search')
+      // Wording per batch: any lookup present (kb_search or a READ action) →
+      // lookup phrasing; ticket/write-only → recording phrasing (shared
+      // fillerIndex keeps rotation call-wide).
+      const fillerTexts = calls.some(
+        (c) => c.name === 'kb_search' || actionOf(c.name)?.kind === 'read'
+      )
         ? TOOL_FILLER_TEXTS
         : TICKET_FILLER_TEXTS;
       let fillerSpoken = false;
@@ -786,8 +800,29 @@ export class CallSession {
           return await handoffTool(ctx, args);
         case 'end_call':
           return { ok: true };
-        default:
-          return { ok: false, error: 'unknown tool' };
+        default: {
+          // Phase 13: anything else must be one of THIS agent's data actions.
+          const action = findVoiceAction(this.p.actionSetup, name);
+          if (!action || !this.p.actionSetup || this.p.agent.mode !== 'answer') {
+            return { ok: false, error: 'unknown tool' };
+          }
+          const callsSoFar = this.actionCalls;
+          this.actionCalls += 1;
+          return await dataActionTool(
+            {
+              supabase: this.p.supabase,
+              logger: this.p.logger,
+              orgId: this.p.orgId,
+              conversationId: this.p.conversationId,
+              callStartedAt: this.p.context.callStartedAt ?? null,
+              ticketState: this.ticketState,
+            },
+            this.p.actionSetup,
+            action,
+            args,
+            callsSoFar
+          );
+        }
       }
     } catch (err) {
       this.p.logger.error(

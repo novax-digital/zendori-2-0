@@ -10,3 +10,5 @@ export * from './hubspot/tickets.js';
 export * from './hubspot/notes.js';
 export * from './hubspot/properties.js';
 export * from './hubspot/account.js';
+// Phase 13: generic client for an org's own end systems (data actions, events).
+export * from './custom-api/client.js';

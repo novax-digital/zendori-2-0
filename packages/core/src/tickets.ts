@@ -27,6 +27,8 @@ export const TICKET_ORIGINS = [
   'form',
   'manual',
   'takeover',
+  // Phase 13: a data action waits for a team member's confirmation
+  'action',
 ] as const;
 export const ticketOriginSchema = z.enum(TICKET_ORIGINS);
 export type TicketOrigin = z.infer<typeof ticketOriginSchema>;
@@ -100,6 +102,7 @@ export const TICKET_ORIGIN_LABELS: Record<TicketOrigin, string> = {
   form: 'Formular',
   manual: 'Manuell',
   takeover: 'Übernahme',
+  action: 'Aktion bestätigen',
 };
 
 /** Ordering used by the attach rule: a later event may only RAISE the priority. */

@@ -72,3 +72,27 @@
   color: var(--ink);
 }
 
+
+/* API-Integration (Phase 13): one parameter of a data action */
+.param-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.param-card .field {
+  margin: 0;
+}
+.param-field-name {
+  width: 16rem;
+  max-width: 100%;
+}
+/* test run / run log: the mapped result as returned to the agent */
+.run-result {
+  max-height: 22rem;
+  overflow: auto;
+}

@@ -2027,3 +2027,354 @@ describe.skipIf(!enabled)('RLS: contact_requests (0034) — service role only', 
     expect(empty.error).not.toBeNull();
   });
 });
+
+describe.skipIf(!enabled)('RLS: API-Integration (0035–0037)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let member: SupabaseClient;
+  let stranger: SupabaseClient;
+  let ownerId: string;
+  let memberId: string;
+  let strangerId: string;
+  let orgId: string;
+  let channelId: string;
+  let conversationId: string;
+  let contactId: string;
+  let connectionId: string;
+  let secondConnectionId: string;
+  let actionId: string;
+  let ticketId: string;
+  const emails = ['owner', 'member', 'stranger'].map(
+    (role) => `api-${role}-${randomUUID()}@test.zendori.dev`
+  );
+  const password = `pw-${randomUUID()}`;
+
+  const countEvents = async (filter: Record<string, string>): Promise<number> => {
+    let query = admin.from('integration_events').select('id').eq('org_id', orgId);
+    for (const [column, value] of Object.entries(filter)) query = query.eq(column, value);
+    const { data } = await query;
+    return (data ?? []).length;
+  };
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await Promise.all(
+      emails.map((email) => admin.auth.admin.createUser({ email, password, email_confirm: true }))
+    );
+    [ownerId, memberId, strangerId] = created.map((res) => res.data.user!.id) as [
+      string,
+      string,
+      string,
+    ];
+    [owner, member, stranger] = await Promise.all(
+      emails.map(async (email) => {
+        const client = createClient(url!, anonKey!, { auth: { persistSession: false } });
+        await client.auth.signInWithPassword({ email, password });
+        return client;
+      })
+    ) as [SupabaseClient, SupabaseClient, SupabaseClient];
+
+    const slug = `api-${randomUUID().slice(0, 8)}`;
+    await owner.from('organizations').insert({ name: 'API Org', slug });
+    const { data: org } = await owner.from('organizations').select('id').eq('slug', slug).single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: memberId, role: 'agent' });
+
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Chat', config: {} })
+      .select('id')
+      .single();
+    channelId = channel!.id as string;
+    const { data: contact } = await admin
+      .from('contacts')
+      .insert({ org_id: orgId, name: 'Kai', email: `kai-${randomUUID()}@example.com` })
+      .select('id')
+      .single();
+    contactId = contact!.id as string;
+    const { data: conv } = await admin
+      .from('conversations')
+      .insert({ org_id: orgId, channel_id: channelId, contact_id: contactId, subject: 'API', status: 'open', mode: 'bot' })
+      .select('id')
+      .single();
+    conversationId = conv!.id as string;
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    for (const id of [ownerId, memberId, strangerId]) {
+      if (id) await admin.auth.admin.deleteUser(id);
+    }
+  });
+
+  it('only owners/admins create and read connections', async () => {
+    const { data, error } = await owner
+      .from('api_connections')
+      .insert({
+        org_id: orgId,
+        name: 'ERP',
+        base_url: 'https://erp.example.com',
+        event_url: 'https://erp.example.com/hook',
+        event_types: ['ticket.created', 'ticket.updated', 'conversation.updated', 'contact.updated'],
+      })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    connectionId = data!.id as string;
+
+    expect((await member.from('api_connections').select('id')).data).toEqual([]);
+    expect((await stranger.from('api_connections').select('id')).data).toEqual([]);
+    const denied = await member
+      .from('api_connections')
+      .insert({ org_id: orgId, name: 'Heimlich', base_url: 'https://evil.example.com' });
+    expect(denied.error).not.toBeNull();
+  });
+
+  it('members read actions but only owners define and link them', async () => {
+    const { data, error } = await owner
+      .from('data_actions')
+      .insert({
+        org_id: orgId,
+        connection_id: connectionId,
+        name: 'bestellstatus',
+        label: 'Bestellstatus',
+        description: 'Liefert den Status einer Bestellung.',
+        kind: 'read',
+        method: 'GET',
+        path: '/orders',
+      })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    actionId = data!.id as string;
+
+    expect((await member.from('data_actions').select('id')).data).toHaveLength(1);
+    expect((await stranger.from('data_actions').select('id')).data).toEqual([]);
+    const memberUpdate = await member
+      .from('data_actions')
+      .update({ path: '/admin' })
+      .eq('id', actionId)
+      .select('id');
+    expect(memberUpdate.data ?? []).toEqual([]);
+
+    // a built-in tool name can never be shadowed
+    const reserved = await owner.from('data_actions').insert({
+      org_id: orgId,
+      connection_id: connectionId,
+      name: 'kb_search',
+      label: 'Fake',
+      description: 'Überschreibt ein eingebautes Werkzeug.',
+      kind: 'read',
+      method: 'GET',
+      path: '/x',
+    });
+    expect(reserved.error).not.toBeNull();
+
+    const { data: agent } = await owner
+      .from('agents')
+      .insert({ org_id: orgId, name: 'Chat-Agent' })
+      .select('id')
+      .single();
+    const link = { org_id: orgId, agent_id: agent!.id, data_action_id: actionId };
+    expect((await member.from('agent_data_actions').insert(link)).error).not.toBeNull();
+    expect((await owner.from('agent_data_actions').insert(link)).error).toBeNull();
+    expect((await member.from('agent_data_actions').select('agent_id')).data).toHaveLength(1);
+  });
+
+  it('runs are written only by the worker and the two functions', async () => {
+    const direct = await member.from('action_runs').insert({
+      org_id: orgId,
+      data_action_id: actionId,
+      trigger: 'agent',
+      state: 'queued',
+    });
+    expect(direct.error).not.toBeNull();
+
+    // test run: owner/admin only
+    expect((await member.rpc('request_action_test', { p_action_id: actionId, p_args: {} })).error).not.toBeNull();
+    expect((await stranger.rpc('request_action_test', { p_action_id: actionId, p_args: {} })).error).not.toBeNull();
+    const test = await owner.rpc('request_action_test', { p_action_id: actionId, p_args: { order_id: '1' } });
+    expect(test.error).toBeNull();
+    const { data: testRun } = await admin.from('action_runs').select('trigger, state, requested_by').eq('id', test.data).single();
+    expect(testRun).toEqual({ trigger: 'test', state: 'queued', requested_by: ownerId });
+  });
+
+  it('a run waiting for confirmation is decided exactly once, by a member of the org', async () => {
+    const { data: run } = await admin
+      .from('action_runs')
+      .insert({
+        org_id: orgId,
+        data_action_id: actionId,
+        conversation_id: conversationId,
+        trigger: 'agent',
+        state: 'pending_approval',
+        args: { day: '2026-12-01' },
+      })
+      .select('id')
+      .single();
+    const runId = run!.id as string;
+
+    expect((await stranger.rpc('decide_action_run', { p_run_id: runId, p_approve: true })).error).not.toBeNull();
+    // a member cannot flip the state directly
+    await member.from('action_runs').update({ state: 'succeeded' }).eq('id', runId);
+    expect((await admin.from('action_runs').select('state').eq('id', runId).single()).data!.state).toBe('pending_approval');
+
+    expect((await member.rpc('decide_action_run', { p_run_id: runId, p_approve: true })).data).toBe('queued');
+    expect((await member.rpc('decide_action_run', { p_run_id: runId, p_approve: false })).data).toBeNull();
+    const { data: decided } = await admin.from('action_runs').select('state, decided_by').eq('id', runId).single();
+    expect(decided).toEqual({ state: 'queued', decided_by: memberId });
+    expect((await member.from('action_runs').select('id').eq('id', runId)).data).toHaveLength(1);
+    expect((await stranger.from('action_runs').select('id').eq('id', runId)).data).toEqual([]);
+  });
+
+  it("tickets accept the new origin 'action'", async () => {
+    const { data, error } = await admin
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: conversationId, origin: 'action', subject: 'Termin' })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    ticketId = data!.id as string;
+  });
+
+  it('ticket, conversation and contact changes fill the outbox — hot-path updates do not', async () => {
+    expect(await countEvents({ event_type: 'ticket.created', entity_id: ticketId })).toBe(1);
+
+    await admin.from('tickets').update({ status: 'waiting' }).eq('id', ticketId);
+    const { data: updated } = await admin
+      .from('integration_events')
+      .select('details')
+      .eq('entity_id', ticketId)
+      .eq('event_type', 'ticket.updated');
+    expect(updated).toHaveLength(1);
+    expect(updated![0]!.details).toEqual({ changed: ['status'], status_from: 'open', status_to: 'waiting' });
+
+    await admin.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversationId);
+    expect(await countEvents({ entity_type: 'conversation' })).toBe(0);
+    await admin.from('conversations').update({ status: 'pending' }).eq('id', conversationId);
+    expect(await countEvents({ event_type: 'conversation.updated' })).toBe(1);
+
+    await admin.from('contacts').update({ phone: '+4915112345678' }).eq('id', contactId);
+    await admin.from('contacts').update({ phone: '+4915112345678' }).eq('id', contactId);
+    expect(await countEvents({ event_type: 'contact.updated' })).toBe(1);
+  });
+
+  it('a change made through the API of a connection is not echoed back to it', async () => {
+    const { data: second } = await owner
+      .from('api_connections')
+      .insert({
+        org_id: orgId,
+        name: 'Shop',
+        base_url: 'https://shop.example.com',
+        event_url: 'https://shop.example.com/hook',
+        event_types: ['ticket.updated'],
+      })
+      .select('id')
+      .single();
+    secondConnectionId = second!.id as string;
+    await admin.from('integration_events').delete().eq('org_id', orgId);
+
+    // what the public API route does: a service-role client tagged with its origin
+    const tagged = createClient(url!, serviceKey!, {
+      auth: { persistSession: false },
+      global: { headers: { 'x-zendori-origin-connection': connectionId } },
+    });
+    await tagged.from('tickets').update({ status: 'in_progress' }).eq('id', ticketId);
+    expect(await countEvents({ connection_id: connectionId })).toBe(0);
+    expect(await countEvents({ connection_id: secondConnectionId })).toBe(1);
+
+    // a signed-in member cannot hide a change by sending the header
+    await admin.from('integration_events').delete().eq('org_id', orgId);
+    const sneaky = createClient(url!, anonKey!, {
+      auth: { persistSession: false },
+      global: { headers: { 'x-zendori-origin-connection': connectionId } },
+    });
+    await sneaky.auth.signInWithPassword({ email: emails[0]!, password });
+    await sneaky.from('tickets').update({ status: 'open' }).eq('id', ticketId);
+    expect(await countEvents({ connection_id: connectionId })).toBe(1);
+    expect(await countEvents({ connection_id: secondConnectionId })).toBe(1);
+  });
+
+  it('the delivery log and the ping are owner-only', async () => {
+    expect((await member.from('integration_events').select('id')).data).toEqual([]);
+    expect(((await owner.from('integration_events').select('id')).data ?? []).length).toBeGreaterThan(0);
+    expect((await member.rpc('request_integration_ping', { p_connection_id: connectionId })).error).not.toBeNull();
+    expect((await owner.rpc('request_integration_ping', { p_connection_id: connectionId })).error).toBeNull();
+    expect(await countEvents({ event_type: 'ping' })).toBe(1);
+    const noDirectWrite = await owner.from('integration_events').insert({
+      org_id: orgId,
+      connection_id: connectionId,
+      event_type: 'ping',
+      entity_type: 'ping',
+    });
+    expect(noDirectWrite.error).not.toBeNull();
+  });
+
+  it('api keys: owner-only, immutable, revocable once', async () => {
+    const hash = randomUUID().replaceAll('-', '').padEnd(64, 'a');
+    const { data: key, error } = await owner
+      .from('api_keys')
+      .insert({ org_id: orgId, connection_id: connectionId, name: 'ERP Produktion', key_prefix: 'zk_live_Ab12', key_hash: hash })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    expect((await member.from('api_keys').select('id')).data).toEqual([]);
+    const memberKey = await member.from('api_keys').insert({
+      org_id: orgId,
+      connection_id: connectionId,
+      name: 'Heimlich',
+      key_prefix: 'zk_live_Xy99',
+      key_hash: 'b'.repeat(64),
+    });
+    expect(memberKey.error).not.toBeNull();
+
+    const swap = await owner.from('api_keys').update({ key_hash: 'c'.repeat(64) }).eq('id', key!.id);
+    expect(swap.error).not.toBeNull();
+    const move = await owner.from('api_keys').update({ connection_id: secondConnectionId }).eq('id', key!.id);
+    expect(move.error).not.toBeNull();
+    expect((await owner.from('api_keys').update({ revoked_at: new Date().toISOString() }).eq('id', key!.id)).error).toBeNull();
+    expect((await owner.from('api_keys').update({ revoked_at: null }).eq('id', key!.id)).error).not.toBeNull();
+    // the public route (service role) may record usage on any key
+    expect((await admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', key!.id)).error).toBeNull();
+  });
+
+  it('external links are read-only for members and vanish with the record', async () => {
+    await admin.from('external_links').insert([
+      { org_id: orgId, connection_id: connectionId, entity_type: 'ticket', entity_id: ticketId, external_id: 'ERP-1' },
+      { org_id: orgId, connection_id: connectionId, entity_type: 'contact', entity_id: contactId, external_id: 'CUST-7' },
+    ]);
+    const duplicate = await admin.from('external_links').insert({
+      org_id: orgId,
+      connection_id: connectionId,
+      entity_type: 'ticket',
+      entity_id: randomUUID(),
+      external_id: 'ERP-1',
+    });
+    expect(duplicate.error).not.toBeNull();
+
+    expect((await member.from('external_links').select('id')).data).toHaveLength(2);
+    expect((await stranger.from('external_links').select('id')).data).toEqual([]);
+    const memberWrite = await member.from('external_links').insert({
+      org_id: orgId,
+      connection_id: connectionId,
+      entity_type: 'conversation',
+      entity_id: conversationId,
+      external_id: 'X',
+    });
+    expect(memberWrite.error).not.toBeNull();
+    expect((await owner.from('api_idempotency_keys').select('idempotency_key')).data).toEqual([]);
+
+    await admin.from('tickets').delete().eq('id', ticketId);
+    const { data: left } = await admin.from('external_links').select('entity_type').eq('org_id', orgId);
+    expect(left).toEqual([{ entity_type: 'contact' }]);
+  });
+
+  it('deleting a connection removes its actions, runs, events, keys and links', async () => {
+    await owner.from('api_connections').delete().eq('id', connectionId);
+    for (const table of ['data_actions', 'action_runs', 'api_keys', 'external_links']) {
+      const { data } = await admin.from(table).select('org_id').eq('org_id', orgId);
+      expect(data).toEqual([]);
+    }
+    expect(await countEvents({ connection_id: connectionId })).toBe(0);
+  });
+});

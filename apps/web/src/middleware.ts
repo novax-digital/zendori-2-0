@@ -27,6 +27,8 @@ export async function middleware(request: NextRequest) {
     path.startsWith('/api/widget/') ||
     path.startsWith('/api/forms/') ||
     path.startsWith('/api/hooks/') ||
+    // Zendori API for the customers' own end systems (Phase 13d): API-key auth
+    path.startsWith('/api/v1/') ||
     path.startsWith('/f/')
   ) {
     return NextResponse.next();

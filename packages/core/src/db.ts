@@ -2,12 +2,29 @@ import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
+ * Request header that names the API connection a change comes FROM (Phase 13d).
+ * The 0036 outbox triggers read it and do not report the change back to that
+ * connection (echo suppression). Honoured for the service role only.
+ */
+export const ORIGIN_CONNECTION_HEADER = 'x-zendori-origin-connection';
+
+/**
  * Service-role client for trusted server-side code (worker, server actions).
  * Bypasses RLS — never expose to the browser.
+ *
+ * `originConnectionId` tags every request of this client as coming from that
+ * API connection — used by the public API routes, one client per request.
  */
-export function createServiceRoleClient(url: string, serviceRoleKey: string): SupabaseClient {
+export function createServiceRoleClient(
+  url: string,
+  serviceRoleKey: string,
+  options?: { originConnectionId?: string }
+): SupabaseClient {
   return createClient(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    ...(options?.originConnectionId
+      ? { global: { headers: { [ORIGIN_CONNECTION_HEADER]: options.originConnectionId } } }
+      : {}),
   });
 }
 

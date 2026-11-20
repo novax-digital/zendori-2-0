@@ -14,14 +14,15 @@ Kern-Features:
 - **KI-Agent:** klassifiziert, extrahiert (Ticketisierung), beantwortet mit RAG, Confidence-Gate
 - **Human Handoff:** Bot → Mensch nahtlos, Mensch → Bot zurück
 - **Mandantenfähig:** jeder Zendori-Kunde = eine Organization, strikt getrennt (RLS)
-- **Integrationen:** optionaler HubSpot-Ticket-Sync mit Regeln pro Org/Kanal (Ablösung der bestehenden Zendori-Bridge)
+- **Integrationen:** optionaler HubSpot-Ticket-Sync mit Regeln pro Org/Kanal (Ablösung der bestehenden Zendori-Bridge); **API-Integration (Phase 13)** für eigene Endsysteme des Kunden: Data Actions der KI-Agenten, signierte Ereignisse an das Endsystem und eine Zendori-API für den Rückweg (2-Way-Sync)
 
 ## 2. Nicht-Ziele
 
 - Kein Chatwoot, keine Chatwoot-Kompatibilität.
 - Kein n8n im Kernpfad. Die alten n8n-Workflows sind nur **Referenz/Spezifikation** (siehe §10).
 - Formular-Intake hat genau ZWEI Wege: (a) Inbound-E-Mail-Adressen (No-Code, Bestand) und (b) der Zendori-Formular-Builder mit eigenem öffentlichen Submission-Endpoint (`/api/forms/*`, Embed-Mechanik analog Chat-Widget, Phase 10). Kein dritter Weg, keine generischen Webhook-Intakes.
-- HubSpot ist nie Kern-Abhängigkeit — nur optionale, pro Org abschaltbare Integration.
+- HubSpot ist nie Kern-Abhängigkeit — nur optionale, pro Org abschaltbare Integration. Dasselbe gilt für die API-Integration (Phase 13): ohne Verbindung verhält sich alles wie zuvor.
+- Die Zendori-API (`/api/v1/*`, Phase 13d) ändert bestehende Datensätze und hängt interne Notizen an. Sie legt KEINE Konversationen oder Nachrichten an (das wäre ein dritter Intake-Weg) und gibt keine Nachrichtentexte heraus.
 - Kein Kubernetes, keine Microservices, kein Event-Sourcing. Ein Monorepo, zwei Prozesse.
 - Keine Features außerhalb der aktuellen Phase. Keine „wo wir schon dabei sind"-Erweiterungen.
 
@@ -47,6 +48,7 @@ Kern-Features:
 - **Chat:** eigenes Embeddable Widget (ein Script-Tag) + Supabase Realtime.
 - **Formular-Builder (Phase 10):** Embeddable Script (`form.js`, Platzhalter-div + Script-Tag, Shadow DOM, analog Widget) + gehostete Formular-Seite `/f/{token}`; öffentlicher Submission-Endpoint mit Public Form Token, Upstash-Rate-Limits, Honeypot + HMAC-Render-Token (Min-Time, Key per HKDF aus `MASTER_ENCRYPTION_KEY`), Tages-Cap pro Formular; Weiterleitungs-Mails über Resend aus dem Worker (`form.notify`). Ein Builder-Formular = ein email/inbound-Channel (`config.builderForm`) + eine `forms`-Zeile; Kontakt/Betreff kommen DIREKT aus role-Feldern (kein KI-Umweg, `contact_authoritative`), Extract-Schritt wird übersprungen. Mail-Loop-Schutz: Versand an `*@INBOUND_EMAIL_DOMAIN` ist gesperrt.
 - **HubSpot (optional, Phase 6 + 11b):** einseitiger Sync pro Org in **zwei unabhängigen Strömen** — Konversationen → HubSpot-Ticket (Phase 6) und Zendori-Tickets → HubSpot-Ticket (Phase 11b) — je eigene Pipeline/Stages und Sync-Regel (alle | nur ausgewählte Kanäle | nur manuell), Ticket-ID-Präfix im Betreff konfigurierbar. Kein Kern-Bestandteil.
+- **API-Integration (optional, Phase 13):** eigene Endsysteme pro Org als `api_connections` (Basis-URL nur https, Zugangsdaten verschlüsselt). **Data Actions** = Agenten-Werkzeuge mit Parametern aus drei Quellen (`agent` vom Modell, `context` serverseitig aus der Konversation, `fixed`); schreibende Aktionen laufen je nach Agenten-Modus und Schalter erst nach Bestätigung in der Inbox. **Alle Aufrufe macht der Worker** (feste Egress-IP, SSRF-Schutz, keine Redirects, keine automatische Wiederholung, Idempotency-Key + Standard-Webhooks-Signatur). **Ereignisse** über eine Outbox (`integration_events`, DB-Trigger) mit Wiederholungen; **Zendori-API** `/api/v1/*` mit API-Schlüsseln pro Verbindung, Echo-Unterdrückung über den Header `x-zendori-origin-connection` (nur Service Role). Details docs/phase-13-api-integration.md.
 - **Voice (Phase 9): xAI Voice API + Twilio als reiner Nummern-/SIP-Trunk-Lieferant** (Entscheidung getroffen; ElevenLabs verworfen). Formaler Go/No-Go bleibt der deutsche Testanruf vor Phasenstart. API ist OpenAI-Realtime-kompatibel → Plan B OpenAI Realtime mit fast gleichem Code. NICHT vorab implementieren. Details §9.
 - **Deployment:** apps/web → **Vercel** (Region `fra1`), apps/worker → Docker-Container auf dem bestehenden Hetzner VPS (Details §12).
 - Validierung: `zod` überall an Systemgrenzen. Tests: `vitest`. Logging: `pino`.
@@ -54,8 +56,8 @@ Kern-Features:
 ## 4. Monorepo-Layout
 
 ```
-apps/web        → Next.js: Inbox, Settings, Widget-Host, Webhooks (/api/hooks/*), Resend-Ingest
-apps/worker     → Node-Prozess: pg-boss Worker (KI-Pipeline, Crawler, HubSpot-Sync, WhatsApp-Versand, ab Phase 9 Voice-WebSocket-Sessions)
+apps/web        → Next.js: Inbox, Settings, Widget-Host, Webhooks (/api/hooks/*), Resend-Ingest, Zendori-API (/api/v1/*)
+apps/worker     → Node-Prozess: pg-boss Worker (KI-Pipeline, Crawler, HubSpot-Sync, WhatsApp-Versand, ab Phase 9 Voice-WebSocket-Sessions, ab Phase 13 Data Actions + Ereignis-Zustellung)
 packages/core   → Domain-Typen, zod-Schemas, DB-Client, Verschlüsselung
 packages/channels → Adapter: chat | email | whatsapp (meta|twilio) | voice (ein Interface)
 packages/ai     → Klassifikation, Extraktion/Ticketisierung, RAG, Draft, Confidence
@@ -117,6 +119,11 @@ Alle Tabellen mit `org_id`, `created_at`, RLS. `external_id` unique pro Channel 
 - `forms` (org_id, channel_id 1:1 → email/inbound-Channel mit config.builderForm, name, public_token unique, definition jsonb [zod: formDefinitionSchema], version, notification_emails jsonb ≤10, daily_submission_limit, is_active) — Formular-Builder (0019); Inhalte member-verwaltet, Löschen + Empfänger/Limits owner-only (RLS + Guard-Trigger), public_token/channel_id immutable
 - `form_notifications` (org_id, form_id, message_id unique, recipients-Snapshot jsonb, state: pending|sent|failed, attempts, last_error, sent_at) — Weiterleitungs-Queue, Writes nur Service Role, Worker-Job `form.notify`
 - `tickets` (org_id, conversation_id [composite-FK], channel_id, contact_id, number, display_id [eingefroren, aus org_settings.ticket_id_format], subject, description, category, status: open|in_progress|waiting|resolved, priority, assignee_id, origin: handoff|intake|suppressed|no_agent|draft_only|pipeline_failure|voice|form|manual|takeover, opened_message_id, opened_at, resolved_at, hubspot_* [Spiegel von 0007 für 11b], created_by) — Phase 11 (0030): das **Arbeitsobjekt** aus einer Konversation; Attach-Regel v2 (Phase 12): Eskalation hängt nur bei „kein Themenwechsel (`is_new_topic`) UND neuestes offenes Ticket jünger als 24 h" an, sonst neues Ticket (der 0030-Unique-Index ist mit 0031 gefallen); Nummer/ID per Insert-Trigger (`allocate_ticket_number`, `ticket_counters`); einziger Erzeugungsweg `ensureTicket()` (packages/core). `ticket_events` = inhaltsfreie Zeitleiste. Details docs/phase-11-tickets.md
+- `api_connections` (org_id, name, base_url, config jsonb [Auth + Signatur-Schlüssel verschlüsselt wie §7], is_active, event_url, event_types [0036]) — ein eigenes Endsystem des Kunden (Phase 13, 0035); Lesen UND Schreiben nur Inhaber/Admin
+- `data_actions` (org_id, connection_id, name [Werkzeugname, eindeutig pro Org, nie ein eingebauter], label, description, kind: read|write, method, path, parameters jsonb, response_fields jsonb, requires_confirmation, timeout_ms, is_active) — ein Aufruf des Endsystems als Agenten-Werkzeug; Mitglieder lesen, Inhaber/Admin schreiben. `agent_data_actions` (org_id, agent_id, data_action_id) = n:m wie `agent_knowledge_bases`
+- `action_runs` (org_id, data_action_id, conversation_id, message_id, agent_id, trigger: agent|member|test, state: pending_approval|queued|running|succeeded|failed|rejected, args, result, http_status, latency_ms, error_code, decided_by) — jeder Lauf; Schreiben nur Worker + Funktionen `request_action_test` / `decide_action_run`
+- `integration_events` (org_id, connection_id, event_type, entity_type, entity_id, details [inhaltsfrei], state: pending|sent|failed, attempts, next_attempt_at) — Outbox der Ereignisse (0036), gefüllt per Trigger auf tickets/conversations/contacts, zugestellt vom Worker
+- `api_keys` (org_id, connection_id, name, key_prefix, key_hash [SHA-256], last_used_at, revoked_at), `external_links` (org_id, connection_id, entity_type: ticket|conversation|contact, entity_id, external_id), `api_idempotency_keys` — Zendori-API (0037); Schlüssel unveränderlich, nur widerrufbar
 - `org_settings` (org_id, escalation_keywords, business_hours, auto_ack_texts, handoff_sla_minutes [0018, null = aus], ticket_id_format + ticket_number_start [0030], ticket_ack_texts [0031 — Ticket-Bestätigung mit `{ticket_id}`, standardmäßig an]) — seit 0011 nur noch org-weite Übergabe-Regeln; Autopilot/Schwellwert/Ton sind auf die `agents` gewandert (die Alt-Spalten autopilot_enabled/confidence_threshold/tone_instructions stehen ungenutzt bis zu einer Cleanup-Migration)
 
 ## 6. Human-Handoff-Logik (verbindlich)
@@ -139,6 +146,8 @@ Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, 
 
 **Tickets (Phase 11):** `status='pending'` bleibt die EINE Inbox-Warteschlange (wartet auf einen Menschen). Das daraus entstehende **Ticket** ist das Arbeitsobjekt mit eigenem Lebenszyklus (open|in_progress|waiting|resolved) — es entsteht genau dann, wenn der Bot ein Anliegen nicht selbst abschließt (Übergabe, Reine Annahme, unterdrückte Übergabe, Pipeline-Fehler, Kanal ohne Agent, Nur-Entwürfe-Agent, Übernahme) sowie bei Voice-Rückruf/`create_ticket`, Formular-Einsendungen und manuell. Autopilot-Antworten erzeugen kein Ticket.
 
+**Data Actions (Phase 13):** Wartet eine schreibende Aktion auf Bestätigung (Schalter an der Aktion, oder Agent im Modus „Nur Entwürfe“), wird die Antwort NICHT automatisch gesendet: Entwurf bleibt Vorschlag, der Lauf steht in der Inbox („Ausführen“/„Verwerfen“) und es entsteht ein Ticket (origin `action` bei Autopilot). Voice: Rückruf-Ticket + `status='pending'`. Solange `mode = 'human'`, ruft der Bot keine Aktionen auf — auch nicht bei „Entwurf anfordern“. Reine Annahme nutzt keine Aktionen.
+
 **Eskalationsziel (Phase 12, `agents.escalation_target`):** Die Auslöser 1–3 sind für beide Ziele gleich; das Ziel entscheidet, was passiert. `human` = Live-Übergabe wie oben. `ticket` = **kein** Moduswechsel: Ticket (neu oder attach), `handoff_events(callback_ticket)`, Ticket-Bestätigung mit Nummer an den Kunden (`org_settings.ticket_ack_texts`), Entwurf bleibt Vorschlag, der Bot beantwortet weitere Fragen; Voice transferiert unter `ticket` nie, sondern nimmt einen Rückruf auf. `handoff_enabled` heißt seit Phase 12 „auch bei Unsicherheit eskalieren" (Auslöser 1). Matrix: docs/phase-12-escalation.md.
 
 ## 7. Sicherheit & DSGVO (nicht verhandelbar)
@@ -148,6 +157,7 @@ Solange `mode = 'human'`: Bot generiert **keine** Antworten, auch keine Drafts, 
   - **Weitere freigegebene US-Processor-Ausnahmen (mit mir entschieden):** WhatsApp über **Meta** und **Twilio** (Phase 7) sowie **xAI Voice** + Twilio-SIP (Phase 9). Gleiche Auflage wie Resend: vor Produktiv-Rollout AVV/SCCs/DPAs unterschreiben und Speicherorte dokumentieren — Aufgabe von mir. Hinweis: Meta hat **keine** EU-resident WhatsApp-Option; bei Twilio/xAI EU-Region prüfen, wo verfügbar. Kein Produktivkunde vor DPA-Freigabe (bis dahin nur Test-/Sandbox-Nummern).
 - Secrets nur via `.env` / Server-Env. Nie ins Repo. `.env.example` immer aktuell halten.
 - Kanal- und Integrations-Credentials (IMAP/SMTP-Passwörter, WhatsApp-Tokens, HubSpot-Token) verschlüsselt in `channels.config` bzw. `integrations.config`: libsodium secretbox mit `MASTER_ENCRYPTION_KEY` aus Env. Nie im Klartext loggen oder an den Client geben.
+- API-Integration (Phase 13): Identitätswerte einer Data Action (Kontakt-E-Mail, Telefon, IDs) setzt immer der Server, nie das Modell. Aufrufe an Kundensysteme nur an öffentliche https-Adressen, ohne Redirects. API-Schlüssel der Zendori-API werden nur als SHA-256 gespeichert und einmal angezeigt. Ereignisse und API liefern keine Nachrichtentexte.
 - Webhooks verifizieren: Resend per Svix-Signatur (`resend.webhooks.verify`, Raw Body!), WhatsApp-Meta per `X-Hub-Signature-256` (App Secret, Raw Body), WhatsApp-Twilio per `X-Twilio-Signature` (Auth Token, exakte öffentliche URL aus `APP_URL` + sortierte Params — NICHT aus dem Proxy-Host rekonstruieren), Voice per signiertem xAI-Webhook (Secret pro Nummer), Widget-Requests mit org-gebundenem Public Token + Rate Limit. Unbekannte Inbound-Adressen/Nummern: loggen (nur Metadaten) und verwerfen.
 - RLS: Zugriff nur über `org_members`. Worker nutzt Service Role. Jede neue Tabelle bekommt einen RLS-Test.
 - Keine Nachrichteninhalte in Logs (pino redact). Request-IDs ja, Content nein.
@@ -231,6 +241,8 @@ Erstelle `docs/legacy-analysis.md`:
 
 **Phase 12 — Eskalationsziel + Attach-Regel v2:** 0031 (`agents.escalation_target`, `org_settings.ticket_ack_texts`, Drop des 0030-Unique-Index), `decideEscalation`/`applyTicketEscalation` (Text), `decideVoiceHandoff`-Zweig `ticket` (Voice), Agenten-Editor „Wenn der Agent nicht weiterkommt", Panel „Ticket-Bestätigung", Attach-Regel v2 (Themenwechsel oder > 24 h ⇒ neues Ticket). Details docs/phase-12-escalation.md. **STOP.**
 
+**Phase 13 — API-Integration (eigene Endsysteme, 2-Way-Sync):** 13a (0035 `api_connections`/`data_actions`/`agent_data_actions`/`action_runs`, Einstellungen → Integrationen → „Eigene Endsysteme (API)“, Aktions-Editor mit Parametern + Antwortfeldern, Testlauf, Ausführung im Worker) → 13b (Reiter „Aktionen“ am Agenten, Voice-Werkzeuge, Werkzeug-Schleife im Text-Entwurf, Bestätigen/Verwerfen in der Inbox, Ticket-Herkunft `action`) → 13c (0036 Ereignis-Outbox per Trigger, signierte Zustellung mit Wiederholungen, Reiter „Ereignisse“) → 13d (0037 API-Schlüssel, `external_links`, `/api/v1/*`, Echo-Unterdrückung). Auf Owner-Anweisung in einem Zug gebaut (kein STOP zwischen den Teilphasen). Details docs/phase-13-api-integration.md. **STOP.**
+
 **Phase 10 — Formular-Builder:** Migration 0019 (`forms` + `form_notifications`), Builder-UI unter Einstellungen→Formulare (Feldliste mit ↑/↓, Design-Tab mit Kontrast-Check, Live-Vorschau über den EINEN geteilten Renderer, Einbetten-Tab), Embed `form.js` + gehostete Seite `/f/{token}` + iframe-Doku, Submission-Endpoint mit Honeypot/HMAC-Render-Token/Rate-Limits/Tages-Cap, Kontakt aus role-Feldern (`contact_authoritative`, Extract-Skip), Weiterleitungs-Mail (HTML-Template, Reply-To = Einsender) aus dem Worker, Consent-Feldtyp als DSGVO-Nachweis. Kontingent: gemeinsames Kind `form` mit den Intake-Adressen. Details docs/concept-form-builder.md + docs/phase-10-forms.md. **STOP.**
 
 ## 12. Deployment
@@ -269,6 +281,7 @@ INBOUND_EMAIL_DOMAIN=          # z. B. in.zendori.de
 WHATSAPP_APP_ID= / WHATSAPP_APP_SECRET= / WHATSAPP_VERIFY_TOKEN= / WHATSAPP_CONFIG_ID=
 # WhatsApp Twilio (+ Voice-Twilio): AccountSid/AuthToken (+ ggf. API-Key SK/Secret) pro Org verschlüsselt in channels.config, NICHT hier
 # HubSpot-Token: pro Org verschlüsselt in integrations.config, NICHT hier
+# API-Integration (Phase 13): Zugangsdaten + Signatur-Schlüssel pro Verbindung verschlüsselt in api_connections.config, NICHT hier
 # Voice (Phase 9): XAI_API_KEY= (+ EU-Endpoint wo verfügbar); xAI-Webhook-Signing-Secret pro Nummer in channels.config, NICHT hier
 ```
 

@@ -13,3 +13,7 @@ export * from './ticket-service.js';
 export * from './hubspot-rules.js';
 export * from './demo.js';
 export * from './contact.js';
+export * from './data-actions.js';
+export * from './integration-events.js';
+export * from './api-keys.js';
+export * from './public-api.js';

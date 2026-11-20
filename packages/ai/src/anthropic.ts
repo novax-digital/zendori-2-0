@@ -193,48 +193,159 @@ export interface DraftInput {
   history?: DraftHistoryTurn[];
   /** True when body is a voice-note transcript (recognition errors possible). */
   isVoiceTranscript?: boolean;
+  /**
+   * Phase 13: data actions the model may call while drafting. Only offered
+   * together with `runTool`; without both the draft is the single call it
+   * always was.
+   */
+  tools?: DraftTool[];
+  /**
+   * Executes ONE tool call and returns a JSON-serializable result for the
+   * model. Must not throw for expected failures (return an error object); a
+   * thrown error is reported to the model as a failed tool call.
+   */
+  runTool?: (call: DraftToolCall) => Promise<unknown>;
 }
 
-/** Produce a RAG answer draft with confidence and used source ids. */
-export async function draft(input: DraftInput): Promise<AiCallResult<DraftResult>> {
+/** A data action offered to the draft model (JSON-schema arguments). */
+export interface DraftTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+}
+
+export interface DraftToolCall {
+  name: string;
+  /** Raw, untrusted arguments as the model produced them. */
+  input: unknown;
+}
+
+/** Model round trips that may END in tool calls; the next one must answer. */
+export const DRAFT_MAX_TOOL_ROUNDS = 4;
+/** Tool calls executed per draft, across all rounds. */
+export const DRAFT_MAX_TOOL_CALLS = 6;
+
+export interface DraftCallResult extends AiCallResult<DraftResult> {
+  /** Tool calls that were handed to `runTool` (0 for a plain draft). */
+  toolCalls: number;
+}
+
+/**
+ * Produce a RAG answer draft with confidence and used source ids. With tools
+ * the model may first call data actions (bounded manual loop); usage and cost
+ * are summed over all round trips.
+ */
+export async function draft(input: DraftInput): Promise<DraftCallResult> {
   const client = getClient();
   const history = input.history ?? [];
   const historyBlock = renderHistoryBlock(history);
-  const message = await client.messages.create({
-    model: AI_MODELS.draft,
-    // 4096 (was 1500): a thorough multi-part German answer inside the JSON
-    // envelope can exceed 1500 output tokens; the truncated JSON then failed
-    // parsing and the RAW text became the reply (see finalizeDraftResult).
-    max_tokens: 4096,
-    temperature: 0.3, // low-jitter drafts; see the classify() temperature note
-    system: buildDraftPrompt({
-      companyName: input.companyName,
-      agentIdentity: input.agentIdentity,
-      sources: input.sources,
-      language: input.language,
-      hasHistory: history.length > 0,
-    }),
-    messages: [
-      {
-        role: 'user',
-        content:
-          historyBlock +
-          buildUserMessage({
-            channelType: input.channelType,
-            subject: input.subject,
-            body: input.body,
-            isVoiceTranscript: input.isVoiceTranscript,
-          }),
-      },
-    ],
+  const runTool = input.runTool;
+  const tools: Anthropic.Tool[] =
+    runTool && input.tools
+      ? input.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.inputSchema,
+        }))
+      : [];
+  const system = buildDraftPrompt({
+    companyName: input.companyName,
+    agentIdentity: input.agentIdentity,
+    sources: input.sources,
+    language: input.language,
+    hasHistory: history.length > 0,
+    hasActions: tools.length > 0,
   });
-  const result = finalizeDraftResult(
-    parseDraftResponse(extractText(message)),
-    message.stop_reason,
-    input.language ?? null
-  );
-  const usage = toUsage(message.usage);
-  return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage) };
+  const messages: Anthropic.MessageParam[] = [
+    {
+      role: 'user',
+      content:
+        historyBlock +
+        buildUserMessage({
+          channelType: input.channelType,
+          subject: input.subject,
+          body: input.body,
+          isVoiceTranscript: input.isVoiceTranscript,
+        }),
+    },
+  ];
+
+  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+  let toolCalls = 0;
+  for (let round = 0; ; round += 1) {
+    // After the last tool round the model MUST answer: the tools stay declared
+    // (the history contains tool blocks) but may no longer be called.
+    const mustAnswer = round >= DRAFT_MAX_TOOL_ROUNDS;
+    const message = await client.messages.create({
+      model: AI_MODELS.draft,
+      // 4096 (was 1500): a thorough multi-part German answer inside the JSON
+      // envelope can exceed 1500 output tokens; the truncated JSON then failed
+      // parsing and the RAW text became the reply (see finalizeDraftResult).
+      max_tokens: 4096,
+      temperature: 0.3, // low-jitter drafts; see the classify() temperature note
+      system,
+      messages,
+      ...(tools.length > 0
+        ? { tools, ...(mustAnswer ? { tool_choice: { type: 'none' as const } } : {}) }
+        : {}),
+    });
+    const roundUsage = toUsage(message.usage);
+    usage.inputTokens += roundUsage.inputTokens;
+    usage.outputTokens += roundUsage.outputTokens;
+
+    const toolUses = message.content.filter(
+      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
+    );
+    if (message.stop_reason !== 'tool_use' || toolUses.length === 0 || !runTool || mustAnswer) {
+      const text = extractText(message);
+      // A tool loop can end without any answer text (the model stopped on a
+      // tool call it may no longer make). An empty reply must never become a
+      // draft, let alone an auto-send: safe apology at confidence 0.
+      const result =
+        tools.length > 0 && text === ''
+          ? { reply: safeFallbackReply(input.language ?? null), confidence: 0, used_source_ids: [] }
+          : finalizeDraftResult(parseDraftResponse(text), message.stop_reason, input.language ?? null);
+      return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage), toolCalls };
+    }
+
+    // Echo the assistant turn unchanged, then answer EVERY tool_use block in
+    // one user message. Sequential on purpose: a write action must not race a
+    // read the model issued alongside it.
+    messages.push({ role: 'assistant', content: message.content });
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const toolUse of toolUses) {
+      if (toolCalls >= DRAFT_MAX_TOOL_CALLS) {
+        results.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ ok: false, error: 'tool_call_limit_reached' }),
+          is_error: true,
+        });
+        continue;
+      }
+      toolCalls += 1;
+      try {
+        const output = await runTool({ name: toolUse.name, input: toolUse.input });
+        results.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify(output ?? null),
+        });
+      } catch {
+        results.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ ok: false, error: 'tool_execution_failed' }),
+          is_error: true,
+        });
+      }
+    }
+    messages.push({ role: 'user', content: results });
+  }
 }
 
 /** Sentinel the describe-image prompt returns for an image with no usable content. */

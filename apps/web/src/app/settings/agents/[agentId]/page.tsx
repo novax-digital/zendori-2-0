@@ -32,6 +32,8 @@ import {
   MODE_LABELS,
   agentLacksKb,
   channelTypeLabels,
+  loadActionLinks,
+  loadDataActions,
   loadKbLinks,
   loadKbs,
   type AgentRow,
@@ -75,11 +77,16 @@ export default async function AgentDetailPage({
   };
   const agent: AgentRow = { ...raw, intake_fields: sanitizeIntakeFields(raw.intake_fields) };
 
-  const [channels, kbs, links] = await Promise.all([
+  const [channels, kbs, links, dataActions, actionLinks] = await Promise.all([
     listChannels(orgId),
     loadKbs(orgId),
     loadKbLinks(orgId),
+    loadDataActions(orgId),
+    loadActionLinks(orgId),
   ]);
+  const linkedActions = new Set(
+    actionLinks.filter((l) => l.agent_id === agent.id).map((l) => l.data_action_id)
+  );
   const linkedKbs = new Set(
     links.filter((l) => l.agent_id === agent.id).map((l) => l.knowledge_base_id)
   );
@@ -242,6 +249,62 @@ export default async function AgentDetailPage({
     </Section>
   );
 
+  const actionsTab: ReactNode = (
+    <Section
+      title="Aktionen"
+      help="Der Agent darf die angehakten Aktionen in eigenen Systemen aufrufen, zum Beispiel einen Bestellstatus abfragen. Schreibende Aktionen führt nur ein Autopilot-Agent selbst aus — und nur, wenn die Aktion keine Bestätigung verlangt."
+    >
+      {agent.mode === 'intake_only' ? (
+        <Callout>
+          Im Modus „Reine Annahme“ nutzt der Agent keine Aktionen. Die Auswahl wird wirksam, sobald
+          der Modus wechselt.
+        </Callout>
+      ) : null}
+      {dataActions.length === 0 ? (
+        <p className="muted small">
+          Noch keine Aktion vorhanden.{' '}
+          {isOwner ? (
+            <Link href={href('/settings/integrations', { org: orgId })}>
+              Eigenes System unter Integrationen verbinden
+            </Link>
+          ) : (
+            'Inhaber und Admins legen Aktionen unter Integrationen an.'
+          )}
+        </p>
+      ) : (
+        <fieldset className="fieldset-plain">
+          <legend className="sr-only">Aktionen dieses Agenten</legend>
+          {dataActions.map((action) => {
+            const isLinked = linkedActions.has(action.id);
+            return (
+              <label key={action.id} className="check-row">
+                {isLinked ? (
+                  <input type="hidden" name="renderedLinkedActions" value={action.id} />
+                ) : null}
+                <input
+                  type="checkbox"
+                  name="actions"
+                  value={action.id}
+                  defaultChecked={isLinked}
+                  disabled={disabled}
+                />
+                {action.label}
+                <span className="muted small">
+                  {action.kind === 'write'
+                    ? action.requires_confirmation
+                      ? 'schreibt · mit Bestätigung'
+                      : 'schreibt'
+                    : 'liest'}
+                  {action.is_active ? '' : ' · pausiert'}
+                </span>
+              </label>
+            );
+          })}
+        </fieldset>
+      )}
+    </Section>
+  );
+
   return (
     <div className="page">
       <PageHeader
@@ -312,6 +375,7 @@ export default async function AgentDetailPage({
               warnLabel: 'Keine Wissensdatenbank verknüpft',
               content: knowledgeTab,
             },
+            { key: 'actions', label: 'Aktionen', count: linkedActions.size, content: actionsTab },
           ]}
         />
         {isOwner ? (

@@ -63,6 +63,7 @@ import {
   matchesEscalationKeyword,
 } from './handoff.js';
 import { buildTicketSeed, ensureTicketForConversation, type TicketSeed } from './tickets.js';
+import { prepareDraftActions } from './draft-actions.js';
 import { resolveReleasedFiles } from './outbound-files.js';
 
 /**
@@ -576,8 +577,25 @@ export async function processMessage(messageId: string): Promise<void> {
     currentStep = 'draft';
     // Prior turns (loaded before classify) → the draft continues the dialog
     // instead of restarting it (re-introduction bug, 2026-07-21).
+    // Phase 13: the agent's data actions (own end systems). Never on an explicit
+    // force-draft — a human owns that conversation, the bot must not act in it.
+    const draftActions =
+      !forceDraft && activeAgent
+        ? await prepareDraftActions(supabase, {
+            orgId,
+            agent: { id: activeAgent.id, mode: activeAgent.mode },
+            conversationId: conv.id,
+            messageId: message.id,
+            channelType: channel.type,
+          })
+        : null;
     const draftStart = Date.now();
-    const { result: draftResult, costUsd: draftCost } = await draft({
+    const {
+      result: draftResult,
+      costUsd: draftCost,
+      toolCalls: draftToolCalls,
+    } = await draft({
+      ...(draftActions ? { tools: draftActions.tools, runTool: draftActions.runTool } : {}),
       companyName: orgName,
       agentIdentity,
       channelType: channel.type,
@@ -601,7 +619,9 @@ export async function processMessage(messageId: string): Promise<void> {
       latencyMs: draftLatency,
       costUsd: draftCost,
       inputSummary: `sources=${matches.length}`,
-      outputSummary: `confidence=${draftResult.confidence.toFixed(2)} used=${draftResult.used_source_ids.length}`,
+      outputSummary: `confidence=${draftResult.confidence.toFixed(2)} used=${draftResult.used_source_ids.length}${
+        draftToolCalls > 0 ? ` actions=${draftToolCalls}` : ''
+      }`,
     });
 
     // --- 6. decide + persist (§4 message-flow, §6) ---------------------------
@@ -642,11 +662,17 @@ export async function processMessage(messageId: string): Promise<void> {
       handoffEnabled: activeAgent.handoffEnabled,
       escalationTarget: activeAgent.escalationTarget,
     });
-    const action = decideDraftAction(
+    const decided = decideDraftAction(
       detection.action,
       activeAgent.mode === 'autopilot',
       detection.suppressed
     );
+    // Phase 13: a data action of this draft waits for a team member's
+    // confirmation — the reply talks about something that has not happened yet,
+    // so it must not go out on its own. It stays a suggestion and the request
+    // becomes a ticket (escalations keep their own path below).
+    const awaitsActionConfirmation = (draftActions?.stats.pendingApproval ?? 0) > 0;
+    const action = decided === 'auto_send' && awaitsActionConfirmation ? 'pending' : decided;
 
     if (action === 'auto_send') {
       // No handoff ⇒ confidence ≥ threshold. Auto-send delivers a real reply to
@@ -728,7 +754,11 @@ export async function processMessage(messageId: string): Promise<void> {
         await ensureTicketForConversation(supabase, {
           orgId,
           conversationId: conv.id,
-          origin: detection.suppressed ? 'suppressed' : 'draft_only',
+          origin: detection.suppressed
+            ? 'suppressed'
+            : awaitsActionConfirmation && decided === 'auto_send'
+              ? 'action'
+              : 'draft_only',
           ...ticketSeed,
           ...(detection.suppressed ? { details: { reason: 'low_confidence' } } : {}),
         });

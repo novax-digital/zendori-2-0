@@ -12,8 +12,10 @@ import {
   listMembers,
 } from '@/lib/inbox/queries';
 import { listTicketsForConversation } from '@/lib/tickets/queries';
+import { listConversationActionRuns } from '@/lib/api-integration/queries';
 import type { InboxFilters } from '@/lib/inbox/types';
 import DismissibleBanners from '@/components/DismissibleBanners';
+import ActionRuns from '@/components/inbox/ActionRuns';
 import AiWorkingHint from '@/components/inbox/AiWorkingHint';
 import Composer from '@/components/inbox/Composer';
 import ContextSidebar from '@/components/inbox/ContextSidebar';
@@ -22,7 +24,7 @@ import ConversationView from '@/components/inbox/ConversationView';
 import FilterBar from '@/components/inbox/FilterBar';
 import RealtimeRefresher from '@/components/inbox/RealtimeRefresher';
 import SuggestedReply from '@/components/inbox/SuggestedReply';
-import { allowedChannelIds, canViewArea } from '@zendori/core';
+import { allowedChannelIds, canEditArea, canViewArea } from '@zendori/core';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import { EmptyState } from '@/components/ui/Layout';
 
@@ -117,6 +119,9 @@ export default async function InboxPage({
       // Phase 11: the conversation's tickets (chips + "Ticket anlegen")
       selectedId ? listTicketsForConversation(orgId, selectedId) : Promise.resolve([]),
     ]);
+  // Phase 13: data-action runs of the open conversation (loaded only after the
+  // detail passed its channel-scope check).
+  const actionRuns = detail ? await listConversationActionRuns(orgId, detail.conversation.id) : [];
   const openTicket = tickets.find((t) => t.status !== 'resolved') ?? null;
   const canOpenTickets = canViewArea(access, 'tickets');
 
@@ -145,6 +150,12 @@ export default async function InboxPage({
   return (
     <div className="inbox-shell">
       <RealtimeRefresher orgId={orgId} />
+      {/* Own channel, and only once a run exists: before migration 0035 the
+          table is not in the realtime publication, and a failing subscription
+          must never take the inbox's main channel down with it. */}
+      {actionRuns.length > 0 ? (
+        <RealtimeRefresher orgId={orgId} tables={['action_runs']} channelKey="inbox-actions" />
+      ) : null}
 
       <DismissibleBanners error={params.error} notice={params.notice} className="inbox-banners" />
 
@@ -178,6 +189,15 @@ export default async function InboxPage({
                 filterQ={filters.q}
               />
               <div className="inbox-reply">
+                <ActionRuns
+                  runs={actionRuns}
+                  orgId={orgId}
+                  conversationId={detail.conversation.id}
+                  canDecide={canEditArea(access, 'inbox')}
+                  filterStatus={filters.status}
+                  filterChannel={filters.channelId}
+                  filterQ={filters.q}
+                />
                 {detail.draft ? (
                   <SuggestedReply
                     key={detail.draft.id}

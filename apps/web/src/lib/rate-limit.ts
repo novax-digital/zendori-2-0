@@ -27,7 +27,9 @@ export type RateLimitName =
   | 'password-reset-email'
   | 'contact-bootstrap-ip'
   | 'contact-submit-ip'
-  | 'contact-submit-email';
+  | 'contact-submit-email'
+  | 'api-v1-ip'
+  | 'api-v1-key';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -146,6 +148,18 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(5, '24 h'),
       prefix: 'zendori:rl:contact-submit-email',
+    }),
+    // Zendori API (Phase 13d): the IP limit runs BEFORE the key lookup (brake
+    // on key guessing), the key limit after it (fair use per end system).
+    'api-v1-ip': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(300, '1 m'),
+      prefix: 'zendori:rl:api-v1-ip',
+    }),
+    'api-v1-key': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(120, '1 m'),
+      prefix: 'zendori:rl:api-v1-key',
     }),
   };
   return limiters;
