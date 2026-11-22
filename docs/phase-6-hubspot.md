@@ -23,7 +23,7 @@ Konversations-Strom.
 ```
 Auslöser setzt conversations.hubspot_sync_requested_at = now:
   - Worker nach der Nachrichten-Pipeline (wenn Sync-Regel greift, außer 'manual')
-  - Button „An HubSpot senden" (immer verfügbar)
+  - Button „An HubSpot senden" (bei jeder Sync-Regel verfügbar, aber nur mit aktiver HubSpot-Verbindung)
   - Statuswechsel auf „gelöst" (Stage nachziehen)
 scan (Worker): fällige Konversationen → pg-boss 'hubspot.sync-conversation' (singletonKey=conversationId)
 syncConversation:
@@ -44,7 +44,7 @@ syncConversation:
 
 ## Inbox
 
-Sidebar-Abschnitt „HubSpot": Button **„An HubSpot senden"** (immer) + Deep-Link **„In HubSpot öffnen"**, sobald ein Ticket existiert (`https://{uiDomain}/contacts/{portalId}/ticket/{id}`).
+Sidebar-Abschnitt „HubSpot" (seit 2026-11-22 nur mit aktiver Verbindung; ohne Verbindung fehlt er ganz, bei pausierter Verbindung bleibt nur der Deep-Link): Button **„An HubSpot senden"** + Deep-Link **„In HubSpot öffnen"**, sobald ein Ticket existiert (`https://{uiDomain}/contacts/{portalId}/ticket/{id}`).
 
 ## Cutover Bestandskunde Strong Energy (separater Schritt, MIT dir)
 

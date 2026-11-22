@@ -1115,12 +1115,17 @@ export async function syncConversationTicketToHubspot(formData: FormData): Promi
 
   const { data: integration } = await supabase
     .from('integrations')
-    .select('config')
+    .select('config, is_active')
     .eq('org_id', org)
     .eq('type', 'hubspot')
     .maybeSingle();
   const config = ((integration as { config?: unknown } | null)?.config ?? {}) as Record<string, unknown>;
   if (!integration) redirect(inboxUrl({ ...base, error: 'HubSpot ist nicht verbunden.' }));
+  // The button only exists with an ACTIVE connection; a click from a stale page
+  // must not create a ticket for a sync that will not run.
+  if ((integration as { is_active?: boolean }).is_active !== true) {
+    redirect(inboxUrl({ ...base, error: 'Die HubSpot-Verbindung ist deaktiviert.' }));
+  }
   if (!config.tickets || typeof config.tickets !== 'object') {
     redirect(
       inboxUrl({
@@ -1512,9 +1517,10 @@ export async function markDraftEdited(formData: FormData): Promise<void> {
 
 /**
  * „An HubSpot senden" (§11 Phase 6): marks the conversation due for a one-way
- * HubSpot sync by bumping hubspot_sync_requested_at. The worker picks it up and
- * no-ops harmlessly if the org has no active HubSpot integration. User-scoped
- * (RLS restricts to org members); never logs conversation content.
+ * HubSpot sync by bumping hubspot_sync_requested_at. Only with an ACTIVE HubSpot
+ * integration — the inbox shows the button only then, and a click from a stale
+ * page must not claim that something was queued. User-scoped (RLS restricts to
+ * org members); never logs conversation content.
  */
 export async function syncToHubspot(formData: FormData): Promise<void> {
   if (!(await hasConversationEdit(formData.get('org'), formData.get('conversationId')))) {
@@ -1538,6 +1544,16 @@ export async function syncToHubspot(formData: FormData): Promise<void> {
   };
 
   const supabase = await createSupabaseServerClient();
+  const { data: integration } = await supabase
+    .from('integrations')
+    .select('is_active')
+    .eq('org_id', org)
+    .eq('type', 'hubspot')
+    .maybeSingle();
+  if ((integration as { is_active?: boolean } | null)?.is_active !== true) {
+    redirect(inboxUrl({ ...base, error: 'Es besteht keine aktive HubSpot-Verbindung.' }));
+  }
+
   const { data, error } = await supabase
     .from('conversations')
     .update({ hubspot_sync_requested_at: new Date().toISOString() })

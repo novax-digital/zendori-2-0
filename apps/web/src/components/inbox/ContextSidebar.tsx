@@ -312,7 +312,8 @@ export default function ContextSidebar({
               Ticket anlegen
             </Button>
           </form>
-          {hubspot.connected ? (
+          {/* only with an ACTIVE HubSpot connection — a paused one syncs nothing */}
+          {hubspot.active ? (
             <form action={syncConversationTicketToHubspot}>
               {hiddenFields}
               <Button
@@ -328,29 +329,37 @@ export default function ContextSidebar({
         </div>
       </section>
 
-      <section className="rail-section">
-        <h3>HubSpot</h3>
-        {!hubspot.connected ? (
-          <p className="muted small">
-            Nicht verbunden — unter Einstellungen → Integrationen einrichten.
-          </p>
-        ) : !hubspot.active ? (
-          <p className="muted small">Verbunden, aber deaktiviert — Sync ist pausiert.</p>
-        ) : null}
-        <div className="row">
-          <form action={syncToHubspot}>
-            {hiddenFields}
-            <Button type="submit" size="sm">
-              An HubSpot senden
-            </Button>
-          </form>
-          {hubspotTicketUrl ? (
-            <a className="small" href={hubspotTicketUrl} target="_blank" rel="noopener noreferrer">
-              In HubSpot öffnen
-            </a>
+      {/* HubSpot only appears with an ACTIVE connection (owner decision 2026-11-22).
+          Without one the inbox shows nothing of it; a paused connection keeps
+          just the link to a ticket that already exists in HubSpot. */}
+      {hubspot.active || hubspotTicketUrl ? (
+        <section className="rail-section">
+          <h3>HubSpot</h3>
+          {!hubspot.active ? (
+            <p className="muted small">Verbunden, aber deaktiviert — Sync ist pausiert.</p>
           ) : null}
-        </div>
-      </section>
+          <div className="row">
+            {hubspot.active ? (
+              <form action={syncToHubspot}>
+                {hiddenFields}
+                <Button type="submit" size="sm">
+                  An HubSpot senden
+                </Button>
+              </form>
+            ) : null}
+            {hubspotTicketUrl ? (
+              <a
+                className="small"
+                href={hubspotTicketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                In HubSpot öffnen
+              </a>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       <section className="rail-section">
         <h3>Interne Notizen</h3>
