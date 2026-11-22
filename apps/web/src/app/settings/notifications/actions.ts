@@ -86,12 +86,21 @@ export async function saveNotificationPreferences(formData: FormData): Promise<v
   );
 }
 
-/** Sends the template of one event with sample content to the member's own address. */
-export async function sendTestNotification(formData: FormData): Promise<void> {
+/**
+ * Sends the template of one event with sample content to the member's own address.
+ * The event is bound per button (`sendTestNotification.bind(null, key)`): React
+ * overrides the `name` of a button whose formAction is a server action, so a
+ * name/value pair on the button never reaches the server.
+ */
+export async function sendTestNotification(
+  eventArg: unknown,
+  formData: FormData
+): Promise<void> {
   const org = textField(formData.get('org'));
   if (!z.uuid().safeParse(org).success) redirect('/settings/notifications');
 
-  const event = textField(formData.get('testEvent'));
+  // bound arguments come from the client — validate like any other input
+  const event = typeof eventArg === 'string' ? eventArg : '';
   if (!isNotificationEventType(event)) {
     redirect(pageUrl(org, { error: 'Unbekannte Benachrichtigung.' }));
   }

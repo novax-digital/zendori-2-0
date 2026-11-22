@@ -1,7 +1,7 @@
 # Phase 13 — API-Integration: eigene Endsysteme, Data Actions, 2-Way-Sync
 
-Owner-Entscheidungen 2026-11-20. Stand: **gebaut, Migrationen 0035–0037 noch NICHT angewendet**
-(Freigabe steht aus — siehe „Rollout“).
+Owner-Entscheidungen 2026-11-20. Stand: **gebaut, Migrationen 0035–0037 seit 2026-11-20 eingespielt**
+(siehe „Rollout“).
 
 ## Wozu
 

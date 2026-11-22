@@ -1,7 +1,7 @@
 # E-Mail-Benachrichtigungen für Mitarbeiter
 
-Stand: gebaut und gepusht; Migration `0038_member_notifications.sql` ist **noch nicht eingespielt**
-(Freigabe steht aus — siehe „Rollout“).
+Stand: gebaut und gepusht; Migration `0038_member_notifications.sql` ist **seit 2026-11-22
+eingespielt** (Versand braucht den Worker ab Tag `6d68a5d`).
 
 ## Wozu
 

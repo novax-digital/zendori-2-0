@@ -102,9 +102,7 @@ export default async function NotificationSettingsPage({
                         <Button
                           type="submit"
                           size="sm"
-                          formAction={sendTestNotification}
-                          name="testEvent"
-                          value={def.key}
+                          formAction={sendTestNotification.bind(null, def.key)}
                           disabled={!allowed}
                         >
                           Testmail senden
