@@ -1,7 +1,9 @@
 # Phase 14a — MCP-Verbindungen: Werkzeuge eines MCP-Servers als Aktionen
 
-Owner-Auftrag 2026-11-22 („starte 14a“). Stand: **gebaut, Migration 0039 noch NICHT angewendet**
-(Freigabe steht aus — siehe „Rollout“). 14b (Zendori selbst als MCP-Server) ist nicht beauftragt.
+Owner-Auftrag 2026-11-22 („starte 14a“). Stand: **gebaut und gepusht (`85eb66d`), Migration 0039
+seit 2026-11-22 eingespielt.** MCP-Verbindungen arbeiten, sobald der Worker auf dem VPS mit dem
+Image-Tag `85eb66dc0d63b9260853d9ac74bfdfdd033714c2` läuft. 14b (Zendori selbst als MCP-Server) ist
+nicht beauftragt.
 
 ## Wozu
 
@@ -188,8 +190,12 @@ Geprüft:
 - Die Installation des Worker-Images nachgestellt (nur die Manifeste, die das Dockerfile kopiert):
   Das SDK, Express und Hono sind nicht Teil davon.
 
-Nicht geprüft: die Oberfläche per Klick (kein Login), der Ablauf über den echten Worker und die
-echte Datenbank (Migration nicht angewendet), ein Server mit Token-Anmeldung außerhalb der Tests,
+- Migration 0039 in der Produktivdatenbank: eine Transaktion mit zurückgerolltem Test gegen echte
+  Mitglieder; bestehende Verbindung, Aktion und Läufe unverändert; neue Spalten über die
+  REST-Schicht lesbar.
+
+Nicht geprüft: die Oberfläche per Klick (kein Login), der Ablauf über den echten Worker (auf dem
+VPS lief beim Einspielen noch das vorige Image), ein Server mit Token-Anmeldung außerhalb der Tests,
 ein Aufruf über Voice.
 
 ## Manuelle Testanleitung
