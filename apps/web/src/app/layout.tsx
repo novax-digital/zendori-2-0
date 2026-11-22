@@ -13,6 +13,7 @@ import './styles/inbox.css';
 import './styles/auth.css';
 import { inter } from '@/lib/fonts';
 import AppShell from '@/components/AppShell';
+import SubmitFeedback from '@/components/SubmitFeedback';
 
 export const metadata: Metadata = {
   title: {
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body>
+        <SubmitFeedback />
         <AppShell>{children}</AppShell>
       </body>
     </html>

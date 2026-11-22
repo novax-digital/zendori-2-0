@@ -792,7 +792,8 @@ button {
   cursor: pointer;
   transition:
     background 0.12s ease,
-    border-color 0.12s ease;
+    border-color 0.12s ease,
+    transform 0.06s ease;
 }
 a.btn,
 a.btn:hover {
@@ -801,6 +802,37 @@ a.btn:hover {
 .btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+/* pressed: the button gives way under the click */
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+/* submitted, waiting for the answer (components/SubmitFeedback.tsx sets the
+   attribute): spinner instead of the icon, no second click */
+.btn[data-pending] {
+  pointer-events: none;
+}
+.btn[data-pending] > svg {
+  display: none;
+}
+.btn[data-pending]::before {
+  content: '';
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+}
+.btn--sm[data-pending]::before {
+  width: 12px;
+  height: 12px;
+}
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .btn svg {
   flex-shrink: 0;
