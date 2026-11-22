@@ -1,0 +1,3 @@
+# Test-only workspace package (interop test of the MCP client against the
+# official MCP SDK). Nothing depends on it; it is never part of the worker image.
+packages/mcp-interop

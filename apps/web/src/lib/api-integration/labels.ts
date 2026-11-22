@@ -39,6 +39,11 @@ export const RUN_ERROR_LABELS: Record<string, string> = {
   response_too_large: 'Die Antwort des Endsystems war zu groß.',
   http_error: 'Das Endsystem hat mit einem Fehlerstatus geantwortet.',
   rate_limited: 'Zu viele Aktionen in kurzer Zeit — bitte später erneut versuchen.',
+  // MCP connections (Phase 14a)
+  redirected:
+    'Der Server leitet auf eine andere Adresse weiter. Weiterleitungen folgt Zendori nicht — bitte die endgültige Adresse eintragen.',
+  protocol_error: 'Die Antwort des Servers war keine gültige MCP-Antwort.',
+  tool_error: 'Das Werkzeug hat einen Fehler gemeldet.',
 };
 
 /** Outbound events (Phase 13c): what a connection can subscribe to. */
@@ -100,6 +105,56 @@ export const AUTH_KIND_LABELS: Record<string, string> = {
   bearer: 'Bearer-Token',
   header: 'API-Schlüssel im Header',
   basic: 'Benutzername und Passwort (Basic)',
+};
+
+// --- MCP connections (Phase 14a) -----------------------------------------------------
+
+export const CONNECTION_KIND_LABELS: Record<string, string> = {
+  http: 'REST-API',
+  mcp: 'MCP-Server',
+};
+
+const MCP_SYNC_ERROR_LABELS: Record<string, string> = {
+  config_invalid: 'Die Zugangsdaten der Verbindung konnten nicht verwendet werden.',
+  blocked_url: 'Die Adresse ist nicht öffentlich erreichbar (interne Adressen sind gesperrt).',
+  timeout: 'Der Server hat nicht rechtzeitig geantwortet.',
+  network: 'Der Server war nicht erreichbar.',
+  response_too_large: 'Die Werkzeugliste des Servers ist zu groß.',
+  http_error: 'Der Server hat mit einem Fehlerstatus geantwortet.',
+  redirected:
+    'Der Server leitet auf eine andere Adresse weiter. Bitte die endgültige Adresse eintragen — oft fehlt nur ein „/“ am Ende.',
+  protocol_error:
+    'Unter dieser Adresse antwortet kein MCP-Server mit dem Transport „Streamable HTTP“.',
+  rpc_error: 'Der Server hat die Anfrage abgelehnt.',
+  internal: 'Interner Fehler beim Lesen der Werkzeugliste.',
+};
+
+const MCP_HTTP_STATUS_HINTS: Record<string, string> = {
+  '401': 'Die Anmeldung wurde abgelehnt (401) — bitte Token oder Schlüssel prüfen.',
+  '403': 'Der Zugriff wurde verweigert (403) — reichen die Rechte des Tokens?',
+  '404':
+    'Unter dieser Adresse gibt es keinen MCP-Endpunkt (404). Die Adresse endet meist auf „/mcp“.',
+  '405':
+    'Der Server nimmt hier keine MCP-Anfragen an (405). Server, die nur den älteren SSE-Transport sprechen, werden nicht unterstützt.',
+};
+
+/** Text for api_connections.mcp_sync_error ("http_error:401", "timeout", …). */
+export function mcpSyncErrorText(code: string): string {
+  const [kind, status] = code.split(':');
+  if (kind === 'http_error' && status) {
+    return (
+      MCP_HTTP_STATUS_HINTS[status] ?? `Der Server hat mit dem Fehlerstatus ${status} geantwortet.`
+    );
+  }
+  return MCP_SYNC_ERROR_LABELS[kind ?? ''] ?? 'Die Werkzeugliste konnte nicht gelesen werden.';
+}
+
+/** Why a tool of the server cannot become an action (McpSchemaIssue). */
+export const MCP_IMPORT_ISSUE_LABELS: Record<string, string> = {
+  invalid_schema: 'Die Beschreibung der Argumente ist zu groß oder kein Objekt.',
+  unsupported_required:
+    'Ein Pflicht-Argument ist eine Liste oder ein frei geformtes Objekt — das können Aktionen nicht abbilden.',
+  too_many_required: 'Das Werkzeug hat mehr als 20 Pflicht-Argumente.',
 };
 
 const DATE_TIME = new Intl.DateTimeFormat('de-DE', {

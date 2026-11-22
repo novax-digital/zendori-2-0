@@ -2,11 +2,18 @@
 // definition is a plain server-action form; the parameter list is a client
 // component that submits one JSON field. The test panel below queues a run the
 // worker executes. Owner/admin only.
-import { notFound } from 'next/navigation';
+//
+// Phase 14a — an action imported from an MCP server uses the same editor: it has
+// no method/path (the call is the tool), its parameters are the tool's
+// arguments, and a notice appears when the server changed the tool after the
+// import. Such actions are never created here — only by the import.
+import { notFound, redirect } from 'next/navigation';
 import {
   dataActionParametersSchema,
   dataActionResponseFieldsSchema,
+  identityLikeParameters,
   isAdminRole,
+  mcpCatalogSchema,
   type DataActionParameter,
 } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
@@ -24,7 +31,7 @@ import { Field, SettingRow } from '@/components/ui/Field';
 import { Section } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
-import { deleteDataAction, saveDataAction } from '../../../actions';
+import { deleteDataAction, resolveMcpDrift, saveDataAction } from '../../../actions';
 
 const LIST_PATH = '/settings/integrations';
 
@@ -41,7 +48,13 @@ interface ActionRow {
   requires_confirmation: boolean;
   timeout_ms: number;
   is_active: boolean;
+  // 0039 — absent before the migration
+  mcp_tool_name?: string | null;
+  mcp_drift?: string | null;
 }
+
+const ACTION_COLUMNS =
+  'id, name, label, description, kind, method, path, parameters, response_fields, requires_confirmation, timeout_ms, is_active';
 
 export default async function DataActionPage({
   params,
@@ -56,30 +69,58 @@ export default async function DataActionPage({
   if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
 
   const supabase = await createSupabaseServerClient();
-  const { data: connectionRow } = await supabase
+  // 0039 columns first; before the migration the select fails and the page
+  // falls back to the Phase-13 columns (no MCP connections exist then).
+  const withMcp = await supabase
     .from('api_connections')
-    .select('id, name, base_url')
+    .select('id, name, base_url, kind, mcp_catalog')
     .eq('org_id', orgId)
     .eq('id', connectionId)
     .maybeSingle();
+  let connectionRow = withMcp.data as {
+    id: string;
+    name: string;
+    base_url: string;
+    kind?: string;
+    mcp_catalog?: unknown;
+  } | null;
+  if (withMcp.error) {
+    const base = await supabase
+      .from('api_connections')
+      .select('id, name, base_url')
+      .eq('org_id', orgId)
+      .eq('id', connectionId)
+      .maybeSingle();
+    connectionRow = base.data as { id: string; name: string; base_url: string } | null;
+  }
   if (!connectionRow) notFound();
-  const connection = connectionRow as { id: string; name: string; base_url: string };
+  const connection = connectionRow;
+  const connectionIsMcp = connection.kind === 'mcp';
+  const connectionHref = href(`${LIST_PATH}/api/${connection.id}`, { org: orgId, tab: 'actions' });
 
   const isNew = actionId === 'new';
+  // actions of an MCP connection are imported, never typed in
+  if (isNew && connectionIsMcp) redirect(connectionHref);
   let action: ActionRow | null = null;
   if (!isNew) {
-    const { data } = await supabase
+    const first = await supabase
       .from('data_actions')
-      .select(
-        'id, name, label, description, kind, method, path, parameters, response_fields, requires_confirmation, timeout_ms, is_active'
-      )
+      .select(connectionIsMcp ? `${ACTION_COLUMNS}, mcp_tool_name, mcp_drift` : ACTION_COLUMNS)
       .eq('org_id', orgId)
       .eq('connection_id', connection.id)
       .eq('id', actionId)
       .maybeSingle();
-    if (!data) notFound();
-    action = data as ActionRow;
+    if (!first.data) notFound();
+    action = first.data as unknown as ActionRow;
   }
+  const mcpToolName = action?.mcp_tool_name ?? null;
+  const isMcp = mcpToolName !== null;
+  const drift = action?.mcp_drift ?? null;
+  // what the server offers under this name right now (shown when it changed)
+  const catalogParsed = isMcp ? mcpCatalogSchema.safeParse(connection.mcp_catalog ?? null) : null;
+  const serverTool = catalogParsed?.success
+    ? (catalogParsed.data.tools.find((tool) => tool.name === mcpToolName) ?? null)
+    : null;
 
   const parametersParsed = dataActionParametersSchema.safeParse(action?.parameters ?? []);
   const parameters: DataActionParameter[] = parametersParsed.success ? parametersParsed.data : [];
@@ -95,7 +136,7 @@ export default async function DataActionPage({
       contextKey: param.contextKey ?? null,
     }));
 
-  const connectionHref = href(`${LIST_PATH}/api/${connection.id}`, { org: orgId, tab: 'actions' });
+  const identityLike = isMcp && parametersParsed.success ? identityLikeParameters(parameters) : [];
 
   return (
     <div className="page">
@@ -119,6 +160,7 @@ export default async function DataActionPage({
                 </Badge>
               )}
               <Badge>{action.kind === 'write' ? 'Schreibt' : 'Liest'}</Badge>
+              {isMcp ? <Badge>MCP-Werkzeug</Badge> : null}
             </>
           ) : null
         }
@@ -143,6 +185,76 @@ export default async function DataActionPage({
 
       <div className="page-body">
         <DismissibleBanners error={error} notice={notice} />
+
+        {action && drift === 'changed' ? (
+          <Callout tone="warn" title="Der Server hat dieses Werkzeug geändert">
+            <div className="stack stack--sm">
+              <p>
+                Seit dem Import hat sich auf dem Server die Beschreibung oder die Liste der
+                Argumente geändert. Dein Agent nutzt weiter die hier gespeicherte Fassung — an ihn
+                gelangt nichts Neues, bevor du es übernimmst.
+              </p>
+              {serverTool ? (
+                <details className="disclosure">
+                  <summary>Aktuelle Fassung des Servers ansehen</summary>
+                  <div className="stack stack--sm">
+                    <span className="field-label">Beschreibung</span>
+                    <code className="code-block run-result">
+                      {serverTool.description || '(keine Beschreibung)'}
+                    </code>
+                    <span className="field-label">Argumente</span>
+                    <code className="code-block run-result">
+                      {serverTool.inputSchema
+                        ? JSON.stringify(serverTool.inputSchema, null, 2)
+                        : '(zu groß, um sie anzuzeigen)'}
+                    </code>
+                  </div>
+                </details>
+              ) : null}
+              <div className="row">
+                <form action={resolveMcpDrift}>
+                  <input type="hidden" name="org" value={orgId} />
+                  <input type="hidden" name="connectionId" value={connection.id} />
+                  <input type="hidden" name="actionId" value={action.id} />
+                  <input type="hidden" name="mode" value="reimport" />
+                  <Button type="submit" size="sm">
+                    Neue Fassung übernehmen
+                  </Button>
+                </form>
+                <form action={resolveMcpDrift}>
+                  <input type="hidden" name="org" value={orgId} />
+                  <input type="hidden" name="connectionId" value={connection.id} />
+                  <input type="hidden" name="actionId" value={action.id} />
+                  <input type="hidden" name="mode" value="acknowledge" />
+                  <Button type="submit" size="sm" variant="ghost">
+                    So lassen und als geprüft markieren
+                  </Button>
+                </form>
+              </div>
+              <p className="muted small">
+                „Übernehmen“ ersetzt Beschreibung und Argumente durch die des Servers. Deine
+                Zuordnungen (Kontextwerte, feste Werte, Namen) bleiben je Argument erhalten.
+              </p>
+            </div>
+          </Callout>
+        ) : null}
+
+        {action && drift === 'missing' ? (
+          <Callout tone="danger" title="Der Server bietet dieses Werkzeug nicht mehr an">
+            Aufrufe dieser Aktion schlagen fehl, bis der Server das Werkzeug wieder anbietet.
+            Aktualisiere die Werkzeugliste der Verbindung oder lösche die Aktion.
+          </Callout>
+        ) : null}
+
+        {identityLike.length > 0 ? (
+          <Callout tone="warn" title="Identitätsangaben prüfen">
+            Diese Parameter übernimmt der Agent bisher aus dem Gespräch:{' '}
+            <span className="mono">{identityLike.join(', ')}</span>. Wenn sie den Kunden
+            identifizieren, stelle sie auf „Kontext“ — dann setzt Zendori den Wert aus der
+            Konversation. Sonst erhält, wer eine fremde E-Mail-Adresse oder Nummer nennt, fremde
+            Daten.
+          </Callout>
+        ) : null}
 
         <form id="data-action-form" className="section-group form-narrow" action={saveDataAction}>
           <input type="hidden" name="org" value={orgId} />
@@ -224,26 +336,25 @@ export default async function DataActionPage({
             </SettingRow>
           </Section>
 
-          <Section
-            title="Aufruf"
-            help={
-              <>
-                Der Pfad wird an die Basis-URL <span className="mono">{connection.base_url}</span>{' '}
-                angehängt.
-              </>
-            }
-          >
-            <div className="field-row">
-              <Field label="Methode" htmlFor="action-method">
-                <select id="action-method" name="method" defaultValue={action?.method ?? 'GET'}>
-                  <option value="GET">GET</option>
-                  <option value="POST">POST</option>
-                  <option value="PUT">PUT</option>
-                  <option value="PATCH">PATCH</option>
-                  <option value="DELETE">DELETE</option>
-                </select>
-              </Field>
-              <Field label="Zeitlimit in Sekunden" htmlFor="action-timeout">
+          {isMcp ? (
+            <Section
+              title="Aufruf"
+              help={
+                <>
+                  Die Aktion ruft ein Werkzeug des MCP-Servers{' '}
+                  <span className="mono">{connection.base_url}</span> auf.
+                </>
+              }
+            >
+              <div className="stack stack--sm">
+                <span className="field-label">Werkzeug auf dem Server</span>
+                <code className="code-block">{mcpToolName}</code>
+              </div>
+              <Field
+                label="Zeitlimit in Sekunden"
+                htmlFor="action-timeout"
+                help="Gilt für Verbindungsaufbau und Aufruf zusammen."
+              >
                 <input
                   id="action-timeout"
                   name="timeoutSeconds"
@@ -252,38 +363,80 @@ export default async function DataActionPage({
                   max={20}
                   step={1}
                   required
-                  defaultValue={Math.round((action?.timeout_ms ?? 8000) / 1000)}
+                  defaultValue={Math.round((action?.timeout_ms ?? 15000) / 1000)}
                 />
               </Field>
-            </div>
-            <Field
-              label="Pfad"
-              htmlFor="action-path"
-              help="Beginnt mit „/“. Platzhalter in {Klammern} werden durch den gleichnamigen Pfad-Parameter ersetzt."
+            </Section>
+          ) : (
+            <Section
+              title="Aufruf"
+              help={
+                <>
+                  Der Pfad wird an die Basis-URL <span className="mono">{connection.base_url}</span>{' '}
+                  angehängt.
+                </>
+              }
             >
-              <input
-                id="action-path"
-                name="path"
-                type="text"
-                className="mono"
-                required
-                maxLength={500}
-                defaultValue={action?.path ?? ''}
-                placeholder="/orders/{order_id}"
-              />
-            </Field>
-          </Section>
+              <div className="field-row">
+                <Field label="Methode" htmlFor="action-method">
+                  <select id="action-method" name="method" defaultValue={action?.method ?? 'GET'}>
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                  </select>
+                </Field>
+                <Field label="Zeitlimit in Sekunden" htmlFor="action-timeout">
+                  <input
+                    id="action-timeout"
+                    name="timeoutSeconds"
+                    type="number"
+                    min={1}
+                    max={20}
+                    step={1}
+                    required
+                    defaultValue={Math.round((action?.timeout_ms ?? 8000) / 1000)}
+                  />
+                </Field>
+              </div>
+              <Field
+                label="Pfad"
+                htmlFor="action-path"
+                help="Beginnt mit „/“. Platzhalter in {Klammern} werden durch den gleichnamigen Pfad-Parameter ersetzt."
+              >
+                <input
+                  id="action-path"
+                  name="path"
+                  type="text"
+                  className="mono"
+                  required
+                  maxLength={500}
+                  defaultValue={action?.path ?? ''}
+                  placeholder="/orders/{order_id}"
+                />
+              </Field>
+            </Section>
+          )}
 
           <Section
             title="Parameter"
-            help="Werte, die mit dem Aufruf gesendet werden. Der Agent liefert nur, was als „KI-Agent“ markiert ist; Kontextwerte setzt Zendori selbst."
+            help={
+              isMcp
+                ? 'Die Argumente des Werkzeugs. Der Agent liefert nur, was als „KI-Agent“ markiert ist; Kontextwerte setzt Zendori selbst. Was hier nicht steht, wird nie an den Server gesendet.'
+                : 'Werte, die mit dem Aufruf gesendet werden. Der Agent liefert nur, was als „KI-Agent“ markiert ist; Kontextwerte setzt Zendori selbst.'
+            }
           >
-            <ActionParamsEditor initial={parameters} />
+            <ActionParamsEditor initial={parameters} mode={isMcp ? 'mcp' : 'http'} />
           </Section>
 
           <Section
             title="Antwort"
-            help="Nur diese Felder der JSON-Antwort erreichen den Agenten und das Protokoll. Leer lassen gibt die gesamte Antwort weiter (auf 4.000 Zeichen gekürzt)."
+            help={
+              isMcp
+                ? 'Liefert das Werkzeug strukturierte Daten (JSON), erreichen nur diese Felder den Agenten und das Protokoll. Reiner Text wird unverändert weitergegeben. Leer lassen gibt alles weiter (auf 4.000 Zeichen gekürzt).'
+                : 'Nur diese Felder der JSON-Antwort erreichen den Agenten und das Protokoll. Leer lassen gibt die gesamte Antwort weiter (auf 4.000 Zeichen gekürzt).'
+            }
           >
             <Field
               label="Freigegebene Antwortfelder"
@@ -322,7 +475,11 @@ export default async function DataActionPage({
           <div className="section-group form-narrow">
             <Section
               title="Testlauf"
-              help="Führt die gespeicherte Aktion einmal mit deinen Werten aus — auch schreibende Aktionen werden dabei wirklich ausgeführt."
+              help={
+                isMcp
+                  ? 'Ruft das Werkzeug einmal mit deinen Werten auf — auch schreibende Werkzeuge werden dabei wirklich ausgeführt.'
+                  : 'Führt die gespeicherte Aktion einmal mit deinen Werten aus — auch schreibende Aktionen werden dabei wirklich ausgeführt.'
+              }
             >
               {parametersParsed.success ? (
                 <ActionTestPanel orgId={orgId} actionId={action.id} params={testParams} />

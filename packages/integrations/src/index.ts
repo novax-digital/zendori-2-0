@@ -12,3 +12,5 @@ export * from './hubspot/properties.js';
 export * from './hubspot/account.js';
 // Phase 13: generic client for an org's own end systems (data actions, events).
 export * from './custom-api/client.js';
+// Phase 14a: minimal MCP client (Streamable HTTP) for an org's own MCP server.
+export * from './mcp/client.js';

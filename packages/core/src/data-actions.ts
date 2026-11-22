@@ -412,13 +412,13 @@ function setNested(target: Record<string, unknown>, path: string, value: ActionV
  * Path values are percent-encoded as ONE segment, so a value can never add a
  * path segment or a query string; the origin always stays the base URL's.
  */
-export function buildActionRequest(
-  def: Pick<DataActionDefinition, 'method' | 'path' | 'parameters'>,
-  baseUrl: string,
+/** Final value per parameter key: fixed values from the definition, the rest from `values`. */
+function resolveParameterValues(
+  parameters: DataActionParameter[],
   values: ActionValues
-): ActionRequest {
+): Map<string, ActionValue> {
   const resolved = new Map<string, ActionValue>();
-  for (const param of def.parameters) {
+  for (const param of parameters) {
     if (param.source === 'fixed') {
       const fixed = coerceValue(param, param.fixedValue);
       if (fixed !== undefined) resolved.set(param.key, fixed);
@@ -426,6 +426,34 @@ export function buildActionRequest(
       resolved.set(param.key, values[param.key] as ActionValue);
     }
   }
+  return resolved;
+}
+
+/**
+ * The argument object of an MCP tool call (Phase 14a): every parameter lands at
+ * its `field` dot path (default: its key). Same trust rule as buildActionRequest
+ * — only resolved, validated values get in; the model never shapes the object.
+ */
+export function buildActionArguments(
+  parameters: DataActionParameter[],
+  values: ActionValues
+): Record<string, unknown> {
+  const resolved = resolveParameterValues(parameters, values);
+  const args: Record<string, unknown> = {};
+  for (const param of parameters) {
+    const value = resolved.get(param.key);
+    if (value === undefined) continue;
+    setNested(args, param.field ?? param.key, value);
+  }
+  return args;
+}
+
+export function buildActionRequest(
+  def: Pick<DataActionDefinition, 'method' | 'path' | 'parameters'>,
+  baseUrl: string,
+  values: ActionValues
+): ActionRequest {
+  const resolved = resolveParameterValues(def.parameters, values);
 
   const path = def.path.replace(/\{([a-z][a-z0-9_]{0,39})\}/g, (_match, key: string) => {
     const value = resolved.get(key);
@@ -562,4 +590,8 @@ export type ActionRunErrorCode =
   | 'network'
   | 'response_too_large'
   | 'http_error'
-  | 'rate_limited';
+  | 'rate_limited'
+  // MCP connections (Phase 14a)
+  | 'redirected'
+  | 'protocol_error'
+  | 'tool_error';

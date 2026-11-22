@@ -34,6 +34,7 @@ import {
 import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
 import { ACTION_RUN_QUEUE, executeQueuedRun } from './actions/execute.js';
 import { INTEGRATION_EVENT_QUEUE, deliverIntegrationEvent } from './actions/events.js';
+import { MCP_SYNC_QUEUE, syncMcpConnection } from './actions/mcp-sync.js';
 import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/deliver.js';
 import {
   LEARN_DISTILL_QUEUE,
@@ -55,6 +56,7 @@ const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
 const actionRunJobSchema = z.object({ runId: z.uuid() });
 const integrationEventJobSchema = z.object({ eventId: z.uuid() });
+const mcpSyncJobSchema = z.object({ connectionId: z.uuid() });
 const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
 
 /**
@@ -268,6 +270,30 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), runId }, 'action run job failed');
+        }
+      }
+    }
+  );
+
+  // --- Phase-14a MCP connections: read a server's tool list ----------------------
+  // syncMcpConnection claims the connection, reads the list once and writes the
+  // outcome (catalog or error code) into the row; a failed read is never
+  // redelivered — the owner or the daily re-check asks again.
+  await ensureQueuePolicy(boss, MCP_SYNC_QUEUE);
+  await boss.work(
+    MCP_SYNC_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { connectionId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { connectionId } = mcpSyncJobSchema.parse(job.data);
+        try {
+          await syncMcpConnection(
+            { supabase, logger, masterKey: env.MASTER_ENCRYPTION_KEY },
+            connectionId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), connectionId }, 'mcp sync job failed');
         }
       }
     }

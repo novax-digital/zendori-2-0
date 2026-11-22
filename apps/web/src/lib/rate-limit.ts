@@ -30,7 +30,8 @@ export type RateLimitName =
   | 'contact-submit-email'
   | 'api-v1-ip'
   | 'api-v1-key'
-  | 'notify-test-user';
+  | 'notify-test-user'
+  | 'mcp-sync-user';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -167,6 +168,13 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(6, '10 m'),
       prefix: 'zendori:rl:notify-test-user',
+    }),
+    // "Werkzeugliste aktualisieren" of an MCP connection: every click makes the
+    // worker call the customer's server
+    'mcp-sync-user': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(12, '10 m'),
+      prefix: 'zendori:rl:mcp-sync-user',
     }),
   };
   return limiters;

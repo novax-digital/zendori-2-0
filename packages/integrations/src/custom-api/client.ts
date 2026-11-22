@@ -65,7 +65,8 @@ export function generateSigningSecret(): string {
   return `whsec_${randomBytes(32).toString('base64')}`;
 }
 
-function authHeaders(auth: CustomApiAuth): Record<string, string> {
+/** The request headers a connection's credentials turn into (shared with the MCP client). */
+export function customApiAuthHeaders(auth: CustomApiAuth): Record<string, string> {
   switch (auth.kind) {
     case 'none':
       return {};
@@ -89,7 +90,7 @@ export function buildRequestHeaders(
     accept: 'application/json',
     'user-agent': CUSTOM_API_USER_AGENT,
     'idempotency-key': call.requestId,
-    ...authHeaders(call.auth),
+    ...customApiAuthHeaders(call.auth),
   };
   if (call.body !== null) headers['content-type'] = 'application/json';
   if (call.signingSecret) {

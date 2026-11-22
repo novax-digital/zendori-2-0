@@ -3,6 +3,10 @@
 // Owner/admin only. Tabs live in the URL (?tab=), every form is a plain
 // server-action form. The events and keys tabs tolerate the schema before
 // migrations 0036 / 0037 (they then explain that the feature is not live yet).
+//
+// Phase 14a — the same page serves an MCP connection (kind = 'mcp'): the actions
+// tab becomes "Werkzeuge" (the server's tool list + import), and the parts that
+// belong to the REST contract (signature, events, API keys) are not shown.
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
@@ -10,6 +14,7 @@ import {
   apiConnectionConfigSchema,
   decryptSecret,
   isAdminRole,
+  mcpCatalogSchema,
 } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
 import { href } from '@/lib/href';
@@ -28,6 +33,7 @@ import {
 } from '@/lib/api-integration/labels';
 import ApiAuthFields from '@/components/api-integration/ApiAuthFields';
 import ApiKeyCreator from '@/components/api-integration/ApiKeyCreator';
+import McpToolsTab, { type McpActionRow } from '@/components/api-integration/McpToolsTab';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
@@ -117,16 +123,27 @@ interface ApiKeyRow {
   created_at: string;
 }
 
-interface ActionListRow {
-  id: string;
-  name: string;
-  label: string;
-  kind: string;
+interface ActionListRow extends McpActionRow {
   method: string;
   path: string;
-  requires_confirmation: boolean;
-  is_active: boolean;
 }
+
+interface ConnectionRow {
+  id: string;
+  name: string;
+  base_url: string;
+  config: unknown;
+  is_active: boolean;
+  // 0039 — absent before the migration
+  kind?: string;
+  mcp_catalog?: unknown;
+  mcp_sync_requested_at?: string | null;
+  mcp_synced_at?: string | null;
+  mcp_sync_error?: string | null;
+}
+
+const CONNECTION_COLUMNS = 'id, name, base_url, config, is_active';
+const ACTION_LIST_COLUMNS = 'id, name, label, kind, method, path, requires_confirmation, is_active';
 
 interface RunListRow {
   id: string;
@@ -158,36 +175,56 @@ export default async function ApiConnectionPage({
   if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
 
   const supabase = await createSupabaseServerClient();
-  const { data: connectionRow } = await supabase
+  // The 0039 columns are read first; before the migration that select fails and
+  // the page falls back to the Phase-13 columns (every connection is REST then).
+  const withMcp = await supabase
     .from('api_connections')
-    .select('id, name, base_url, config, is_active')
+    .select(
+      `${CONNECTION_COLUMNS}, kind, mcp_catalog, mcp_sync_requested_at, mcp_synced_at, mcp_sync_error`
+    )
     .eq('org_id', orgId)
     .eq('id', connectionId)
     .maybeSingle();
+  let connectionRow = withMcp.data as ConnectionRow | null;
+  if (withMcp.error) {
+    const base = await supabase
+      .from('api_connections')
+      .select(CONNECTION_COLUMNS)
+      .eq('org_id', orgId)
+      .eq('id', connectionId)
+      .maybeSingle();
+    connectionRow = base.data as ConnectionRow | null;
+  }
   if (!connectionRow) notFound();
-  const connection = connectionRow as {
-    id: string;
-    name: string;
-    base_url: string;
-    config: unknown;
-    is_active: boolean;
-  };
+  const connection = connectionRow;
+  const isMcp = connection.kind === 'mcp';
   const configParsed = apiConnectionConfigSchema.safeParse(connection.config ?? {});
   const config = configParsed.success ? configParsed.data : { auth: { kind: 'none' as const } };
   const auth = config.auth;
+  const catalogParsed = isMcp ? mcpCatalogSchema.safeParse(connection.mcp_catalog ?? null) : null;
+  const catalog = catalogParsed?.success ? catalogParsed.data : null;
 
-  const tab: TabKey = TAB_KEYS.find((key) => key === rawTab) ?? 'connection';
+  const requestedTab: TabKey = TAB_KEYS.find((key) => key === rawTab) ?? 'connection';
+  // events and API keys belong to the REST contract — an MCP connection has neither
+  const tab: TabKey =
+    isMcp && (requestedTab === 'events' || requestedTab === 'keys') ? 'connection' : requestedTab;
   const selfPath = `${LIST_PATH}/api/${connection.id}`;
   const tabHref = (key: TabKey): string =>
     href(selfPath, { org: orgId, tab: key === 'connection' ? null : key });
 
   const { data: actionData } = await supabase
     .from('data_actions')
-    .select('id, name, label, kind, method, path, requires_confirmation, is_active')
+    .select(isMcp ? `${ACTION_LIST_COLUMNS}, mcp_tool_name, mcp_drift` : ACTION_LIST_COLUMNS)
     .eq('org_id', orgId)
     .eq('connection_id', connection.id)
     .order('created_at', { ascending: true });
-  const actions = (actionData ?? []) as ActionListRow[];
+  const actions = ((actionData ?? []) as unknown as Partial<ActionListRow>[]).map(
+    (row): ActionListRow => ({
+      ...(row as ActionListRow),
+      mcp_tool_name: row.mcp_tool_name ?? null,
+      mcp_drift: row.mcp_drift ?? null,
+    })
+  );
   const actionLabels = new Map(actions.map((a) => [a.id, a.label]));
 
   let runs: RunListRow[] = [];
@@ -275,15 +312,18 @@ export default async function ApiConnectionPage({
         title={connection.name}
         subtitle={<span className="mono">{connection.base_url}</span>}
         badges={
-          connection.is_active ? (
-            <Badge tone="success" dot>
-              Aktiv
-            </Badge>
-          ) : (
-            <Badge tone="muted" dot>
-              Pausiert
-            </Badge>
-          )
+          <>
+            {connection.is_active ? (
+              <Badge tone="success" dot>
+                Aktiv
+              </Badge>
+            ) : (
+              <Badge tone="muted" dot>
+                Pausiert
+              </Badge>
+            )}
+            {isMcp ? <Badge>MCP-Server</Badge> : null}
+          </>
         }
         actions={
           <Menu label="Weitere Aktionen">
@@ -307,13 +347,17 @@ export default async function ApiConnectionPage({
             items={[
               { label: 'Verbindung', href: tabHref('connection'), active: tab === 'connection' },
               {
-                label: 'Aktionen',
+                label: isMcp ? 'Werkzeuge' : 'Aktionen',
                 href: tabHref('actions'),
                 count: actions.length,
                 active: tab === 'actions',
               },
-              { label: 'Ereignisse', href: tabHref('events'), active: tab === 'events' },
-              { label: 'API-Schlüssel', href: tabHref('keys'), active: tab === 'keys' },
+              ...(isMcp
+                ? []
+                : [
+                    { label: 'Ereignisse', href: tabHref('events'), active: tab === 'events' },
+                    { label: 'API-Schlüssel', href: tabHref('keys'), active: tab === 'keys' },
+                  ]),
               { label: 'Protokoll', href: tabHref('runs'), active: tab === 'runs' },
             ]}
           />
@@ -332,7 +376,7 @@ export default async function ApiConnectionPage({
             >
               <input type="hidden" name="org" value={orgId} />
               <input type="hidden" name="connectionId" value={connection.id} />
-              <Section title="Endsystem">
+              <Section title={isMcp ? 'MCP-Server' : 'Endsystem'}>
                 <Field label="Name" htmlFor="api-name">
                   <input
                     id="api-name"
@@ -345,9 +389,13 @@ export default async function ApiConnectionPage({
                   />
                 </Field>
                 <Field
-                  label="Basis-URL"
+                  label={isMcp ? 'Adresse des MCP-Servers' : 'Basis-URL'}
                   htmlFor="api-url"
-                  help="Nur https und nur öffentlich erreichbare Adressen. Alle Aufrufe kommen vom Zendori-Worker, also von einer festen IP-Adresse, die du in deinem System freischalten kannst."
+                  help={
+                    isMcp
+                      ? 'Die vollständige Adresse des Endpunkts (meist endet sie auf „/mcp“), nur https und nur öffentlich erreichbar. Weiterleitungen folgt Zendori nicht. Alle Aufrufe kommen vom Zendori-Worker, also von einer festen IP-Adresse, die du freischalten kannst.'
+                      : 'Nur https und nur öffentlich erreichbare Adressen. Alle Aufrufe kommen vom Zendori-Worker, also von einer festen IP-Adresse, die du in deinem System freischalten kannst.'
+                  }
                 >
                   <input
                     id="api-url"
@@ -369,7 +417,11 @@ export default async function ApiConnectionPage({
               <Section title="Status">
                 <SettingRow
                   label="Verbindung aktiv"
-                  help="Pausiert stehen ihre Aktionen den Agenten nicht zur Verfügung."
+                  help={
+                    isMcp
+                      ? 'Pausiert stehen ihre Aktionen den Agenten nicht zur Verfügung, und die Werkzeugliste wird nicht mehr täglich geprüft.'
+                      : 'Pausiert stehen ihre Aktionen den Agenten nicht zur Verfügung.'
+                  }
                   htmlFor="api-active"
                 >
                   <input
@@ -383,46 +435,48 @@ export default async function ApiConnectionPage({
               </Section>
             </form>
 
-            <div className="section-group form-narrow">
-              <Section
-                title="Signatur"
-                help="Zendori signiert jeden Aufruf (Standard Webhooks, HMAC-SHA256) mit den Headern webhook-id, webhook-timestamp und webhook-signature. Dein System kann damit prüfen, dass ein Aufruf wirklich von Zendori stammt. Jeder Aufruf trägt außerdem einen Idempotency-Key."
-              >
-                {signingSecret ? (
-                  <div className="stack stack--sm">
-                    <span className="field-label">Signatur-Schlüssel</span>
-                    <code className="code-block">{signingSecret}</code>
-                    <div>
-                      <Button href={tabHref('connection')} size="sm" scroll={false}>
-                        Ausblenden
-                      </Button>
+            {isMcp ? null : (
+              <div className="section-group form-narrow">
+                <Section
+                  title="Signatur"
+                  help="Zendori signiert jeden Aufruf (Standard Webhooks, HMAC-SHA256) mit den Headern webhook-id, webhook-timestamp und webhook-signature. Dein System kann damit prüfen, dass ein Aufruf wirklich von Zendori stammt. Jeder Aufruf trägt außerdem einen Idempotency-Key."
+                >
+                  {signingSecret ? (
+                    <div className="stack stack--sm">
+                      <span className="field-label">Signatur-Schlüssel</span>
+                      <code className="code-block">{signingSecret}</code>
+                      <div>
+                        <Button href={tabHref('connection')} size="sm" scroll={false}>
+                          Ausblenden
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="row">
-                    {config.signing_secret_encrypted ? (
-                      <Button
-                        href={href(selfPath, { org: orgId, reveal: 'signing' })}
-                        size="sm"
-                        icon="eye"
-                        scroll={false}
-                      >
-                        Schlüssel anzeigen
-                      </Button>
-                    ) : (
-                      <span className="muted small">Noch kein Signatur-Schlüssel vorhanden.</span>
-                    )}
-                    <form action={rotateSigningSecret}>
-                      <input type="hidden" name="org" value={orgId} />
-                      <input type="hidden" name="connectionId" value={connection.id} />
-                      <Button type="submit" size="sm">
-                        Neuen Schlüssel erzeugen
-                      </Button>
-                    </form>
-                  </div>
-                )}
-              </Section>
-            </div>
+                  ) : (
+                    <div className="row">
+                      {config.signing_secret_encrypted ? (
+                        <Button
+                          href={href(selfPath, { org: orgId, reveal: 'signing' })}
+                          size="sm"
+                          icon="eye"
+                          scroll={false}
+                        >
+                          Schlüssel anzeigen
+                        </Button>
+                      ) : (
+                        <span className="muted small">Noch kein Signatur-Schlüssel vorhanden.</span>
+                      )}
+                      <form action={rotateSigningSecret}>
+                        <input type="hidden" name="org" value={orgId} />
+                        <input type="hidden" name="connectionId" value={connection.id} />
+                        <Button type="submit" size="sm">
+                          Neuen Schlüssel erzeugen
+                        </Button>
+                      </form>
+                    </div>
+                  )}
+                </Section>
+              </div>
+            )}
 
             <div className="save-bar">
               <Button type="submit" form="api-connection-form" variant="primary">
@@ -432,7 +486,22 @@ export default async function ApiConnectionPage({
           </>
         ) : null}
 
-        {tab === 'actions' ? (
+        {tab === 'actions' && isMcp ? (
+          <McpToolsTab
+            orgId={orgId}
+            connectionId={connection.id}
+            selfPath={selfPath}
+            sync={{
+              pending: Boolean(connection.mcp_sync_requested_at),
+              syncedAt: connection.mcp_synced_at ?? null,
+              error: connection.mcp_sync_error ?? null,
+            }}
+            catalog={catalog}
+            actions={actions}
+          />
+        ) : null}
+
+        {tab === 'actions' && !isMcp ? (
           <Section
             title="Aktionen"
             help="Eine Aktion ist ein einzelner Aufruf deines Systems, den ein KI-Agent im Gespräch nutzen kann. Welcher Agent welche Aktion verwenden darf, legst du am Agenten fest."
@@ -810,8 +879,9 @@ export default async function ApiConnectionPage({
               </div>
             )}
             <Callout className="page-note">
-              Das Protokoll enthält die gesendeten Werte und die freigegebenen Antwortfelder. Es
-              wird zusammen mit der Organisation gelöscht.
+              Das Protokoll enthält die gesendeten Werte und{' '}
+              {isMcp ? 'das Ergebnis des Werkzeugs' : 'die freigegebenen Antwortfelder'}. Es wird
+              zusammen mit der Organisation gelöscht.
             </Callout>
           </Section>
         ) : null}

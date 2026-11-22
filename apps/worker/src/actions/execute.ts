@@ -20,6 +20,7 @@ import {
   dataActionParametersSchema,
   dataActionResponseFieldsSchema,
   decryptSecret,
+  isMissingColumnError,
   isMissingRelationError,
   mapActionResponse,
   resolveActionValues,
@@ -36,6 +37,7 @@ import {
 import { CustomApiError, callCustomApi, type CustomApiAuth } from '@zendori/integrations';
 import { assertPublicUrl } from '../pipeline/index-source.js';
 import { toErrorInfo } from '../db.js';
+import { performMcpCall } from './mcp-call.js';
 
 /** Hard cap on runs an org may start per minute (cost + abuse brake). */
 export const ACTION_RUNS_PER_MINUTE = 60;
@@ -57,6 +59,11 @@ export interface LoadedAction {
   responseFields: string[];
   requiresConfirmation: boolean;
   timeoutMs: number;
+  /**
+   * Phase 14a: set = the action is a tools/call of this tool on an MCP server
+   * (method/path are then unused); null = an HTTP call.
+   */
+  mcpToolName: string | null;
 }
 
 export interface ActionDeps {
@@ -83,10 +90,26 @@ const actionRowSchema = z.object({
   response_fields: dataActionResponseFieldsSchema,
   requires_confirmation: z.boolean(),
   timeout_ms: z.number(),
+  // absent before migration 0039
+  mcp_tool_name: z.string().nullish(),
 });
 
-const ACTION_COLUMNS =
+const ACTION_COLUMNS_0035 =
   'id, org_id, connection_id, name, label, description, kind, method, path, parameters, response_fields, requires_confirmation, timeout_ms';
+const ACTION_COLUMNS = `${ACTION_COLUMNS_0035}, mcp_tool_name`;
+
+/**
+ * Run an action query with the current column list; before migration 0039
+ * (mcp_tool_name missing) run it again with the 0035 columns. Without this a
+ * worker deployed ahead of the migration would lose ALL data actions.
+ */
+async function withActionColumns<T extends { error: unknown }>(
+  run: (columns: string) => PromiseLike<T>
+): Promise<T> {
+  const result = await run(ACTION_COLUMNS);
+  if (result.error && isMissingColumnError(result.error)) return run(ACTION_COLUMNS_0035);
+  return result;
+}
 
 function toLoadedAction(row: unknown): LoadedAction | null {
   const parsed = actionRowSchema.safeParse(row);
@@ -106,6 +129,7 @@ function toLoadedAction(row: unknown): LoadedAction | null {
     responseFields: a.response_fields,
     requiresConfirmation: a.requires_confirmation,
     timeoutMs: a.timeout_ms,
+    mcpToolName: a.mcp_tool_name ?? null,
   };
 }
 
@@ -131,13 +155,15 @@ export async function loadAgentActions(
   const ids = ((links ?? []) as { data_action_id: string }[]).map((l) => l.data_action_id);
   if (ids.length === 0) return [];
 
-  const { data: rows, error } = await supabase
-    .from('data_actions')
-    .select(ACTION_COLUMNS)
-    .eq('org_id', orgId)
-    .eq('is_active', true)
-    .in('id', ids)
-    .order('created_at', { ascending: true });
+  const { data: rows, error } = await withActionColumns((columns) =>
+    supabase
+      .from('data_actions')
+      .select(columns)
+      .eq('org_id', orgId)
+      .eq('is_active', true)
+      .in('id', ids)
+      .order('created_at', { ascending: true })
+  );
   if (error) throw error;
   const actions = ((rows ?? []) as unknown[])
     .map(toLoadedAction)
@@ -160,17 +186,19 @@ async function loadActionById(
   orgId: string,
   actionId: string
 ): Promise<{ action: LoadedAction | null; isActive: boolean }> {
-  const { data, error } = await supabase
-    .from('data_actions')
-    .select(`${ACTION_COLUMNS}, is_active`)
-    .eq('org_id', orgId)
-    .eq('id', actionId)
-    .maybeSingle();
+  const { data, error } = await withActionColumns((columns) =>
+    supabase
+      .from('data_actions')
+      .select(`${columns}, is_active`)
+      .eq('org_id', orgId)
+      .eq('id', actionId)
+      .maybeSingle()
+  );
   if (error) throw error;
   if (!data) return { action: null, isActive: false };
   return {
     action: toLoadedAction(data),
-    isActive: (data as { is_active?: boolean }).is_active === true,
+    isActive: (data as unknown as { is_active?: boolean }).is_active === true,
   };
 }
 
@@ -265,6 +293,21 @@ export async function performActionCall(
   if (!config.success) return failure('config_invalid');
   const secrets = await decryptConnectionSecrets(config.data, deps.masterKey);
   if (!secrets) return failure('config_invalid');
+
+  // Phase 14a: an imported MCP tool — same run, a tools/call instead of an HTTP
+  // request. base_url is the server's endpoint; requests are not signed (the
+  // signature scheme belongs to the HTTP contract of Phase 13).
+  const mcpToolName = action.mcpToolName;
+  if (mcpToolName !== null) {
+    return performMcpCall(
+      deps,
+      { ...action, mcpToolName },
+      connection.base_url,
+      secrets.auth,
+      values,
+      runId
+    );
+  }
 
   let request;
   try {

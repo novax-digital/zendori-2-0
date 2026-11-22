@@ -32,6 +32,12 @@ import {
   type IntegrationEventJob,
 } from './actions/events.js';
 import {
+  MCP_SYNC_QUEUE,
+  MCP_SYNC_RETRY_LIMIT,
+  requestStaleMcpSyncs,
+  type McpSyncJob,
+} from './actions/mcp-sync.js';
+import {
   MEMBER_NOTIFY_QUEUE,
   MEMBER_NOTIFY_RETRY_LIMIT,
   pruneMemberNotifications,
@@ -49,6 +55,7 @@ const POST_CALL_BATCH = 10;
 const FORM_NOTIFY_BATCH = 20;
 const LEARN_BATCH = 10;
 const ACTION_RUN_BATCH = 20;
+const MCP_SYNC_BATCH = 10;
 /** The stale-run sweep is a write — once a minute is plenty. */
 const STALE_RUN_SWEEP_MS = 60_000;
 const INTEGRATION_EVENT_BATCH = 20;
@@ -115,6 +122,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueuePendingFormNotifications(boss, supabase);
       await enqueueLearningCandidates(boss, supabase);
       await enqueueQueuedActionRuns(boss, supabase);
+      await enqueueRequestedMcpSyncs(boss, supabase);
       if (Date.now() - lastStaleRunSweep >= STALE_RUN_SWEEP_MS) {
         lastStaleRunSweep = Date.now();
         await failStaleRuns(supabase);
@@ -126,6 +134,9 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
         await pruneIntegrationEvents(supabase);
         await pruneApiIdempotencyKeys(supabase);
         await pruneMemberNotifications(supabase);
+        // Phase 14a: re-read MCP tool lists that are older than a day, so a
+        // changed tool is noticed without anyone opening the settings page.
+        await requestStaleMcpSyncs(supabase);
       }
       // 0018 v1.5: internally rate-limited to one sweep per minute.
       await remindOverdueHandoffs(supabase, logger);
@@ -321,6 +332,36 @@ async function enqueueQueuedActionRuns(boss: PgBoss, supabase: SupabaseClient): 
     await boss.send(ACTION_RUN_QUEUE, { runId: row.id } satisfies ActionRunJob, {
       singletonKey: row.id,
       retryLimit: ACTION_RUN_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue MCP connections whose tool list was requested (Phase 14a). The job
+ * claims the connection itself, so sending it again while a read is running is
+ * harmless. Silent before migration 0039 (missing columns).
+ */
+async function enqueueRequestedMcpSyncs(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('api_connections')
+    .select('id')
+    .eq('kind', 'mcp')
+    .not('mcp_sync_requested_at', 'is', null)
+    .order('mcp_sync_requested_at', { ascending: true })
+    .limit(MCP_SYNC_BATCH);
+  if (error) {
+    const code = (error as { code?: string }).code;
+    // 42703 / PGRST204: the 0039 columns are not there yet
+    if (isMissingTable(error as { code?: string }) || code === '42703' || code === 'PGRST204') {
+      return;
+    }
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(MCP_SYNC_QUEUE, { connectionId: row.id } satisfies McpSyncJob, {
+      singletonKey: row.id,
+      retryLimit: MCP_SYNC_RETRY_LIMIT,
     });
   }
 }

@@ -14,6 +14,7 @@ import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import SettingsFrame from '@/components/SettingsTabs';
 import ApiAuthFields from '@/components/api-integration/ApiAuthFields';
+import ConnectionKindFields from '@/components/api-integration/ConnectionKindFields';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -129,17 +130,29 @@ export default async function IntegrationsPage({
 
   // Phase 13: the org's own end systems. Before migration 0035 the table is
   // missing — the section then explains itself instead of failing the page.
-  const apiRes = await supabase
+  // Phase 14a: `kind` (REST | MCP) exists from migration 0039 on. The select
+  // with it is tried first; when it fails the Phase-13 columns are read and MCP
+  // connections are simply not offered yet.
+  const apiWithKind = await supabase
     .from('api_connections')
-    .select('id, name, base_url, is_active')
+    .select('id, name, base_url, is_active, kind')
     .eq('org_id', orgId)
     .order('created_at', { ascending: true });
+  const mcpAvailable = !apiWithKind.error;
+  const apiRes = mcpAvailable
+    ? apiWithKind
+    : await supabase
+        .from('api_connections')
+        .select('id, name, base_url, is_active')
+        .eq('org_id', orgId)
+        .order('created_at', { ascending: true });
   const apiAvailable = !apiRes.error || !isMissingRelationError(apiRes.error);
   const apiConnections = (apiRes.data ?? []) as {
     id: string;
     name: string;
     base_url: string;
     is_active: boolean;
+    kind?: string;
   }[];
   const actionCounts = new Map<string, number>();
   if (apiConnections.length > 0) {
@@ -258,7 +271,11 @@ export default async function IntegrationsPage({
 
           <Section
             title="Eigene Endsysteme (API)"
-            help="Verbinde eigene Systeme wie Shop, ERP oder Terminbuchung. KI-Agenten rufen sie über Aktionen auf, Zendori meldet Ereignisse dorthin und dein System kann Änderungen zurückmelden."
+            help={
+              mcpAvailable
+                ? 'Verbinde eigene Systeme wie Shop, ERP oder Terminbuchung — als REST-API, deren Aufrufe du selbst beschreibst, oder als MCP-Server, dessen Werkzeuge du importierst. KI-Agenten nutzen sie über Aktionen; bei einer REST-API meldet Zendori außerdem Ereignisse dorthin und dein System kann Änderungen zurückmelden.'
+                : 'Verbinde eigene Systeme wie Shop, ERP oder Terminbuchung. KI-Agenten rufen sie über Aktionen auf, Zendori meldet Ereignisse dorthin und dein System kann Änderungen zurückmelden.'
+            }
             actions={
               apiAvailable ? (
                 <Button href={apiNewHref} size="sm" icon="plus" scroll={false}>
@@ -282,6 +299,7 @@ export default async function IntegrationsPage({
                   <thead>
                     <tr>
                       <th>Verbindung</th>
+                      <th>Art</th>
                       <th>Aktionen</th>
                       <th>Status</th>
                     </tr>
@@ -297,6 +315,7 @@ export default async function IntegrationsPage({
                           </div>
                           <div className="cell-sub mono">{connection.base_url}</div>
                         </td>
+                        <td>{connection.kind === 'mcp' ? 'MCP-Server' : 'REST-API'}</td>
                         <td>{actionCounts.get(connection.id) ?? 0}</td>
                         <td>
                           {connection.is_active ? (
@@ -573,20 +592,7 @@ export default async function IntegrationsPage({
                   placeholder="z. B. Shop-System"
                 />
               </Field>
-              <Field
-                label="Basis-URL"
-                htmlFor="api-new-url"
-                help="Adresse der API ohne einzelne Endpunkte, nur https. Die Pfade legst du pro Aktion fest."
-              >
-                <input
-                  id="api-new-url"
-                  name="baseUrl"
-                  type="url"
-                  required
-                  maxLength={500}
-                  placeholder="https://api.example.com/v1"
-                />
-              </Field>
+              <ConnectionKindFields idPrefix="api-new" mcpAvailable={mcpAvailable} />
               <ApiAuthFields idPrefix="api-new" />
             </form>
           </Drawer>

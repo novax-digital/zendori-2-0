@@ -17,6 +17,10 @@ Drei Richtungen, die zusammen den Abgleich in beide Richtungen ergeben:
 HubSpot (`integrations`) bleibt unberührt. Alles Neue liegt in eigenen Tabellen und erscheint unter
 Einstellungen → Integrationen → „Eigene Endsysteme (API)“.
 
+Seit Phase 14a kann eine Verbindung statt einer REST-API auch ein **MCP-Server** sein; dessen
+Werkzeuge werden als Aktionen importiert und laufen über dieselbe Ausführung. Siehe
+`docs/phase-14-mcp.md`.
+
 ## Begriffe
 
 - **Verbindung** (`api_connections`): ein Endsystem — Basis-URL (nur https), Anmeldung

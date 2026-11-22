@@ -1,0 +1,19 @@
+{
+  "name": "@zendori/mcp-interop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Interop test of the hand-written MCP client (@zendori/integrations) against a real server built with the official MCP SDK. A package of its own on purpose: nothing depends on it, so the SDK and its server dependencies (Express, Hono, …) are never installed into the worker image.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/node": "^22.15.0",
+    "@zendori/core": "workspace:*",
+    "@zendori/integrations": "workspace:*",
+    "vitest": "^3.2.7",
+    "zod": "^4.4.3"
+  }
+}

@@ -10,22 +10,36 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import {
+  MCP_ACTION_METHOD,
+  MCP_ACTION_PATH,
+  MCP_ACTION_TIMEOUT_DEFAULT_MS,
   apiBaseUrlSchema,
   apiConnectionConfigSchema,
+  apiConnectionKindSchema,
   apiEventUrlSchema,
   integrationEventTypesSchema,
   checkDataActionDefinition,
   coerceActionValues,
   dataActionDefinitionSchema,
   dataActionParametersSchema,
+  draftActionFromMcpTool,
   encryptSecret,
   generateApiKey,
+  isMcpParameterList,
+  isMissingColumnError,
+  mcpCatalogSchema,
+  mcpEndpointUrlSchema,
+  mergeReimportedParameters,
   type ApiConnectionAuth,
   type ApiConnectionConfig,
+  type ApiConnectionKind,
   type DataActionDefinitionIssue,
+  type McpCatalogTool,
 } from '@zendori/core';
 import { generateSigningSecret } from '@zendori/integrations';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { MCP_IMPORT_ISSUE_LABELS } from '@/lib/api-integration/labels';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { href } from '@/lib/href';
 
 const LIST_PATH = '/settings/integrations';
@@ -76,7 +90,8 @@ async function requireOwner(org: string): Promise<void> {
 const connectionFieldsSchema = z.object({
   org: z.uuid(),
   name: z.string().min(2).max(80),
-  baseUrl: apiBaseUrlSchema,
+  // validated per connection kind (parseEndpointUrl)
+  baseUrl: z.string().min(1).max(500),
   authKind: z.enum(['none', 'bearer', 'header', 'basic']),
   headerName: z.string().max(64),
   username: z.string().max(200),
@@ -98,6 +113,35 @@ function parseConnectionFields(formData: FormData) {
 
 const CONNECTION_FIELDS_ERROR =
   'Bitte Name (2–80 Zeichen) und eine Basis-URL mit https:// angeben (ohne Zugangsdaten, ohne „?“).';
+const MCP_FIELDS_ERROR =
+  'Bitte Name (2–80 Zeichen) und die Adresse des MCP-Servers mit https:// angeben (ohne Zugangsdaten, ohne „?“).';
+const MCP_NOT_AVAILABLE =
+  'MCP-Verbindungen sind noch nicht freigeschaltet (Datenbank-Migration 0039 steht aus).';
+
+function fieldsError(kind: ApiConnectionKind): string {
+  return kind === 'mcp' ? MCP_FIELDS_ERROR : CONNECTION_FIELDS_ERROR;
+}
+
+/**
+ * The address of an end system. REST: a base URL (trailing slash removed, the
+ * paths come from the actions). MCP: the server's endpoint exactly as typed.
+ */
+function parseEndpointUrl(kind: ApiConnectionKind, raw: string): string | null {
+  const parsed = (kind === 'mcp' ? mcpEndpointUrlSchema : apiBaseUrlSchema).safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** The kind of a stored connection; before migration 0039 everything is 'http'. */
+async function loadConnectionKind(org: string, connectionId: string): Promise<ApiConnectionKind> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('api_connections')
+    .select('kind')
+    .eq('org_id', org)
+    .eq('id', connectionId)
+    .maybeSingle();
+  return (data as { kind?: string } | null)?.kind === 'mcp' ? 'mcp' : 'http';
+}
 
 /**
  * Build the auth part of the config. `existing` lets an update keep the stored
@@ -149,13 +193,20 @@ async function buildAuth(
 
 export async function createApiConnection(formData: FormData): Promise<void> {
   const org = textField(formData.get('org'));
+  const kindParsed = apiConnectionKindSchema.safeParse(textField(formData.get('kind')) || 'http');
+  const kind: ApiConnectionKind = kindParsed.success ? kindParsed.data : 'http';
   const parsed = parseConnectionFields(formData);
-  if (!parsed.success) redirect(listUrl(org, { panel: 'api-new', error: CONNECTION_FIELDS_ERROR }));
+  const baseUrl = parsed.success ? parseEndpointUrl(kind, parsed.data.baseUrl) : null;
+  if (!parsed.success || !baseUrl) {
+    redirect(listUrl(org, { panel: 'api-new', error: fieldsError(kind) }));
+  }
   const fields = parsed.data;
   await requireOwner(fields.org);
 
   const masterKey = process.env.MASTER_ENCRYPTION_KEY;
-  if (!masterKey) {
+  // REST connections always get a signing secret; an MCP connection only needs
+  // the key when it has credentials (buildAuth reports that itself)
+  if (!masterKey && kind === 'http') {
     redirect(
       listUrl(fields.org, {
         panel: 'api-new',
@@ -166,31 +217,53 @@ export async function createApiConnection(formData: FormData): Promise<void> {
   const auth = await buildAuth(fields, masterKey, null);
   if ('error' in auth) redirect(listUrl(fields.org, { panel: 'api-new', error: auth.error }));
 
-  // Every connection gets a signing secret from the start: requests are signed
-  // by default, verifying them is the end system's choice.
-  const config: ApiConnectionConfig = {
-    auth: auth.auth,
-    signing_secret_encrypted: await encryptSecret(generateSigningSecret(), masterKey),
-  };
+  // Every REST connection gets a signing secret from the start: requests are
+  // signed by default, verifying them is the end system's choice. MCP requests
+  // are not signed — the signature belongs to the HTTP contract of Phase 13.
+  const config: ApiConnectionConfig =
+    kind === 'http' && masterKey
+      ? {
+          auth: auth.auth,
+          signing_secret_encrypted: await encryptSecret(generateSigningSecret(), masterKey),
+        }
+      : { auth: auth.auth };
 
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from('api_connections')
-    .insert({ org_id: fields.org, name: fields.name, base_url: fields.baseUrl, config })
+    .insert({
+      org_id: fields.org,
+      name: fields.name,
+      base_url: baseUrl,
+      config,
+      // the 0039 columns are only sent for an MCP connection, so REST
+      // connections keep working before the migration; the first read of the
+      // tool list starts right away (the worker picks the request up)
+      ...(kind === 'mcp' ? { kind: 'mcp', mcp_sync_requested_at: new Date().toISOString() } : {}),
+    })
     .select('id')
     .maybeSingle();
   if (error || !data) {
     redirect(
       listUrl(fields.org, {
         panel: 'api-new',
-        error: 'Verbindung konnte nicht gespeichert werden.',
+        error:
+          kind === 'mcp' && error && isMissingColumnError(error)
+            ? MCP_NOT_AVAILABLE
+            : 'Verbindung konnte nicht gespeichert werden.',
       })
     );
   }
 
   revalidatePath(LIST_PATH);
+  const id = (data as { id: string }).id;
   redirect(
-    connectionUrl(fields.org, (data as { id: string }).id, { notice: 'Verbindung angelegt.' })
+    kind === 'mcp'
+      ? connectionUrl(fields.org, id, {
+          tab: 'actions',
+          notice: 'Verbindung angelegt. Die Werkzeugliste des Servers wird geladen.',
+        })
+      : connectionUrl(fields.org, id, { notice: 'Verbindung angelegt.' })
   );
 }
 
@@ -223,6 +296,10 @@ export async function updateApiConnection(formData: FormData): Promise<void> {
 
   const existing = await loadConnectionConfig(fields.org, connectionId);
   if (!existing) redirect(listUrl(fields.org, { error: 'Verbindung nicht gefunden.' }));
+  // the kind is fixed at creation — never taken from the form
+  const kind = await loadConnectionKind(fields.org, connectionId);
+  const baseUrl = parseEndpointUrl(kind, fields.baseUrl);
+  if (!baseUrl) redirect(connectionUrl(fields.org, connectionId, { error: fieldsError(kind) }));
 
   const auth = await buildAuth(fields, process.env.MASTER_ENCRYPTION_KEY, existing.auth);
   if ('error' in auth) redirect(connectionUrl(fields.org, connectionId, { error: auth.error }));
@@ -233,10 +310,12 @@ export async function updateApiConnection(formData: FormData): Promise<void> {
     .from('api_connections')
     .update({
       name: fields.name,
-      base_url: fields.baseUrl,
+      base_url: baseUrl,
       config,
       is_active: formData.get('isActive') != null,
       updated_at: new Date().toISOString(),
+      // address or credentials may have changed: read the tool list again
+      ...(kind === 'mcp' ? { mcp_sync_requested_at: new Date().toISOString() } : {}),
     })
     .eq('org_id', fields.org)
     .eq('id', connectionId)
@@ -251,7 +330,14 @@ export async function updateApiConnection(formData: FormData): Promise<void> {
 
   revalidatePath(LIST_PATH);
   revalidatePath(`${LIST_PATH}/api/${connectionId}`);
-  redirect(connectionUrl(fields.org, connectionId, { notice: 'Verbindung gespeichert.' }));
+  redirect(
+    connectionUrl(fields.org, connectionId, {
+      notice:
+        kind === 'mcp'
+          ? 'Verbindung gespeichert. Die Werkzeugliste wird neu geladen.'
+          : 'Verbindung gespeichert.',
+    })
+  );
 }
 
 const connectionRefSchema = z.object({ org: z.uuid(), connectionId: z.uuid() });
@@ -536,14 +622,36 @@ export async function saveDataAction(formData: FormData): Promise<void> {
   const backId = actionId ?? 'new';
   await requireOwner(org);
 
+  const supabase = await createSupabaseServerClient();
+  // Phase 14a: an imported MCP tool has no method/path of its own — whether the
+  // action is one comes from the stored row, never from the form. The select
+  // fails before migration 0039 (no column) and then means "not an MCP action".
+  let isMcpAction = false;
+  if (actionId) {
+    const { data: stored } = await supabase
+      .from('data_actions')
+      .select('mcp_tool_name')
+      .eq('org_id', org)
+      .eq('id', actionId)
+      .maybeSingle();
+    isMcpAction = Boolean((stored as { mcp_tool_name?: string | null } | null)?.mcp_tool_name);
+  } else if ((await loadConnectionKind(org, connectionId)) === 'mcp') {
+    redirect(
+      connectionUrl(org, connectionId, {
+        tab: 'actions',
+        error: 'Aktionen einer MCP-Verbindung entstehen durch den Import eines Werkzeugs.',
+      })
+    );
+  }
+
   const kind = textField(formData.get('kind'));
   const parsed = dataActionDefinitionSchema.safeParse({
     name: textField(formData.get('name')),
     label: textField(formData.get('label')),
     description: textField(formData.get('description')),
     kind,
-    method: textField(formData.get('method')),
-    path: textField(formData.get('path')),
+    method: isMcpAction ? MCP_ACTION_METHOD : textField(formData.get('method')),
+    path: isMcpAction ? MCP_ACTION_PATH : textField(formData.get('path')),
     parameters: parseJsonField(formData.get('parameters')),
     responseFields: parseResponseFields(formData.get('responseFields')),
     // only write actions can wait for a confirmation
@@ -574,6 +682,13 @@ export async function saveDataAction(formData: FormData): Promise<void> {
   const issue = checkDataActionDefinition(def);
   if (issue)
     redirect(actionUrl(org, connectionId, backId, { error: DEFINITION_ISSUE_TEXT[issue] }));
+  if (isMcpAction && !isMcpParameterList(def.parameters)) {
+    redirect(
+      actionUrl(org, connectionId, backId, {
+        error: 'Die Parameter eines MCP-Werkzeugs sind immer Argumente des Aufrufs.',
+      })
+    );
+  }
 
   const row = {
     name: def.name,
@@ -590,7 +705,6 @@ export async function saveDataAction(formData: FormData): Promise<void> {
     updated_at: new Date().toISOString(),
   };
 
-  const supabase = await createSupabaseServerClient();
   let savedId = actionId;
   let dbError: { code?: string } | null = null;
   if (actionId) {
@@ -735,4 +849,319 @@ export async function getActionRun(org: string, runId: string): Promise<ActionRu
     errorCode: row.error_code,
     result: row.result,
   };
+}
+
+// --- MCP connections (Phase 14a) -----------------------------------------------------
+// The web app never talks to a customer's MCP server. It asks for a read of the
+// tool list (a timestamp the worker picks up) and works with the snapshot the
+// worker stored in api_connections.mcp_catalog.
+
+const toolsTab = { tab: 'actions' } as const;
+
+/** Ask the worker to read the server's tool list again. */
+export async function requestMcpSync(formData: FormData): Promise<void> {
+  const parsed = connectionRefSchema.safeParse({
+    org: formData.get('org'),
+    connectionId: formData.get('connectionId'),
+  });
+  if (!parsed.success)
+    redirect(listUrl(textField(formData.get('org')), { error: 'Verbindung nicht gefunden.' }));
+  const { org, connectionId } = parsed.data;
+  await requireOwner(org);
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+  if (!(await checkRateLimit('mcp-sync-user', user.id))) {
+    redirect(
+      connectionUrl(org, connectionId, {
+        ...toolsTab,
+        error: 'Zu viele Aktualisierungen — bitte in ein paar Minuten erneut.',
+      })
+    );
+  }
+
+  const { data, error } = await supabase
+    .from('api_connections')
+    .update({ mcp_sync_requested_at: new Date().toISOString() })
+    .eq('org_id', org)
+    .eq('id', connectionId)
+    .eq('kind', 'mcp')
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(
+      connectionUrl(org, connectionId, {
+        ...toolsTab,
+        error: 'Die Werkzeugliste konnte nicht angefordert werden.',
+      })
+    );
+  }
+  revalidatePath(`${LIST_PATH}/api/${connectionId}`);
+  // no notice: the page shows the running read and refreshes itself
+  redirect(connectionUrl(org, connectionId, toolsTab));
+}
+
+export interface McpSyncState {
+  /** A read is requested or running. */
+  pending: boolean;
+  syncedAt: string | null;
+  error: string | null;
+}
+
+/** Poll target while a read of the tool list is running (RLS: owner/admin only). */
+export async function getMcpSyncState(
+  org: string,
+  connectionId: string
+): Promise<McpSyncState | null> {
+  if (!z.uuid().safeParse(org).success || !z.uuid().safeParse(connectionId).success) return null;
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('api_connections')
+    .select('mcp_sync_requested_at, mcp_synced_at, mcp_sync_error')
+    .eq('org_id', org)
+    .eq('id', connectionId)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as {
+    mcp_sync_requested_at: string | null;
+    mcp_synced_at: string | null;
+    mcp_sync_error: string | null;
+  };
+  return {
+    pending: row.mcp_sync_requested_at !== null,
+    syncedAt: row.mcp_synced_at,
+    error: row.mcp_sync_error,
+  };
+}
+
+/** One tool from the stored snapshot of an MCP connection, or null. */
+async function loadCatalogTool(
+  org: string,
+  connectionId: string,
+  toolName: string
+): Promise<McpCatalogTool | null> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('api_connections')
+    .select('kind, mcp_catalog')
+    .eq('org_id', org)
+    .eq('id', connectionId)
+    .maybeSingle();
+  const row = data as { kind?: string; mcp_catalog?: unknown } | null;
+  if (!row || row.kind !== 'mcp') return null;
+  const catalog = mcpCatalogSchema.safeParse(row.mcp_catalog ?? null);
+  if (!catalog.success) return null;
+  return catalog.data.tools.find((tool) => tool.name === toolName) ?? null;
+}
+
+/**
+ * Import one tool of the server as a data action. The action is a SNAPSHOT:
+ * name, description and parameters are copied and belong to the owner from
+ * here on — the agent never sees the server's live definition. Cautious
+ * defaults (write + confirmation unless the server marks the tool read-only);
+ * the owner reviews them in the editor the import redirects to.
+ */
+export async function importMcpTool(formData: FormData): Promise<void> {
+  const parsed = z
+    .object({ org: z.uuid(), connectionId: z.uuid(), tool: z.string().min(1).max(200) })
+    .safeParse({
+      org: formData.get('org'),
+      connectionId: formData.get('connectionId'),
+      tool: formData.get('tool'),
+    });
+  if (!parsed.success)
+    redirect(listUrl(textField(formData.get('org')), { error: 'Werkzeug nicht gefunden.' }));
+  const { org, connectionId } = parsed.data;
+  await requireOwner(org);
+
+  const tool = await loadCatalogTool(org, connectionId, parsed.data.tool);
+  if (!tool) {
+    redirect(
+      connectionUrl(org, connectionId, {
+        ...toolsTab,
+        error:
+          'Das Werkzeug steht nicht (mehr) in der Werkzeugliste. Bitte die Liste aktualisieren.',
+      })
+    );
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data: existingRows } = await supabase
+    .from('data_actions')
+    .select('id, name, connection_id, mcp_tool_name')
+    .eq('org_id', org);
+  const existing = (existingRows ?? []) as {
+    id: string;
+    name: string;
+    connection_id: string;
+    mcp_tool_name: string | null;
+  }[];
+  const already = existing.find(
+    (row) => row.connection_id === connectionId && row.mcp_tool_name === tool.name
+  );
+  if (already) {
+    redirect(
+      actionUrl(org, connectionId, already.id, {
+        notice: 'Dieses Werkzeug ist bereits importiert.',
+      })
+    );
+  }
+
+  const drafted = draftActionFromMcpTool(
+    tool,
+    existing.map((row) => row.name)
+  );
+  if (!drafted.ok) {
+    redirect(
+      connectionUrl(org, connectionId, {
+        ...toolsTab,
+        error: `„${tool.name}“ kann nicht importiert werden: ${MCP_IMPORT_ISSUE_LABELS[drafted.issue]}`,
+      })
+    );
+  }
+  const draft = drafted.draft;
+
+  const { data, error } = await supabase
+    .from('data_actions')
+    .insert({
+      org_id: org,
+      connection_id: connectionId,
+      name: draft.name,
+      label: draft.label,
+      description: draft.description,
+      kind: draft.kind,
+      method: MCP_ACTION_METHOD,
+      path: MCP_ACTION_PATH,
+      parameters: draft.parameters,
+      response_fields: [],
+      requires_confirmation: draft.requiresConfirmation,
+      timeout_ms: MCP_ACTION_TIMEOUT_DEFAULT_MS,
+      is_active: true,
+      mcp_tool_name: tool.name,
+      mcp_tool_hash: tool.hash,
+    })
+    .select('id')
+    .maybeSingle();
+  if (error || !data) {
+    redirect(
+      connectionUrl(org, connectionId, {
+        ...toolsTab,
+        error: 'Das Werkzeug konnte nicht importiert werden.',
+      })
+    );
+  }
+
+  revalidatePath(`${LIST_PATH}/api/${connectionId}`);
+  revalidatePath('/settings/agents');
+  const dropped =
+    draft.dropped.length > 0
+      ? ` Nicht übernommen (optionale Argumente, die Aktionen nicht abbilden): ${draft.dropped
+          .slice(0, 6)
+          .join(', ')}${draft.dropped.length > 6 ? ' …' : ''}.`
+      : '';
+  redirect(
+    actionUrl(org, connectionId, (data as { id: string }).id, {
+      notice: `Werkzeug importiert. Bitte Beschreibung, Art und Parameter prüfen und die Aktion danach am Agenten freigeben.${dropped}`,
+    })
+  );
+}
+
+/**
+ * Decide about a tool the server changed after the import:
+ *   · reimport     take the server's current description and arguments (the
+ *                  owner's bindings — context values, fixed values, names —
+ *                  are kept per argument)
+ *   · acknowledge  keep the imported definition and stop flagging this change
+ */
+export async function resolveMcpDrift(formData: FormData): Promise<void> {
+  const parsed = z
+    .object({
+      org: z.uuid(),
+      connectionId: z.uuid(),
+      actionId: z.uuid(),
+      mode: z.enum(['reimport', 'acknowledge']),
+    })
+    .safeParse({
+      org: formData.get('org'),
+      connectionId: formData.get('connectionId'),
+      actionId: formData.get('actionId'),
+      mode: formData.get('mode'),
+    });
+  if (!parsed.success)
+    redirect(listUrl(textField(formData.get('org')), { error: 'Aktion nicht gefunden.' }));
+  const { org, connectionId, actionId, mode } = parsed.data;
+  await requireOwner(org);
+
+  const supabase = await createSupabaseServerClient();
+  const { data: actionRow } = await supabase
+    .from('data_actions')
+    .select('id, mcp_tool_name, parameters')
+    .eq('org_id', org)
+    .eq('connection_id', connectionId)
+    .eq('id', actionId)
+    .maybeSingle();
+  const action = actionRow as {
+    id: string;
+    mcp_tool_name: string | null;
+    parameters: unknown;
+  } | null;
+  if (!action?.mcp_tool_name) {
+    redirect(actionUrl(org, connectionId, actionId, { error: 'Aktion nicht gefunden.' }));
+  }
+
+  const tool = await loadCatalogTool(org, connectionId, action.mcp_tool_name);
+  if (!tool) {
+    redirect(
+      actionUrl(org, connectionId, actionId, {
+        error:
+          'Der Server bietet dieses Werkzeug nicht mehr an. Aktualisiere die Werkzeugliste oder lösche die Aktion.',
+      })
+    );
+  }
+
+  let update: Record<string, unknown> = { mcp_tool_hash: tool.hash, mcp_drift: null };
+  if (mode === 'reimport') {
+    const drafted = draftActionFromMcpTool(tool, []);
+    if (!drafted.ok) {
+      redirect(
+        actionUrl(org, connectionId, actionId, {
+          error: `Die neue Fassung kann nicht übernommen werden: ${MCP_IMPORT_ISSUE_LABELS[drafted.issue]}`,
+        })
+      );
+    }
+    const previous = dataActionParametersSchema.safeParse(action.parameters);
+    update = {
+      ...update,
+      description: drafted.draft.description,
+      parameters: previous.success
+        ? mergeReimportedParameters(previous.data, drafted.draft.parameters)
+        : drafted.draft.parameters,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('data_actions')
+    .update({ ...update, updated_at: new Date().toISOString() })
+    .eq('org_id', org)
+    .eq('id', actionId)
+    .select('id');
+  if (error || !data || data.length === 0) {
+    redirect(
+      actionUrl(org, connectionId, actionId, {
+        error: 'Die Aktion konnte nicht aktualisiert werden.',
+      })
+    );
+  }
+  revalidatePath(`${LIST_PATH}/api/${connectionId}`);
+  revalidatePath('/settings/agents');
+  redirect(
+    actionUrl(org, connectionId, actionId, {
+      notice:
+        mode === 'reimport'
+          ? 'Neue Fassung des Werkzeugs übernommen. Bitte Beschreibung und Parameter prüfen.'
+          : 'Als geprüft markiert. Die Aktion nutzt weiter die hier gespeicherte Fassung.',
+    })
+  );
 }

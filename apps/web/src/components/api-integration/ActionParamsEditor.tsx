@@ -5,6 +5,10 @@
 // ("parameters"), which the server validates with dataActionParametersSchema —
 // nothing here is trusted. Type-only import from core (no value imports in
 // client components).
+//
+// mode="mcp" (Phase 14a): the parameters are the arguments of an imported MCP
+// tool. There is no path or query — every parameter is an argument (`in: body`),
+// and the optional second name is its path inside the argument object.
 import { useState } from 'react';
 import type { DataActionParameter } from '@zendori/core';
 import Button from '@/components/ui/Button';
@@ -42,11 +46,11 @@ function toRow(param: DataActionParameter, uid: number): Row {
   };
 }
 
-function emptyRow(uid: number): Row {
+function emptyRow(uid: number, mode: 'http' | 'mcp'): Row {
   return {
     uid,
     key: '',
-    in: 'query',
+    in: mode === 'mcp' ? 'body' : 'query',
     source: 'agent',
     type: 'string',
     required: true,
@@ -88,10 +92,14 @@ function serialize(rows: Row[]): string {
 export default function ActionParamsEditor({
   initial,
   disabled = false,
+  mode = 'http',
 }: {
   initial: DataActionParameter[];
   disabled?: boolean;
+  /** 'mcp' = arguments of an imported MCP tool (no path/query). */
+  mode?: 'http' | 'mcp';
 }) {
+  const isMcp = mode === 'mcp';
   const [rows, setRows] = useState<Row[]>(() => initial.map((param, index) => toRow(param, index)));
   const [nextUid, setNextUid] = useState(initial.length);
 
@@ -102,7 +110,7 @@ export default function ActionParamsEditor({
     setRows((current) => current.filter((row) => row.uid !== uid));
   };
   const add = (): void => {
-    setRows((current) => [...current, emptyRow(nextUid)]);
+    setRows((current) => [...current, emptyRow(nextUid, mode)]);
     setNextUid((value) => value + 1);
   };
 
@@ -111,7 +119,9 @@ export default function ActionParamsEditor({
       <input type="hidden" name="parameters" value={serialize(rows)} />
       {rows.length === 0 ? (
         <p className="muted small">
-          Noch keine Parameter. Ohne Parameter ruft die Aktion immer dieselbe Adresse auf.
+          {isMcp
+            ? 'Keine Parameter: Das Werkzeug wird ohne Argumente aufgerufen.'
+            : 'Noch keine Parameter. Ohne Parameter ruft die Aktion immer dieselbe Adresse auf.'}
         </p>
       ) : null}
 
@@ -133,18 +143,20 @@ export default function ActionParamsEditor({
                   onChange={(event) => update(row.uid, { key: event.target.value })}
                 />
               </div>
-              <div className="field">
-                <label htmlFor={`${id}-in`}>Ort im Aufruf</label>
-                <select
-                  id={`${id}-in`}
-                  value={row.in}
-                  onChange={(event) => update(row.uid, { in: event.target.value as Row['in'] })}
-                >
-                  <option value="path">Pfad ({'{name}'})</option>
-                  <option value="query">Query (?name=…)</option>
-                  <option value="body">Body (JSON)</option>
-                </select>
-              </div>
+              {isMcp ? null : (
+                <div className="field">
+                  <label htmlFor={`${id}-in`}>Ort im Aufruf</label>
+                  <select
+                    id={`${id}-in`}
+                    value={row.in}
+                    onChange={(event) => update(row.uid, { in: event.target.value as Row['in'] })}
+                  >
+                    <option value="path">Pfad ({'{name}'})</option>
+                    <option value="query">Query (?name=…)</option>
+                    <option value="body">Body (JSON)</option>
+                  </select>
+                </div>
+              )}
               <div className="field">
                 <label htmlFor={`${id}-source`}>Woher kommt der Wert?</label>
                 <select
@@ -273,13 +285,19 @@ export default function ActionParamsEditor({
                     <input
                       type="text"
                       className="mono param-field-name"
-                      aria-label="Abweichender Name im Aufruf (optional)"
+                      aria-label={
+                        isMcp
+                          ? 'Name des Arguments im Werkzeug, falls er vom Namen oben abweicht'
+                          : 'Abweichender Name im Aufruf (optional)'
+                      }
                       value={row.field}
                       maxLength={120}
                       placeholder={
-                        row.in === 'body'
-                          ? 'Name im Body, z. B. customer.email'
-                          : 'Name in der Query'
+                        isMcp
+                          ? 'Argument im Werkzeug, z. B. customer.email'
+                          : row.in === 'body'
+                            ? 'Name im Body, z. B. customer.email'
+                            : 'Name in der Query'
                       }
                       onChange={(event) => update(row.uid, { field: event.target.value })}
                     />
