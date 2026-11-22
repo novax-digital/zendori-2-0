@@ -13,11 +13,14 @@ type Kind = 'http' | 'mcp';
 export default function ConnectionKindFields({
   idPrefix,
   mcpAvailable,
+  defaultKind = 'http',
 }: {
   idPrefix: string;
   mcpAvailable: boolean;
+  /** Preselected kind (the "MCP-Server verbinden" button opens the drawer with 'mcp'). */
+  defaultKind?: Kind;
 }) {
-  const [kind, setKind] = useState<Kind>('http');
+  const [kind, setKind] = useState<Kind>(mcpAvailable ? defaultKind : 'http');
   const isMcp = kind === 'mcp';
 
   return (

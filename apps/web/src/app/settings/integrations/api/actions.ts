@@ -50,7 +50,7 @@ function textField(value: FormDataEntryValue | null): string {
 
 type Message = { error?: string; notice?: string };
 
-function listUrl(org: string, message?: Message & { panel?: string }): string {
+function listUrl(org: string, message?: Message & { panel?: string; kind?: string }): string {
   return href(LIST_PATH, { org, ...message });
 }
 
@@ -195,10 +195,12 @@ export async function createApiConnection(formData: FormData): Promise<void> {
   const org = textField(formData.get('org'));
   const kindParsed = apiConnectionKindSchema.safeParse(textField(formData.get('kind')) || 'http');
   const kind: ApiConnectionKind = kindParsed.success ? kindParsed.data : 'http';
+  // the drawer re-opens with the same kind when the form has an error
+  const drawerKind = kind === 'mcp' ? 'mcp' : undefined;
   const parsed = parseConnectionFields(formData);
   const baseUrl = parsed.success ? parseEndpointUrl(kind, parsed.data.baseUrl) : null;
   if (!parsed.success || !baseUrl) {
-    redirect(listUrl(org, { panel: 'api-new', error: fieldsError(kind) }));
+    redirect(listUrl(org, { panel: 'api-new', kind: drawerKind, error: fieldsError(kind) }));
   }
   const fields = parsed.data;
   await requireOwner(fields.org);
@@ -210,12 +212,14 @@ export async function createApiConnection(formData: FormData): Promise<void> {
     redirect(
       listUrl(fields.org, {
         panel: 'api-new',
+        kind: drawerKind,
         error: 'Serverseitiger Verschlüsselungsschlüssel fehlt — bitte Administrator kontaktieren.',
       })
     );
   }
   const auth = await buildAuth(fields, masterKey, null);
-  if ('error' in auth) redirect(listUrl(fields.org, { panel: 'api-new', error: auth.error }));
+  if ('error' in auth)
+    redirect(listUrl(fields.org, { panel: 'api-new', kind: drawerKind, error: auth.error }));
 
   // Every REST connection gets a signing secret from the start: requests are
   // signed by default, verifying them is the end system's choice. MCP requests
@@ -247,6 +251,7 @@ export async function createApiConnection(formData: FormData): Promise<void> {
     redirect(
       listUrl(fields.org, {
         panel: 'api-new',
+        kind: drawerKind,
         error:
           kind === 'mcp' && error && isMissingColumnError(error)
             ? MCP_NOT_AVAILABLE

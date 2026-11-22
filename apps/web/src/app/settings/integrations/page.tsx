@@ -104,9 +104,15 @@ async function loadPipelines(
 export default async function IntegrationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; error?: string; notice?: string; panel?: string }>;
+  searchParams: Promise<{
+    org?: string;
+    error?: string;
+    notice?: string;
+    panel?: string;
+    kind?: string;
+  }>;
 }) {
-  const { org, error, notice, panel } = await searchParams;
+  const { org, error, notice, panel, kind: newKind } = await searchParams;
   const { orgId, orgs, role, access } = await requireActiveOrg(org);
   if (!isAdminRole(role)) return <NoAccessPanel title="Integrationen" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
@@ -165,6 +171,7 @@ export default async function IntegrationsPage({
     }
   }
   const apiNewHref = href(PATH, { org: orgId, panel: 'api-new' });
+  const mcpNewHref = href(PATH, { org: orgId, panel: 'api-new', kind: 'mcp' });
   const apiDrawerOpen = panel === 'api-new' && apiAvailable;
 
   const channels: Channel[] = connected ? await listChannels(orgId) : [];
@@ -270,7 +277,7 @@ export default async function IntegrationsPage({
           </Section>
 
           <Section
-            title="Eigene Endsysteme (API)"
+            title={mcpAvailable ? 'Eigene Endsysteme (API und MCP)' : 'Eigene Endsysteme (API)'}
             help={
               mcpAvailable
                 ? 'Verbinde eigene Systeme wie Shop, ERP oder Terminbuchung — als REST-API, deren Aufrufe du selbst beschreibst, oder als MCP-Server, dessen Werkzeuge du importierst. KI-Agenten nutzen sie über Aktionen; bei einer REST-API meldet Zendori außerdem Ereignisse dorthin und dein System kann Änderungen zurückmelden.'
@@ -278,9 +285,16 @@ export default async function IntegrationsPage({
             }
             actions={
               apiAvailable ? (
-                <Button href={apiNewHref} size="sm" icon="plus" scroll={false}>
-                  Neue Verbindung
-                </Button>
+                <>
+                  {mcpAvailable ? (
+                    <Button href={mcpNewHref} size="sm" icon="plus" scroll={false}>
+                      MCP-Server verbinden
+                    </Button>
+                  ) : null}
+                  <Button href={apiNewHref} size="sm" icon="plus" scroll={false}>
+                    {mcpAvailable ? 'REST-API verbinden' : 'Neue Verbindung'}
+                  </Button>
+                </>
               ) : null
             }
           >
@@ -592,7 +606,13 @@ export default async function IntegrationsPage({
                   placeholder="z. B. Shop-System"
                 />
               </Field>
-              <ConnectionKindFields idPrefix="api-new" mcpAvailable={mcpAvailable} />
+              <ConnectionKindFields
+                // re-mount when the other button is used while the drawer is open
+                key={newKind === 'mcp' ? 'mcp' : 'http'}
+                idPrefix="api-new"
+                mcpAvailable={mcpAvailable}
+                defaultKind={newKind === 'mcp' ? 'mcp' : 'http'}
+              />
               <ApiAuthFields idPrefix="api-new" />
             </form>
           </Drawer>
