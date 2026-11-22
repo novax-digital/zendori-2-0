@@ -18,6 +18,9 @@
 :root {
   color-scheme: light;
 
+  /* select chevron (stroke = --text-muted); redefined in the dark block */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' stroke='%235b677a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
   /* --- surfaces & lines --- */
   --bg: #ffffff; /* app ground */
   --surface: #ffffff; /* content, drawers, fields */
@@ -116,6 +119,8 @@
    --------------------------------------------------------------------------- */
 :root[data-theme='dark'] {
   color-scheme: dark;
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' stroke='%239aa8bc' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* surfaces & lines */
   --bg: #0f1726;
@@ -712,6 +717,18 @@ select {
   height: 36px;
   padding: 0 10px;
 }
+/* own chevron instead of the native arrow: the browser's sits flush against the
+   right border; this one keeps the same inset as the text on the left */
+select:not([multiple]):not([size]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+  text-overflow: ellipsis;
+}
 select[multiple],
 select[size] {
   height: auto;
@@ -739,6 +756,13 @@ textarea:disabled {
   background: var(--surface-sunken);
   color: var(--text-muted);
   cursor: not-allowed;
+}
+/* the shorthand above resets the image — keep the chevron on disabled selects */
+select:disabled:not([multiple]):not([size]) {
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
 }
 input[type='color'] {
   padding: 0.2rem;
