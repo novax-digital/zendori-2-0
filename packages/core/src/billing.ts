@@ -18,7 +18,8 @@ export type BillingCategory =
   | 'whatsapp' // WhatsApp messages (Twilio/Meta)
   | 'email' // outbound e-mail (Resend)
   | 'numbers_mobile' // monthly rental, mobile numbers
-  | 'numbers_landline'; // monthly rental, landline numbers (local + national)
+  | 'numbers_landline' // monthly rental, landline numbers (local + national)
+  | 'data_actions'; // successful agent calls of an org's own system (Phase 13/14a)
 
 /** German labels for the customer/admin UI. */
 export const BILLING_CATEGORY_LABELS: Record<BillingCategory, string> = {
@@ -30,6 +31,7 @@ export const BILLING_CATEGORY_LABELS: Record<BillingCategory, string> = {
   email: 'E-Mail-Versand',
   numbers_mobile: 'Rufnummern (Mobil)',
   numbers_landline: 'Rufnummern (Festnetz)',
+  data_actions: 'Data Actions',
 };
 
 /** Unit shown next to the quantity per category. */
@@ -42,6 +44,7 @@ export const BILLING_CATEGORY_UNIT: Record<BillingCategory, string> = {
   email: 'E-Mails',
   numbers_mobile: 'Nummern',
   numbers_landline: 'Nummern',
+  data_actions: 'Aktionen',
 };
 
 // --- Infra rate card (USD; assumed list prices — verify per contract) --------
@@ -136,7 +139,24 @@ export const BILLING_CATEGORY_ORDER: BillingCategory[] = [
   'email',
   'numbers_mobile',
   'numbers_landline',
+  'data_actions',
 ];
+
+/**
+ * Positions without a purchase cost: a data action runs on the CUSTOMER's own
+ * system, so nothing is bought in. Without a sell price such a position is
+ * simply not charged (pass-through at cost = 0 €).
+ *
+ * What counts as one data action (migration 0040, trigger on action_runs): a
+ * run that reached the end system successfully and was started by an agent —
+ * incl. runs a team member confirmed and imported MCP tools. Test runs from the
+ * settings page, failed calls and rejected runs are not counted.
+ */
+export const NO_PURCHASE_COST_CATEGORIES: readonly BillingCategory[] = ['data_actions'];
+
+export function hasPurchaseCost(category: BillingCategory): boolean {
+  return !NO_PURCHASE_COST_CATEGORIES.includes(category);
+}
 
 /** How each position is billed — shown on the price list. */
 export const BILLING_CATEGORY_BILLING_LABEL: Record<BillingCategory, string> = {
@@ -148,6 +168,7 @@ export const BILLING_CATEGORY_BILLING_LABEL: Record<BillingCategory, string> = {
   email: 'transaktionell',
   numbers_mobile: 'monatlich',
   numbers_landline: 'monatlich',
+  data_actions: 'transaktionell',
 };
 
 /** Sell-price unit per position (what the € amount refers to). */
@@ -160,6 +181,7 @@ export const BILLING_CATEGORY_PRICE_UNIT: Record<BillingCategory, string> = {
   email: '€/E-Mail',
   numbers_mobile: '€/Nummer/Monat',
   numbers_landline: '€/Nummer/Monat',
+  data_actions: '€/Aktion',
 };
 
 /** Categories with a fixed per-unit purchase cost (rate card / configured). */
@@ -206,6 +228,7 @@ export const priceTierPricingSchema = z
     email: ruleOptional,
     numbers_mobile: ruleOptional,
     numbers_landline: ruleOptional,
+    data_actions: ruleOptional,
   })
   .partial();
 export type TierPricing = Partial<Record<BillingCategory, CategoryPricingRule>>;

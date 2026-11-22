@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BILLING_CATEGORY_BILLING_LABEL,
+  BILLING_CATEGORY_LABELS,
+  BILLING_CATEGORY_ORDER,
+  BILLING_CATEGORY_PRICE_UNIT,
+  BILLING_CATEGORY_UNIT,
   DEFAULT_PRICING,
   EMAIL_USD_PER_MESSAGE,
   NUMBER_USD_PER_MONTH,
@@ -7,6 +12,7 @@ import {
   WHATSAPP_USD_PER_MESSAGE,
   categoryPriceEur,
   emailCostUsd,
+  hasPurchaseCost,
   numberRentalCostUsd,
   packageChannelsSchema,
   packageMonthlyTotalEur,
@@ -96,6 +102,53 @@ describe('categoryPriceEur (price-list pricing)', () => {
     expect(unitCostEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1, 10);
     expect(unitCostEur('numbers_mobile', CTX)).toBe(4);
     expect(unitCostEur('numbers_landline', CTX)).toBe(2);
+  });
+});
+
+describe('data actions (billing position without a purchase cost)', () => {
+  it('is a price-list position with label, unit and billing kind', () => {
+    expect(BILLING_CATEGORY_ORDER).toContain('data_actions');
+    expect(BILLING_CATEGORY_LABELS.data_actions).toBe('Data Actions');
+    expect(BILLING_CATEGORY_UNIT.data_actions).toBe('Aktionen');
+    expect(BILLING_CATEGORY_PRICE_UNIT.data_actions).toBe('€/Aktion');
+    expect(BILLING_CATEGORY_BILLING_LABEL.data_actions).toBe('transaktionell');
+    // every position has every piece of metadata
+    for (const category of BILLING_CATEGORY_ORDER) {
+      expect(BILLING_CATEGORY_LABELS[category]).toBeTruthy();
+      expect(BILLING_CATEGORY_PRICE_UNIT[category]).toMatch(/^€\//);
+    }
+  });
+
+  it('has no purchase cost — every other position has one', () => {
+    expect(hasPurchaseCost('data_actions')).toBe(false);
+    for (const category of BILLING_CATEGORY_ORDER.filter((c) => c !== 'data_actions')) {
+      expect(hasPurchaseCost(category)).toBe(true);
+    }
+  });
+
+  it('with a price: quantity × price per action, rounded to cents', () => {
+    const rule = { mode: 'unit' as const, unitPriceEur: 0.15 };
+    expect(categoryPriceEur(0, 0, rule, CTX)).toBe(0);
+    expect(categoryPriceEur(1, 0, rule, CTX)).toBe(0.15);
+    expect(categoryPriceEur(37, 0, rule, CTX)).toBe(5.55);
+    expect(categoryPriceEur(1000, 0, { mode: 'unit', unitPriceEur: 0.0125 }, CTX)).toBe(12.5);
+  });
+
+  it('without a price it is not charged (pass-through at cost = 0 €)', () => {
+    expect(categoryPriceEur(500, 0, undefined, CTX)).toBe(0);
+  });
+
+  it('the price list schema keeps the position', () => {
+    const parsed = priceTierPricingSchema.parse({
+      data_actions: { mode: 'unit', unitPriceEur: 0.2 },
+      voice: { mode: 'unit', unitPriceEur: 0.5 },
+    });
+    expect(parsed.data_actions).toEqual({ mode: 'unit', unitPriceEur: 0.2 });
+    // a negative price is stripped like for every other position (⇒ not charged)
+    expect(
+      priceTierPricingSchema.parse({ data_actions: { mode: 'unit', unitPriceEur: -1 } })
+        .data_actions
+    ).toBeUndefined();
   });
 });
 

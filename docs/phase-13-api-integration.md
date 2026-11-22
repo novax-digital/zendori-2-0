@@ -280,7 +280,8 @@ Request-Sammler (z. B. webhook.site) oder ein eigener Test-Endpunkt.
 
 ## Offene Punkte
 
-- Aktionen werden gezählt (`action_runs`), nicht bepreist.
+- Abrechnung: seit Migration 0040 gibt es die Preislisten-Position „Data Actions“ (€/Aktion); gezählt
+  wird jede erfolgreich ausgeführte Aktion eines Agenten im Verbrauchsbuch (`docs/billing.md`).
 - Keine Listen-Endpunkte (`GET /tickets?…`) — bei Bedarf für Abgleichläufe nachziehen.
 - Nach einer bestätigten Aktion informiert der Mitarbeiter den Kunden; ein automatischer
   Folgeversand ist nicht gebaut.

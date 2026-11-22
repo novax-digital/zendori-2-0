@@ -38,6 +38,7 @@ const CATEGORY_ORDER: BillingCategory[] = [
   'email',
   'numbers_mobile',
   'numbers_landline',
+  'data_actions',
 ];
 
 // --- usage breakdown ---------------------------------------------------------
@@ -119,6 +120,9 @@ export async function getOrgBilling(
       quantity: land.quantity,
       costUsd: numberCostUsd(land.quantity, ctx.numberCostLandlineEur),
     },
+    // counted in the usage ledger by a trigger on action_runs (0040); no purchase
+    // cost — the row is absent before the migration and then simply 0
+    data_actions: { quantity: get('data_actions').quantity, costUsd: 0 },
   };
 
   const lines: BillingLineItem[] = CATEGORY_ORDER.map((category) => {

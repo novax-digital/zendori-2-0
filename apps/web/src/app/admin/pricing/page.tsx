@@ -14,6 +14,7 @@ import {
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   UNIT_PRICED_CATEGORIES,
+  hasPurchaseCost,
   packageMonthlyTotalEur,
   packageYearlyTotalEur,
   unitCostEur,
@@ -111,6 +112,8 @@ function einkaufLabel(
   ctx: PricingContext,
   avg: Partial<Record<'ai' | 'embeddings' | 'transcription', number>>
 ): string {
+  // e.g. data actions: they run on the customer's own system, nothing is bought in
+  if (!hasPurchaseCost(category)) return 'kein Einkauf';
   if (isUnitPriced(category)) return fmtUnit(unitCostEur(category, ctx));
   const value = avg[category as 'ai' | 'embeddings' | 'transcription'];
   return value !== undefined ? `Ø ${fmtUnit(value)}` : 'noch keine Daten';
@@ -121,6 +124,7 @@ function einkaufValue(
   ctx: PricingContext,
   avg: Partial<Record<'ai' | 'embeddings' | 'transcription', number>>
 ): number | null {
+  if (!hasPurchaseCost(category)) return 0;
   if (isUnitPriced(category)) return unitCostEur(category, ctx);
   return avg[category as 'ai' | 'embeddings' | 'transcription'] ?? null;
 }
@@ -216,7 +220,9 @@ export default async function AdminPricingPage({
                         ) : (
                           <span className="muted">{einkaufLabel(category, ctx, avgTokenCosts)}</span>
                         )}
-                        <span className="muted small">{unitSuffix(category)}</span>
+                        {hasPurchaseCost(category) ? (
+                          <span className="muted small">{unitSuffix(category)}</span>
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -224,11 +230,17 @@ export default async function AdminPricingPage({
               </tbody>
             </table>
           </div>
+          <p className="field-help">
+            Data Actions laufen im System des Kunden und haben deshalb keinen Einkaufspreis. Gezählt
+            wird jede Aktion, die ein KI-Agent erfolgreich ausgeführt hat — auch nach Bestätigung
+            durch einen Mitarbeiter und bei importierten MCP-Werkzeugen. Testläufe, fehlgeschlagene
+            Aufrufe und verworfene Aktionen zählen nicht.
+          </p>
         </Section>
 
         <Section
           title="Preislisten"
-          help="Freie €-Preise je Position. Ein leeres Feld gibt den Einkaufspreis weiter."
+          help="Freie €-Preise je Position. Ein leeres Feld gibt den Einkaufspreis weiter; bei Data Actions heißt das: nicht berechnet."
           actions={
             <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
               Neue Preisliste
@@ -302,7 +314,9 @@ export default async function AdminPricingPage({
                                     name={`price_${category}`}
                                     type="text"
                                     inputMode="decimal"
-                                    placeholder="Selbstkosten"
+                                    placeholder={
+                                      hasPurchaseCost(category) ? 'Selbstkosten' : 'nicht berechnet'
+                                    }
                                     defaultValue={stored ?? ''}
                                     aria-label={`Verkaufspreis ${BILLING_CATEGORY_LABELS[category]}`}
                                     // a price below our purchase cost is flagged, not blocked

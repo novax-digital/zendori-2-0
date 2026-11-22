@@ -39,6 +39,7 @@ const USAGE_LABELS: Record<string, string> = {
   whatsapp_message: 'WhatsApp',
   email: 'E-Mail',
   sip_minutes: 'SIP-Minuten',
+  data_action: 'Data Action',
   other: 'Sonstiges',
 };
 

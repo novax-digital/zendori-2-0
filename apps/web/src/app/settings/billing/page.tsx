@@ -43,6 +43,8 @@ const USAGE_EVENT_META: Record<string, { label: string; category: BillingCategor
   voice_minutes: { label: 'Telefonat', category: 'voice' },
   index_embeddings: { label: 'Wissensdatenbank-Indexierung', category: 'embeddings' },
   index_vision: { label: 'Bild-Beschreibung (Indexierung)', category: 'embeddings' },
+  // one row per successfully executed data action (0040, trigger on action_runs)
+  data_action: { label: 'Data Action', category: 'data_actions' },
 };
 
 const LOG_TOTAL = 100;
@@ -131,7 +133,7 @@ export default async function CustomerBillingPage({
       .limit(LOG_TOTAL),
     admin
       .from('usage_events')
-      .select('category, quantity, unit, cost_usd, occurred_at')
+      .select('category, quantity, unit, cost_usd, occurred_at, metadata')
       .eq('org_id', orgId)
       .gte('occurred_at', period.fromIso)
       .lt('occurred_at', period.toIso)
@@ -164,17 +166,23 @@ export default async function CustomerBillingPage({
         unit: string | null;
         cost_usd: number | null;
         occurred_at: string;
+        metadata: Record<string, unknown> | null;
       }[]
     )
       .map((r): LogRow | null => {
         const meta = USAGE_EVENT_META[r.category];
         if (!meta) return null;
         const quantity = Number(r.quantity) || 0;
+        // a data action carries the action's label (kept even if the action is deleted)
+        const actionLabel =
+          r.category === 'data_action' && typeof r.metadata?.label === 'string'
+            ? r.metadata.label
+            : null;
         return {
           when: r.occurred_at,
           label: meta.label,
           detail:
-            r.category === 'voice_minutes' ? formatQuantity(quantity, 'Minuten') : null,
+            r.category === 'voice_minutes' ? formatQuantity(quantity, 'Minuten') : actionLabel,
           priceEur: categoryPriceEur(
             // Voice is priced per minute; the index events per Vorgang.
             r.category === 'voice_minutes' ? quantity : 1,

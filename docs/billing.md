@@ -16,6 +16,7 @@ Org zuordenbar.** Zwei Sichten — Admin (alle Kunden, Kosten/Preis/Marge) und K
 | WhatsApp-Nachrichten | Twilio/Meta | **gezählt** aus `messages` × Rate |
 | E-Mail-Versand | Resend | **gezählt** aus `messages` (out) × Rate |
 | Rufnummern (Mobil/Festnetz) | Twilio/xAI Miete | **gezählt** aus `phone_numbers` (status active) je `number_type` × editierbarer Monatskosten (0023) |
+| Data Actions | System des Kunden (kein Einkauf) | **gezählt** → `usage_events` (`data_action`), ein Eintrag je erfolgreicher Aktion per Trigger auf `action_runs` (0040) |
 
 „Gemessen" = die echten Provider-Kosten (Token/Minuten) sind bekannt und gespeichert.
 „Gezählt" = pro-Stück-Preise aus der Preistabelle × gemessene Menge (kein Einzel-Event).
@@ -89,6 +90,37 @@ gezeigt.
 Verwaltung im UI: **Admin → Preise & Pakete** (eine Seite: Einkaufspreise,
 Preislisten, Pakete), **Admin → Abrechnung** (Übersicht + je Kunde Rechnung &
 Paket-Zuweisung).
+
+## Data Actions (Migration 0040)
+
+Position **„Data Actions“** auf jeder Preisliste, Einheit **€/Aktion**. Sie hat keinen
+Einkaufspreis (die Aktion läuft im System des Kunden); ohne eingetragenen Preis wird sie nicht
+berechnet.
+
+**Was als eine Data Action zählt:** ein Lauf, der das System des Kunden **erfolgreich** erreicht hat
+und von einem **KI-Agenten** ausgelöst wurde — Text und Voice, auch nach Bestätigung durch einen
+Mitarbeiter in der Inbox, auch importierte MCP-Werkzeuge (Phase 14a). **Nicht** gezählt werden
+Testläufe aus den Einstellungen, fehlgeschlagene Aufrufe (Fehlerstatus, Zeitlimit, ungültige Werte)
+und verworfene Aktionen.
+
+**Wie gezählt wird:** Ein Trigger auf `action_runs` schreibt beim Wechsel auf `succeeded` genau einen
+Eintrag in `usage_events` (`category = 'data_action'`, `provider = 'customer'`, Menge 1, Kosten 0,
+`dedup_key = 'action:<Lauf-ID>'`) — in derselben Transaktion wie der Statuswechsel, für jeden
+Schreibweg, ohne Anwendungscode. `billing_org_rollup` liefert die Summe als Zeile `data_actions`.
+
+- **Dauerhaft:** Löscht der Kunde eine Aktion oder Verbindung, verschwinden deren Läufe (Kaskade
+  aus 0035), der Eintrag im Verbrauchsbuch bleibt. Was abrechenbar war, bleibt abrechenbar.
+- **Nie doppelt:** der `dedup_key` ist eindeutig; ein Lauf zählt höchstens einmal, auch wenn er
+  mehrfach geschrieben wird.
+- **Abrechnungsmonat** ist der Zeitpunkt der Ausführung (`finished_at`), nicht der Anlage.
+- **Inhaltsfrei:** der Eintrag trägt IDs, die Bezeichnung der Aktion und den Auslöser — keine
+  gesendeten Werte, keine Ergebnisse.
+- Ein Fehler beim Zählen lässt nie einen Lauf scheitern (der Aufruf beim Kunden ist dann schon
+  erfolgt); im Zweifel fehlt ein Eintrag, es gibt nie einen zu viel.
+- Läufe, die vor der Migration erfolgreich waren, wurden einmalig nachgetragen.
+
+Kunde: Einstellungen → Abrechnung zeigt die Zeile „Data Actions“ und im Protokoll je Aktion eine
+Zeile „Data Action“ mit der Bezeichnung der Aktion.
 
 ## Sichtbarkeit / DSGVO
 
