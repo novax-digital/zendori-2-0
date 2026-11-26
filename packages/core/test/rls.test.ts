@@ -2833,3 +2833,127 @@ describe.skipIf(!enabled)('RLS: channel_active_periods (0045) — service role o
     expect(none).toHaveLength(0);
   });
 });
+
+describe.skipIf(!enabled)('RLS: own invoices (0046) — service role only', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let anon: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  let invoiceId: string;
+  const ownerEmail = `invoice-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  const issue = (client: SupabaseClient, period: string) =>
+    client.rpc('issue_billing_invoice', {
+      p_org_id: orgId,
+      p_kind: 'invoice',
+      p_period: period,
+      p_issue_date: '2026-12-01',
+      p_due_date: '2026-12-15',
+      p_seller: { legalName: 'RLS Seller GmbH' },
+      p_recipient: { legalName: 'RLS Kunde GmbH' },
+      p_lines: [{ label: 'Grundgebühr', amountCents: 1000 }],
+      p_tax_mode: 'de_vat',
+      p_tax_percent: 19,
+      p_net_cents: 1000,
+      p_tax_cents: 190,
+      p_gross_cents: 1190,
+      p_mail_to: '',
+      p_cancels_invoice_id: null,
+      p_created_by: null,
+    });
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Invoice Org', slug: `invoice-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+
+    const issued = await issue(admin, '2026-11');
+    expect(issued.error).toBeNull();
+    invoiceId = (issued.data as { id: string }).id;
+  });
+
+  afterAll(async () => {
+    // an issued invoice cannot be deleted (0046) — it stays behind without its
+    // organization, exactly as in production
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('the owner of the org and anon read none of the three tables', async () => {
+    for (const table of ['billing_invoices', 'billing_seller', 'billing_invoice_counters']) {
+      const { data: asOwner } = await owner.from(table).select('*');
+      expect(asOwner ?? [], table).toHaveLength(0);
+      const { data: asAnon } = await anon.from(table).select('*');
+      expect(asAnon ?? [], table).toHaveLength(0);
+    }
+    const { data: asAdmin } = await admin.from('billing_invoices').select('id').eq('id', invoiceId);
+    expect(asAdmin).toHaveLength(1);
+  });
+
+  it('a member can neither issue an invoice nor change the seller or an invoice', async () => {
+    expect((await issue(owner, '2026-10')).error).not.toBeNull();
+    expect((await issue(anon, '2026-10')).error).not.toBeNull();
+
+    await owner.from('billing_seller').update({ iban: 'DE00 HACK' }).eq('id', true);
+    const { data: seller } = await admin.from('billing_seller').select('iban').maybeSingle();
+    expect((seller as { iban: string | null } | null)?.iban ?? null).not.toBe('DE00 HACK');
+
+    await owner.from('billing_invoices').update({ payment_status: 'paid' }).eq('id', invoiceId);
+    const { data: row } = await admin
+      .from('billing_invoices')
+      .select('payment_status')
+      .eq('id', invoiceId)
+      .single();
+    expect(row!.payment_status).toBe('open');
+  });
+
+  it('even the service role cannot change or delete an issued invoice', async () => {
+    const changed = await admin
+      .from('billing_invoices')
+      .update({ gross_cents: 1, net_cents: 1, tax_cents: 0 })
+      .eq('id', invoiceId);
+    expect(changed.error).not.toBeNull();
+    const deleted = await admin.from('billing_invoices').delete().eq('id', invoiceId);
+    expect(deleted.error).not.toBeNull();
+    // payment state and the paper are not part of the frozen document
+    const paid = await admin
+      .from('billing_invoices')
+      .update({ payment_status: 'paid', paid_via: 'manual', paid_at: new Date().toISOString() })
+      .eq('id', invoiceId);
+    expect(paid.error).toBeNull();
+  });
+
+  it('a second invoice for the same customer and month is refused', async () => {
+    const again = await issue(admin, '2026-11');
+    expect(again.error).not.toBeNull();
+  });
+
+  it('the PDFs are not readable through the storage API without the service role', async () => {
+    const path = `${invoiceId}/rls-test.pdf`;
+    const up = await admin.storage
+      .from('invoices')
+      .upload(path, new Blob(['%PDF-rls']), { contentType: 'application/pdf', upsert: true });
+    expect(up.error).toBeNull();
+    expect((await owner.storage.from('invoices').download(path)).data).toBeNull();
+    expect((await anon.storage.from('invoices').download(path)).data).toBeNull();
+    expect((await admin.storage.from('invoices').download(path)).error).toBeNull();
+    await admin.storage.from('invoices').remove([path]);
+  });
+});

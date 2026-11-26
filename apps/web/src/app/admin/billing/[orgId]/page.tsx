@@ -18,13 +18,18 @@ import {
   resolveOrgTerms,
 } from '@/lib/billing';
 import { loadBillingAccountState, loadSetupMailState } from '@/lib/billing-account';
+import { listInvoices, loadBillingRecipient, loadSellerState } from '@/lib/invoices';
 import { href } from '@/lib/href';
 import { stripeRuntime } from '@/lib/stripe';
-import { periodKeyOf, shiftPeriodKey } from '@zendori/core';
+import { berlinDate, periodKeyOf, shiftPeriodKey } from '@zendori/core';
+import BillingDetailsFields from '@/components/billing/BillingDetailsFields';
+import InvoiceTable from '@/components/billing/InvoiceTable';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
-import { EmptyState, Section } from '@/components/ui/Layout';
+import Callout from '@/components/ui/Callout';
+import Drawer from '@/components/ui/Drawer';
+import { EmptyState, Property, PropertyList, Section } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../../_components/AdminUnavailable';
 import TermsSummary from '../../_components/TermsSummary';
@@ -33,6 +38,11 @@ import {
   StripeBillingSummary,
   type MonthChoice,
 } from '../../_components/StripeBillingPanel';
+import {
+  confirmCustomerVatId,
+  createInvoice,
+  saveCustomerBillingDetails,
+} from '../../invoices/actions';
 
 const STEP_LABELS: Record<string, string> = {
   classify: 'Klassifikation',
@@ -143,6 +153,24 @@ export default async function AdminOrgBillingPage({
       : null;
   const stripeEditing =
     panel === 'stripe' && runtime !== null && billingAccount?.available === true;
+
+  // Own invoices (Phase 15b): independent of Stripe. An invoice is created
+  // here for a FINISHED month; the customer's invoices are listed below.
+  const [seller, recipient, orgInvoices] = await Promise.all([
+    loadSellerState(admin),
+    loadBillingRecipient(admin, orgId),
+    listInvoices(admin, { orgId }),
+  ]);
+  const invoicesAvailable = seller.available && orgInvoices.available;
+  const periodInvoice = orgInvoices.invoices.find(
+    (candidate) =>
+      candidate.period === period.key &&
+      candidate.kind === 'invoice' &&
+      candidate.cancelledByInvoiceId === null
+  );
+  const periodFinished = period.key < periodKeyOf(new Date());
+  const pageHref = href(base, { month });
+  const detailsEditing = panel === 'details';
   const monthLabel = (key: string): string => parseMonthKey(key, period).label;
   const thisMonthKey = periodKeyOf(new Date());
   const storedFrom = billingAccount?.stripe?.invoiceFrom ?? null;
@@ -169,7 +197,10 @@ export default async function AdminOrgBillingPage({
 
       <div className="page-split">
         <div className="page-body">
-          <DismissibleBanners error={stripeEditing ? undefined : error} notice={notice} />
+          <DismissibleBanners
+            error={stripeEditing || detailsEditing ? undefined : error}
+            notice={notice}
+          />
 
           <form method="get" className="toolbar">
             <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
@@ -194,11 +225,32 @@ export default async function AdminOrgBillingPage({
                 'Kein Paket zugewiesen: Berechnet werden nur der Verbrauch und Rufnummern zum Einkaufspreis.'
               )
             }
-            // 0045 missing: the database cannot say which channels were active
             actions={
-              invoice.channelCountsByQuota && invoice.packageName ? (
-                <Badge tone="warn">Kanäle nach Kontingent (Migration 0045 ausstehend)</Badge>
-              ) : undefined
+              <span className="row">
+                {/* 0045 missing: the database cannot say which channels were active */}
+                {invoice.channelCountsByQuota && invoice.packageName ? (
+                  <Badge tone="warn">Kanäle nach Kontingent (Migration 0045 ausstehend)</Badge>
+                ) : null}
+                {!invoicesAvailable ? null : periodInvoice ? (
+                  <Badge tone="success">Rechnung {periodInvoice.number} erstellt</Badge>
+                ) : !periodFinished ? (
+                  <span className="muted small">Rechnung erst nach Monatsende</span>
+                ) : invoice.grandTotalEur <= 0 ? null : (
+                  <form action={createInvoice}>
+                    <input type="hidden" name="orgId" value={orgId} />
+                    <input type="hidden" name="period" value={period.key} />
+                    <input type="hidden" name="returnTo" value={pageHref} />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="primary"
+                      disabled={seller.missing.length > 0 || recipient.details === null}
+                    >
+                      Rechnung erstellen
+                    </Button>
+                  </form>
+                )}
+              </span>
             }
           >
             <div className="table-wrap">
@@ -243,6 +295,51 @@ export default async function AdminOrgBillingPage({
             </div>
           </Section>
 
+          {invoicesAvailable ? (
+            <Section
+              title="Rechnungen"
+              help="Erstellte Rechnungen dieses Kunden. Eine Rechnung ist unveränderbar; korrigiert wird per Storno und neuer Rechnung."
+            >
+              {periodFinished && !periodInvoice && seller.missing.length > 0 ? (
+                <Callout
+                  tone="warn"
+                  action={
+                    <Button href="/admin/invoices/seller" size="sm">
+                      Ergänzen
+                    </Button>
+                  }
+                >
+                  Beim Rechnungssteller fehlt noch: {seller.missing.join(', ')}.
+                </Callout>
+              ) : null}
+              {periodFinished && !periodInvoice && recipient.details === null ? (
+                <Callout
+                  tone="warn"
+                  action={
+                    <Button href={href(base, { month, panel: 'details' })} size="sm" scroll={false}>
+                      Eintragen
+                    </Button>
+                  }
+                >
+                  Die Rechnungsdaten dieses Kunden fehlen oder sind unvollständig.
+                </Callout>
+              ) : null}
+              {orgInvoices.invoices.length === 0 ? (
+                <EmptyState
+                  title="Noch keine Rechnung"
+                  text="Wähle oben einen abgeschlossenen Monat und erstelle die Rechnung dort."
+                />
+              ) : (
+                <InvoiceTable
+                  invoices={orgInvoices.invoices}
+                  today={berlinDate(new Date())}
+                  mode="admin"
+                  returnTo={pageHref}
+                />
+              )}
+            </Section>
+          ) : null}
+
           <Section
             title="Letzte Vorgänge"
             help="WhatsApp-, E-Mail- und Rufnummern-Kosten werden aus Mengen × Preistabelle berechnet und erscheinen nur in der Rechnung, nicht als Einzelvorgang."
@@ -283,6 +380,57 @@ export default async function AdminOrgBillingPage({
 
         <aside className="page-rail" aria-label="Konditionen und Stripe">
           <TermsSummary catalog={catalog} orgId={orgId} channelCounts={chargedChannels} />
+          <div className="rail-section">
+            <h2>Rechnungsdaten</h2>
+            {recipient.details ? (
+              <PropertyList>
+                <Property label="Empfänger">{recipient.details.legalName}</Property>
+                <Property label="Adresse">
+                  {recipient.details.addressLine1}, {recipient.details.postalCode}{' '}
+                  {recipient.details.city} ({recipient.details.country})
+                </Property>
+                <Property label="USt-ID">
+                  {recipient.details.vatId === '' ? (
+                    <span className="muted">Keine</span>
+                  ) : (
+                    <>
+                      {recipient.details.vatId}{' '}
+                      {recipient.needsVatConfirmation ? (
+                        <Badge tone="warn">nicht bestätigt</Badge>
+                      ) : null}
+                    </>
+                  )}
+                </Property>
+                <Property label="Rechnungs-E-Mail">{recipient.details.billingEmail}</Property>
+              </PropertyList>
+            ) : (
+              <p className="muted small">
+                {recipient.stored ? 'Unvollständig.' : 'Noch nicht hinterlegt.'} Ohne Rechnungsdaten
+                lässt sich keine Rechnung erstellen.
+              </p>
+            )}
+            <div className="row">
+              <Button href={href(base, { month, panel: 'details' })} size="sm" scroll={false}>
+                {recipient.stored ? 'Bearbeiten' : 'Eintragen'}
+              </Button>
+            </div>
+            {recipient.needsVatConfirmation ? (
+              <form action={confirmCustomerVatId} className="stack">
+                <input type="hidden" name="orgId" value={orgId} />
+                <input type="hidden" name="returnTo" value={pageHref} />
+                <p className="muted small">
+                  Ein EU-Kunde außerhalb Deutschlands bekommt eine Rechnung ohne Umsatzsteuer
+                  (Reverse Charge) — nur mit bestätigter USt-ID. Hast du sie geprüft, bestätige sie
+                  hier.
+                </p>
+                <div>
+                  <Button type="submit" size="sm">
+                    USt-ID bestätigen
+                  </Button>
+                </div>
+              </form>
+            ) : null}
+          </div>
           <StripeBillingSummary
             orgId={orgId}
             livemode={runtime ? runtime.livemode : null}
@@ -293,6 +441,33 @@ export default async function AdminOrgBillingPage({
           />
         </aside>
       </div>
+
+      {detailsEditing ? (
+        <Drawer
+          title="Rechnungsdaten"
+          closeHref={closeHref}
+          footer={
+            <>
+              <Button href={closeHref} scroll={false}>
+                Abbrechen
+              </Button>
+              <Button type="submit" form="customer-billing-details" variant="primary">
+                Speichern
+              </Button>
+            </>
+          }
+        >
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <p className="muted small">
+            So steht der Kunde auf der Rechnung; an die Rechnungs-E-Mail geht das PDF. Der Kunde
+            kann die Angaben auch selbst unter Einstellungen → Abrechnung pflegen.
+          </p>
+          <form id="customer-billing-details" action={saveCustomerBillingDetails} className="stack">
+            <input type="hidden" name="orgId" value={orgId} />
+            <BillingDetailsFields idPrefix="customer-details" stored={recipient.stored} />
+          </form>
+        </Drawer>
+      ) : null}
 
       {stripeEditing && runtime && billingAccount ? (
         <StripeBillingDrawer

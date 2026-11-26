@@ -22,7 +22,8 @@ durchspielen.
 ([billing.md](billing.md)). Stripe bekommt keine Produkte, keine Preise, keine Abos. Es übernimmt:
 
 - die Seite, auf der ein Kunde seine Zahlungsart hinterlegt (SEPA-Lastschrift oder Karte),
-- ab 15b: die Rechnung als PDF, den Einzug und den Zahlstatus.
+- später (15b, Schritt 3): den Einzug und den Zahlstatus. Die Rechnung selbst stellt Zendori
+  ([phase-15b-rechnungen.md](phase-15b-rechnungen.md)), nicht Stripe.
 
 Entscheidungen des Owners (2026-11-25):
 
@@ -309,7 +310,9 @@ Wenn in Schritt 2, 4 oder 5 nichts ankommt: Admin → Kunde → „Abgleich: Feh
   nicht, wenn eine Wiederholung wartet oder während des Laufs ausgeschaltet wird
   (`syncBillingCustomer`). Was schon bei Stripe liegt, bleibt dort. **Der Fix im Worker gilt erst
   mit dem neuen Worker-Image.**
-- **15b** (Migration 0046 `billing_invoices` — 0043 bis 0045 sind inzwischen vergeben):
+- **15b ist neu geschnitten (Owner-Entscheidung 2026-11-27):** Zendori stellt die Rechnungen
+  selbst, Stripe erstellt keine — siehe [phase-15b-rechnungen.md](phase-15b-rechnungen.md). Der
+  folgende ursprüngliche Plan gilt nur noch für den Einzug (dort Schritt 3):
   Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,
   Stripe-Rechnung mit Vollvergleich vor dem Abschluss (Netto, Steuer, Brutto, kein Rabatt, kein
   Guthaben), Rechnungsmail mit PDF, Zahlstatus und Rückbuchung, Warnmails an den Betreiber,

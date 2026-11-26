@@ -16,8 +16,15 @@ import {
   recentMonths,
   resolveOrgTier,
 } from '@/lib/billing';
-import { categoryPriceEur, canViewArea, isAdminRole, type BillingCategory } from '@zendori/core';
+import {
+  berlinDate,
+  categoryPriceEur,
+  canViewArea,
+  isAdminRole,
+  type BillingCategory,
+} from '@zendori/core';
 import { loadBillingAccountState } from '@/lib/billing-account';
+import { listInvoices, loadBillingRecipient } from '@/lib/invoices';
 import { href } from '@/lib/href';
 import { stripeRuntime } from '@/lib/stripe';
 import DismissibleBanners from '@/components/DismissibleBanners';
@@ -26,6 +33,7 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
+import { BillingRecipientSection, CustomerInvoicesSection } from './InvoiceSections';
 import StripeBillingSection, { BillingDetailsDrawer } from './StripeBillingSection';
 
 // The per-event log mirrors the SQL rollup's step→category mapping (0021
@@ -228,7 +236,15 @@ export default async function CustomerBillingPage({
   const canEditBilling = isAdminRole(role);
   const pageHref = (extra: Record<string, string | undefined> = {}) =>
     href('/settings/billing', { org: orgId, month: month ?? undefined, ...extra });
-  const detailsOpen = stripeBilling !== null && canEditBilling && panel === 'details';
+  // --- own invoices (Phase 15b): for every organization, with or without Stripe ---
+  // Before migration 0046 the list reads as "not available" and nothing shows.
+  const [recipient, invoiceList] = await Promise.all([
+    loadBillingRecipient(admin, orgId),
+    listInvoices(admin, { orgId, limit: 100 }),
+  ]);
+  const invoicesAvailable = invoiceList.available;
+  const detailsOpen =
+    (stripeBilling !== null || invoicesAvailable) && canEditBilling && panel === 'details';
   // Back from Stripe's payment page: wait for the worker — unless the method on
   // file already differs from the one before the visit (the worker was faster).
   const awaitingPayment =
@@ -256,6 +272,20 @@ export default async function CustomerBillingPage({
               editHref={pageHref({ panel: 'details' })}
               doneHref={pageHref()}
               awaitingPayment={awaitingPayment}
+            />
+          ) : invoicesAvailable ? (
+            // without Stripe billing: the recipient of the invoices on its own
+            <BillingRecipientSection
+              recipient={recipient}
+              canEdit={canEditBilling}
+              editHref={pageHref({ panel: 'details' })}
+            />
+          ) : null}
+
+          {invoicesAvailable ? (
+            <CustomerInvoicesSection
+              invoices={invoiceList.invoices}
+              today={berlinDate(new Date())}
             />
           ) : null}
 
@@ -390,11 +420,11 @@ export default async function CustomerBillingPage({
         </div>
       </div>
 
-      {detailsOpen && stripeBilling ? (
+      {detailsOpen ? (
         <BillingDetailsDrawer
           orgId={orgId}
           closeHref={pageHref()}
-          stored={stripeBilling.account.stored}
+          stored={stripeBilling ? stripeBilling.account.stored : recipient.stored}
           error={error}
         />
       ) : null}

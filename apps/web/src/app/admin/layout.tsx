@@ -1,4 +1,4 @@
-// Plattform (operator) area: the sidebar has ONE "Plattform" entry; the five
+// Plattform (operator) area: the sidebar has ONE "Plattform" entry; the
 // admin pages are reached through this sub-navigation (redesign stage 2).
 // The guard runs here too, so the navigation never renders for non-admins —
 // every page still guards authoritatively.
@@ -12,6 +12,7 @@ const ITEMS: SubNavItem[] = [
   { href: '/admin/demo', label: 'Demo-Anrufe' },
   { href: '/admin/contact', label: 'Kontaktanfragen' },
   { href: '/admin/billing', label: 'Abrechnung' },
+  { href: '/admin/invoices', label: 'Rechnungen' },
   { href: '/admin/pricing', label: 'Preise & Pakete' },
   // living reference of the redesign's building blocks (docs/design-redesign.md §4)
   { href: '/admin/ui', label: 'UI-Bausteine' },

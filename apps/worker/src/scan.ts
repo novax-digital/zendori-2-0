@@ -51,6 +51,12 @@ import {
   type BillingSyncJob,
 } from './billing/customer-sync.js';
 import {
+  INVOICE_DOCUMENT_QUEUE,
+  INVOICE_DOCUMENT_RETRY_LIMIT,
+  isInvoiceDocumentDue,
+  type InvoiceDocumentJob,
+} from './billing/invoice-document.js';
+import {
   STRIPE_EVENT_QUEUE,
   STRIPE_EVENT_RETRY_LIMIT,
   pruneStripeEvents,
@@ -75,6 +81,7 @@ const INTEGRATION_EVENT_BATCH = 20;
 const MEMBER_NOTIFY_BATCH = 20;
 const STRIPE_EVENT_BATCH = 20;
 const BILLING_SYNC_BATCH = 20;
+const INVOICE_DOCUMENT_BATCH = 20;
 /** Delivered events are pruned once an hour. */
 const EVENT_PRUNE_MS = 60 * 60_000;
 
@@ -148,6 +155,8 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       // without STRIPE_SECRET_KEY and before migration 0041).
       await enqueueDueStripeEvents(boss, supabase);
       await enqueueRequestedBillingSyncs(boss, supabase);
+      // Phase 15b: issued invoices that still need their PDF or their mail
+      await enqueueDueInvoiceDocuments(boss, supabase);
       if (Date.now() - lastEventPrune >= EVENT_PRUNE_MS) {
         lastEventPrune = Date.now();
         await pruneIntegrationEvents(supabase);
@@ -498,6 +507,36 @@ async function enqueueRequestedBillingSyncs(boss: PgBoss, supabase: SupabaseClie
     await boss.send(BILLING_SYNC_QUEUE, { orgId: row.org_id } satisfies BillingSyncJob, {
       singletonKey: row.org_id,
       retryLimit: BILLING_SYNC_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue issued invoices whose PDF or mail is still to do (0046). A no-op
+ * before the migration.
+ */
+async function enqueueDueInvoiceDocuments(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('billing_invoices')
+    .select('id, pdf_state, mail_state, next_attempt_at')
+    .or('pdf_state.eq.pending,mail_state.eq.pending')
+    .order('created_at', { ascending: true })
+    .limit(INVOICE_DOCUMENT_BATCH);
+  if (error) {
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+  const nowMs = Date.now();
+  for (const row of (data ?? []) as {
+    id: string;
+    pdf_state: string;
+    mail_state: string;
+    next_attempt_at: string | null;
+  }[]) {
+    if (!isInvoiceDocumentDue(row, nowMs)) continue;
+    await boss.send(INVOICE_DOCUMENT_QUEUE, { invoiceId: row.id } satisfies InvoiceDocumentJob, {
+      singletonKey: row.id,
+      retryLimit: INVOICE_DOCUMENT_RETRY_LIMIT,
     });
   }
 }

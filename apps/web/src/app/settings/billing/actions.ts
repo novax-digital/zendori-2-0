@@ -28,9 +28,10 @@ import {
   saveBillingDetailsRow,
 } from '@/lib/billing-account';
 
-// Customer side of Stripe billing (Phase 15a): billing details and the payment
-// method. Both are for the owner / an admin of the organization only, and only
-// once the operator enabled Stripe billing for it. The web app writes Zendori's
+// Customer side of billing: the billing details (who an invoice goes to, and
+// the e-mail address it is sent to — Phase 15b, for every organization) and the
+// payment method (Phase 15a, only once the operator enabled Stripe billing).
+// Both are for the owner / an admin of the organization only. The web app writes Zendori's
 // own tables; the one Stripe call here opens Stripe's payment page — everything
 // else (pushing details, reading the payment method back) is the worker's job.
 
@@ -62,10 +63,29 @@ async function requireBillingEditor(org: string) {
   return { userId: active.userId, runtime, admin, state };
 }
 
-/** Saves the billing details; the worker then pushes them to Stripe. */
+/** The signed-in owner/admin of exactly this org — with or without Stripe billing. */
+async function requireBillingDetailsEditor(org: string) {
+  if (!z.uuid().safeParse(org).success) redirect('/settings/billing');
+  const active = await requireActiveOrg(org, { strict: true });
+  // requireActiveOrg falls back to the first membership — never act on another org
+  if (active.orgId !== org || !isAdminRole(active.role)) {
+    redirect(pageUrl(org, { error: 'Nur Inhaber und Admins können die Abrechnung ändern.' }));
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    redirect(pageUrl(org, { error: 'Die Abrechnung ist derzeit nicht verfügbar.' }));
+  }
+  return { userId: active.userId, admin };
+}
+
+/**
+ * Saves the billing details — the recipient of the invoices and the address
+ * they are mailed to. Works for every organization; with Stripe billing the
+ * worker then pushes them to Stripe (the sync only touches enabled rows).
+ */
 export async function saveBillingDetails(formData: FormData): Promise<void> {
   const org = textField(formData.get('org'));
-  const { userId, admin } = await requireBillingEditor(org);
+  const { userId, admin } = await requireBillingDetailsEditor(org);
 
   if (!(await checkRateLimit('billing-details-user', userId))) {
     redirect(

@@ -39,6 +39,7 @@ import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/
 import { workerStripe } from './billing/stripe.js';
 import { BILLING_SYNC_QUEUE, syncBillingCustomer } from './billing/customer-sync.js';
 import { sendBillingSetupMail } from './billing/setup-mail.js';
+import { INVOICE_DOCUMENT_QUEUE, processInvoiceDocument } from './billing/invoice-document.js';
 import { STRIPE_EVENT_QUEUE, processStripeEvent } from './billing/stripe-events.js';
 import {
   LEARN_DISTILL_QUEUE,
@@ -64,6 +65,7 @@ const mcpSyncJobSchema = z.object({ connectionId: z.uuid() });
 const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const stripeEventJobSchema = z.object({ eventId: z.string().min(1).max(255) });
 const billingSyncJobSchema = z.object({ orgId: z.uuid() });
+const invoiceDocumentJobSchema = z.object({ invoiceId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -409,6 +411,33 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), orgId }, 'billing setup mail job failed');
+        }
+      }
+    }
+  );
+
+  // --- own invoices (Phase 15b, 0046): PDF + mail of an issued invoice ----------
+  // Independent of Stripe: an invoice is issued by the app and finished here.
+  await ensureQueuePolicy(boss, INVOICE_DOCUMENT_QUEUE);
+  await boss.work(
+    INVOICE_DOCUMENT_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { invoiceId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { invoiceId } = invoiceDocumentJobSchema.parse(job.data);
+        try {
+          await processInvoiceDocument(
+            {
+              supabase,
+              logger,
+              from: process.env.RESEND_FROM,
+              appUrl: process.env.APP_URL,
+            },
+            invoiceId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), invoiceId }, 'invoice document job failed');
         }
       }
     }

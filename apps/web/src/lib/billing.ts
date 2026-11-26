@@ -142,10 +142,33 @@ export async function getOrgBilling(
   const totalCostUsd = lines.reduce((sum, line) => sum + line.costUsd, 0);
   const totalPriceEur = round2(lines.reduce((sum, line) => sum + line.priceEur, 0));
 
-  const numberCounts: NumberCounts = {
+  // Phone numbers are charged from the month they were switched on. The rollup
+  // counts what is active NOW (a snapshot); for a month in the past that would
+  // put a number on the invoice that did not exist yet — and an issued invoice
+  // cannot be changed. So the numbers are counted here, by their activation.
+  let numberCounts: NumberCounts = {
     mobile: get('numbers_mobile_count').quantity,
     landline: get('numbers_landline_count').quantity,
   };
+  const { data: numberRows, error: numberError } = await admin
+    .from('phone_numbers')
+    .select('number_type, activated_at, created_at')
+    .eq('org_id', orgId)
+    .eq('status', 'active');
+  if (!numberError && Array.isArray(numberRows)) {
+    const endMs = Date.parse(toIso);
+    numberCounts = { mobile: 0, landline: 0 };
+    for (const row of numberRows as {
+      number_type: string;
+      activated_at: string | null;
+      created_at: string;
+    }[]) {
+      if (Date.parse(row.activated_at ?? row.created_at) >= endMs) continue;
+      // same split as billing_org_rollup: 'local' and 'national' are landline
+      if (row.number_type === 'mobile') numberCounts.mobile += 1;
+      else numberCounts.landline += 1;
+    }
+  }
 
   return { orgId, fromIso, toIso, lines, totalCostUsd, totalPriceEur, numberCounts };
 }
