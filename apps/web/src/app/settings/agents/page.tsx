@@ -201,7 +201,7 @@ export default async function AgentsPage({
           </p>
           <form id="new-agent" className="stack stack--lg" action={createAgent}>
             <input type="hidden" name="org" value={orgId} />
-            <AgentFields idPrefix="new-agent" disabled={false} />
+            <AgentFields idPrefix="new-agent" disabled={false} orgId={orgId} />
           </form>
         </Drawer>
       ) : null}

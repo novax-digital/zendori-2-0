@@ -1,7 +1,8 @@
 // Minimal in-memory stand-in for the Supabase query builder, for tests that
 // need real row state instead of a recording proxy. Supports exactly what the
 // code under test uses: select / insert / update / delete with eq, in, gte, lt,
-// lte, is, order, limit, maybeSingle, single and `{ count: 'exact', head: true }`
+// lte, is, order (several keys), limit, range, maybeSingle, single and
+// `{ count: 'exact', head: true }`
 // — plus unique constraints (a violating insert/update returns SQLSTATE 23505,
 // like PostgREST does). Sibling of apps/worker/test/memory-supabase.ts.
 import { randomUUID } from 'node:crypto';
@@ -23,7 +24,8 @@ export interface MemoryDb {
 class Query implements PromiseLike<QueryResult> {
   private filters: Filter[] = [];
   private limitCount: number | null = null;
-  private orderBy: { column: string; ascending: boolean } | null = null;
+  private rangeOf: { from: number; to: number } | null = null;
+  private orderBy: { column: string; ascending: boolean }[] = [];
   private returning = false;
   private mode: 'many' | 'maybeSingle' | 'single' = 'many';
 
@@ -62,7 +64,11 @@ class Query implements PromiseLike<QueryResult> {
     return this;
   }
   order(column: string, options?: { ascending?: boolean }): this {
-    this.orderBy = { column, ascending: options?.ascending !== false };
+    this.orderBy.push({ column, ascending: options?.ascending !== false });
+    return this;
+  }
+  range(from: number, to: number): this {
+    this.rangeOf = { from, to };
     return this;
   }
   limit(count: number): this {
@@ -123,15 +129,18 @@ class Query implements PromiseLike<QueryResult> {
       affected = this.table.filter((row) => this.matches(row));
     }
 
-    if (this.orderBy) {
-      const { column, ascending } = this.orderBy;
+    if (this.orderBy.length > 0) {
       affected = [...affected].sort((a, b) => {
-        const left = a[column] as string | number;
-        const right = b[column] as string | number;
-        return (left < right ? -1 : left > right ? 1 : 0) * (ascending ? 1 : -1);
+        for (const { column, ascending } of this.orderBy) {
+          const left = a[column] as string | number;
+          const right = b[column] as string | number;
+          if (left !== right) return (left < right ? -1 : 1) * (ascending ? 1 : -1);
+        }
+        return 0;
       });
     }
     const count = affected.length;
+    if (this.rangeOf) affected = affected.slice(this.rangeOf.from, this.rangeOf.to + 1);
     if (this.limitCount !== null) affected = affected.slice(0, this.limitCount);
 
     if (this.head) return { data: null, error: null, count };

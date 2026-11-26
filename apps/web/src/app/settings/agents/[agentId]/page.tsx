@@ -16,6 +16,7 @@ import AgentBehaviorFields from '@/components/AgentBehaviorFields';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import EditTabs from '@/components/EditTabs';
+import IdentityAssistant from '@/components/IdentityAssistant';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
@@ -117,6 +118,14 @@ export default async function AgentDetailPage({
           placeholder={IDENTITY_PLACEHOLDER}
         />
       </Field>
+      {disabled ? null : (
+        <IdentityAssistant
+          orgId={orgId}
+          textareaId="agent-identity"
+          nameInputId="agent-name"
+          kind={agent.kind === 'voice' ? 'voice' : 'text'}
+        />
+      )}
     </div>
   );
 

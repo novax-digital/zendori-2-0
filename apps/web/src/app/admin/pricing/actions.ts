@@ -207,8 +207,10 @@ export async function updatePriceList(formData: FormData): Promise<void> {
 }
 
 /**
- * Deleting a list that is still used would silently move its packages and
- * customers to the standard list (FK on delete set null) — refused instead.
+ * A list can be deleted once no customer is billed by it — neither named on
+ * the customer nor through the customer's package. Packages without such a
+ * customer that still name the list fall back to the standard list (FK on
+ * delete set null); the notice says which.
  */
 export async function deletePriceList(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
@@ -218,37 +220,67 @@ export async function deletePriceList(formData: FormData): Promise<void> {
     redirect(pricingUrl({ error: 'Verbrauchspreisliste wurde nicht gefunden.' }));
   }
   const id = parsedId.data;
+  // where an error is shown: on the list's page, or in the overview it was sent from
+  const fromOverview = formData.get('from') === 'overview';
+  const fail = (error: string): string => (fromOverview ? pricingUrl({ error }) : listUrl(id, { error }));
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(listUrl(id, { error: NO_SERVICE_ROLE }));
+  if (!admin) redirect(fail(NO_SERVICE_ROLE));
 
-  const [{ data: tier }, { count: packageCount }, { count: customerCount }] = await Promise.all([
+  const [tierResult, packagesResult, directResult] = await Promise.all([
     admin.from('price_tiers').select('is_default').eq('id', id).maybeSingle(),
-    admin.from('packages').select('id', { count: 'exact', head: true }).eq('price_tier_id', id),
+    admin.from('packages').select('id, name').eq('price_tier_id', id),
     admin
       .from('org_subscriptions')
       .select('id', { count: 'exact', head: true })
       .eq('price_tier_id', id),
   ]);
-  if ((tier as { is_default?: boolean } | null)?.is_default) {
-    redirect(listUrl(id, { error: 'Die Standardliste kann nicht gelöscht werden.' }));
+  // a failed check is never read as "nobody uses it"
+  if (tierResult.error || packagesResult.error || directResult.error) {
+    redirect(fail('Verbrauchspreisliste konnte nicht geprüft werden.'));
   }
-  if ((packageCount ?? 0) > 0 || (customerCount ?? 0) > 0) {
+  if (!tierResult.data) redirect(pricingUrl({ error: 'Verbrauchspreisliste wurde nicht gefunden.' }));
+  if ((tierResult.data as { is_default?: boolean }).is_default) {
+    redirect(fail('Die Standardliste kann nicht gelöscht werden.'));
+  }
+  const usingPackages = (packagesResult.data ?? []) as { id: string; name: string }[];
+  let customers = directResult.count ?? 0;
+  if (usingPackages.length > 0) {
+    // customers of these packages without a list of their own are billed by this one
+    const viaPackage = await admin
+      .from('org_subscriptions')
+      .select('id', { count: 'exact', head: true })
+      .in(
+        'package_id',
+        usingPackages.map((pkg) => pkg.id)
+      )
+      .is('price_tier_id', null);
+    if (viaPackage.error) redirect(fail('Verbrauchspreisliste konnte nicht geprüft werden.'));
+    customers += viaPackage.count ?? 0;
+  }
+  if (customers > 0) {
     redirect(
-      listUrl(id, {
-        error:
-          'Diese Verbrauchspreisliste wird noch von Paketen oder Kunden verwendet. Weise ihnen zuerst eine andere zu.',
-      })
+      fail(
+        'Diese Verbrauchspreisliste wird noch von Kunden genutzt. Weise ihnen oder ihrem Paket zuerst eine andere zu.'
+      )
     );
   }
 
   const { error } = await admin.from('price_tiers').delete().eq('id', id);
-  if (error) {
-    redirect(listUrl(id, { error: 'Verbrauchspreisliste konnte nicht gelöscht werden.' }));
-  }
+  if (error) redirect(fail('Verbrauchspreisliste konnte nicht gelöscht werden.'));
 
   revalidatePath('/admin/pricing');
-  redirect(pricingUrl({ notice: 'Verbrauchspreisliste gelöscht.' }));
+  const names = usingPackages.map((pkg) => pkg.name).join(', ');
+  redirect(
+    pricingUrl({
+      notice:
+        usingPackages.length === 0
+          ? 'Verbrauchspreisliste gelöscht.'
+          : usingPackages.length === 1
+            ? `Verbrauchspreisliste gelöscht. Das Paket ${names} nutzt jetzt die Standardliste.`
+            : `Verbrauchspreisliste gelöscht. Diese Pakete nutzen jetzt die Standardliste: ${names}.`,
+    })
+  );
 }
 
 // --- packages ----------------------------------------------------------------
@@ -487,25 +519,30 @@ export async function deletePackage(formData: FormData): Promise<void> {
   const parsedId = idSchema.safeParse(textField(formData.get('id')));
   if (!parsedId.success) redirect(pricingUrl({ error: 'Paket wurde nicht gefunden.' }));
   const id = parsedId.data;
+  // where an error is shown: on the package's page, or in the overview it was sent from
+  const fromOverview = formData.get('from') === 'overview';
+  const fail = (error: string): string =>
+    fromOverview ? pricingUrl({ error }) : packageUrl(id, { error });
 
   const admin = createSupabaseAdminClient();
-  if (!admin) redirect(packageUrl(id, { error: NO_SERVICE_ROLE }));
+  if (!admin) redirect(fail(NO_SERVICE_ROLE));
 
-  const { count } = await admin
+  const { count, error: countError } = await admin
     .from('org_subscriptions')
     .select('id', { count: 'exact', head: true })
     .eq('package_id', id);
+  // a failed check is never read as "nobody uses it"
+  if (countError) redirect(fail('Paket konnte nicht geprüft werden.'));
   if ((count ?? 0) > 0) {
     redirect(
-      packageUrl(id, {
-        error:
-          'Dieses Paket wird noch von Kunden genutzt. Weise ihnen zuerst ein anderes Paket zu oder schalte es nur inaktiv.',
-      })
+      fail(
+        'Dieses Paket wird noch von Kunden genutzt. Weise ihnen zuerst ein anderes Paket zu oder schalte es nur inaktiv.'
+      )
     );
   }
 
   const { error } = await admin.from('packages').delete().eq('id', id);
-  if (error) redirect(packageUrl(id, { error: 'Paket konnte nicht gelöscht werden.' }));
+  if (error) redirect(fail('Paket konnte nicht gelöscht werden.'));
 
   revalidatePath('/admin/pricing');
   redirect(pricingUrl({ notice: 'Paket gelöscht.' }));

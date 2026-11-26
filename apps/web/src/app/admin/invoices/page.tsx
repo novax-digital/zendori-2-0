@@ -13,6 +13,7 @@ import {
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import {
   ISSUE_FAILURE_LABELS,
+  invoiceExportMonths,
   invoiceableMonths,
   listInvoiceRunSkips,
   listInvoices,
@@ -85,6 +86,8 @@ export default async function AdminInvoicesPage({
   const paidCents = sum((s) => s === 'paid');
 
   const creating = panel === 'new';
+  const exporting = panel === 'export';
+  const exportMonths = exporting ? await invoiceExportMonths(admin, new Date()) : [];
   const { data: orgData } =
     creating || skips.length > 0
       ? await admin.from('organizations').select('id, name').order('name')
@@ -103,6 +106,9 @@ export default async function AdminInvoicesPage({
         actions={
           <>
             <Button href={`${BASE}/seller`}>Rechnungssteller</Button>
+            <Button href={`${BASE}?panel=export`} scroll={false}>
+              Exportieren
+            </Button>
             <Button href={`${BASE}?panel=new`} variant="primary" icon="plus" scroll={false}>
               Rechnung erstellen
             </Button>
@@ -111,7 +117,7 @@ export default async function AdminInvoicesPage({
       />
 
       <div className="page-body">
-        <DismissibleBanners error={creating ? undefined : error} notice={notice} />
+        <DismissibleBanners error={creating || exporting ? undefined : error} notice={notice} />
 
         {seller.missing.length > 0 ? (
           <Callout
@@ -265,6 +271,56 @@ export default async function AdminInvoicesPage({
             >
               <select id="invoice-period" name="period" required defaultValue={months[0]?.key}>
                 {months.map((month) => (
+                  <option key={month.key} value={month.key}>
+                    {month.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </form>
+        </Drawer>
+      ) : null}
+
+      {exporting ? (
+        <Drawer
+          title="Rechnungen exportieren"
+          closeHref={listHref}
+          footer={
+            <>
+              <Button href={listHref} scroll={false}>
+                Schließen
+              </Button>
+              <Button type="submit" form="export-invoices" name="format" value="csv">
+                Liste als CSV
+              </Button>
+              <Button
+                type="submit"
+                form="export-invoices"
+                name="format"
+                value="zip"
+                variant="primary"
+              >
+                PDFs als ZIP
+              </Button>
+            </>
+          }
+        >
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <p className="muted small">
+            Für die Buchhaltung: Das ZIP enthält jede Rechnung und Stornorechnung als PDF und
+            zusätzlich die Liste. Die CSV-Liste hat eine Zeile je Rechnung — mit Kunde, Anschrift,
+            USt-ID, Netto, Steuer, Brutto und Zahlstatus — und öffnet sich direkt in Excel.
+          </p>
+          {/* a plain GET form: the answer is a download, the page stays as it is */}
+          <form id="export-invoices" method="get" action="/api/billing/invoices/export" className="stack">
+            <Field
+              label="Zeitraum"
+              htmlFor="export-month"
+              help="Es zählt das Rechnungsdatum. Eine Stornorechnung steht in dem Monat, in dem sie ausgestellt wurde."
+            >
+              <select id="export-month" name="month" defaultValue="all">
+                <option value="all">Gesamter Zeitraum</option>
+                {exportMonths.map((month) => (
                   <option key={month.key} value={month.key}>
                     {month.label}
                   </option>

@@ -34,7 +34,7 @@ Entscheidungen des Owners (2026-11-25):
    in Zendori (`packages/core/src/billing-tax.ts`), kein Stripe Tax. Preise sind netto.
 5. Jahreskunden zahlen monatlich ein Zwölftel.
 6. ~~Kunde ohne Zahlungsart: Rechnung per Mail mit Bezahllink, 14 Tage Zahlungsziel (15b).~~
-   **Geändert am 2026-11-27: Mit eingeschalteter Stripe-Abrechnung ist die Zahlungsart Pflicht**
+   **Geändert am 2026-11-26: Mit eingeschalteter Stripe-Abrechnung ist die Zahlungsart Pflicht**
    (SEPA-Lastschrift oder Karte). Wen der Betreiber nicht über Stripe abrechnet, rechnet er selbst
    ab. Was 15b mit einem eingeschalteten Kunden macht, der trotzdem noch keine Zahlungsart hat
    (Rechnung mit Bezahllink als Notweg oder anhalten), wird bei 15b entschieden.
@@ -304,13 +304,13 @@ Wenn in Schritt 2, 4 oder 5 nichts ankommt: Admin → Kunde → „Abgleich: Feh
 
 ## Offen
 
-- ~~Lücke beim Ausschalten~~ **behoben am 2026-11-27:** Ein offener Abgleich wurde nach dem
+- ~~Lücke beim Ausschalten~~ **behoben am 2026-11-26:** Ein offener Abgleich wurde nach dem
   Ausschalten noch abgearbeitet. Jetzt verwirft das Ausschalten ihn sofort
   (`cancelBillingSync`), und der Worker synchronisiert einen ausgeschalteten Kunden nie — auch
   nicht, wenn eine Wiederholung wartet oder während des Laufs ausgeschaltet wird
   (`syncBillingCustomer`). Was schon bei Stripe liegt, bleibt dort. **Der Fix im Worker gilt erst
   mit dem neuen Worker-Image.**
-- **15b ist neu geschnitten (Owner-Entscheidung 2026-11-27):** Zendori stellt die Rechnungen
+- **15b ist neu geschnitten (Owner-Entscheidung 2026-11-26):** Zendori stellt die Rechnungen
   selbst, Stripe erstellt keine — siehe [phase-15b-rechnungen.md](phase-15b-rechnungen.md). Der
   folgende ursprüngliche Plan gilt nur noch für den Einzug (dort Schritt 3):
   Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,

@@ -14,6 +14,13 @@ import {
 } from './pipeline/form-notify.js';
 import { remindOverdueHandoffs } from './pipeline/handoff-sla.js';
 import {
+  AGENT_PROMPT_QUEUE,
+  AGENT_PROMPT_RETRY_LIMIT,
+  failStaleAgentPrompts,
+  pruneAgentPrompts,
+  type AgentPromptJob,
+} from './pipeline/agent-prompt.js';
+import {
   LEARN_DISTILL_QUEUE,
   LEARN_DISTILL_RETRY_LIMIT,
   type LearnDistillJob,
@@ -87,6 +94,7 @@ const POST_CALL_BATCH = 10;
 const FORM_NOTIFY_BATCH = 20;
 const LEARN_BATCH = 10;
 const ACTION_RUN_BATCH = 20;
+const AGENT_PROMPT_BATCH = 10;
 const MCP_SYNC_BATCH = 10;
 /** The stale-run sweep is a write — once a minute is plenty. */
 const STALE_RUN_SWEEP_MS = 60_000;
@@ -164,7 +172,10 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       if (Date.now() - lastStaleRunSweep >= STALE_RUN_SWEEP_MS) {
         lastStaleRunSweep = Date.now();
         await failStaleRuns(supabase);
+        await failStaleAgentPrompts(supabase);
       }
+      // 0049: suggested agent identities asked for in the agent editor
+      await enqueueQueuedAgentPrompts(boss, supabase);
       await enqueueDueIntegrationEvents(boss, supabase);
       await enqueueDueMemberNotifications(boss, supabase);
       // Phase 15: Stripe webhook inbox + requested customer syncs (no-ops
@@ -186,6 +197,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
         await pruneApiIdempotencyKeys(supabase);
         await pruneMemberNotifications(supabase);
         await pruneStripeEvents(supabase);
+        await pruneAgentPrompts(supabase);
         // Phase 14a: re-read MCP tool lists that are older than a day, so a
         // changed tool is noticed without anyone opening the settings page.
         await requestStaleMcpSyncs(supabase);
@@ -384,6 +396,27 @@ async function enqueueQueuedActionRuns(boss: PgBoss, supabase: SupabaseClient): 
     await boss.send(ACTION_RUN_QUEUE, { runId: row.id } satisfies ActionRunJob, {
       singletonKey: row.id,
       retryLimit: ACTION_RUN_RETRY_LIMIT,
+    });
+  }
+}
+
+/** Enqueue suggested-identity requests from the agent editor (0049). Silent before the migration. */
+async function enqueueQueuedAgentPrompts(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase
+    .from('agent_prompt_requests')
+    .select('id')
+    .eq('state', 'queued')
+    .order('created_at', { ascending: true })
+    .limit(AGENT_PROMPT_BATCH);
+  if (error) {
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { id: string }[]) {
+    await boss.send(AGENT_PROMPT_QUEUE, { requestId: row.id } satisfies AgentPromptJob, {
+      singletonKey: row.id,
+      retryLimit: AGENT_PROMPT_RETRY_LIMIT,
     });
   }
 }

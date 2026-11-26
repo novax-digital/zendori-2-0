@@ -3,6 +3,7 @@ import { sanitizeIntakeFields } from '@zendori/core';
 import type { AgentKind, AgentMode, ChannelType, IntakeField } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import AgentBehaviorFields from '@/components/AgentBehaviorFields';
+import IdentityAssistant from '@/components/IdentityAssistant';
 import { Field } from '@/components/ui/Field';
 
 export type AgentRow = {
@@ -132,10 +133,13 @@ export function AgentFields({
   idPrefix,
   agent,
   disabled,
+  orgId,
 }: {
   idPrefix: string;
   agent?: AgentRow;
   disabled: boolean;
+  /** With it, the identity field offers "Mit KI erstellen". */
+  orgId?: string;
 }) {
   return (
     <>
@@ -163,6 +167,14 @@ export function AgentFields({
           placeholder={IDENTITY_PLACEHOLDER}
         />
       </Field>
+      {disabled || !orgId ? null : (
+        <IdentityAssistant
+          orgId={orgId}
+          textareaId={`${idPrefix}-identity`}
+          nameInputId={`${idPrefix}-name`}
+          kind={agent ? (agent.kind === 'voice' ? 'voice' : 'text') : undefined}
+        />
+      )}
       {/* kind/mode/threshold interplay lives in the client component (0015) */}
       <AgentBehaviorFields
         idPrefix={idPrefix}

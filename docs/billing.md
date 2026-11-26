@@ -327,7 +327,7 @@ Aussehen im Browser und das Speichern (kein Login).
 
 ## Kanal-Gebühr nur für aktive Kanäle (Migration 0045, Owner-Entscheidung 2026-11-26)
 
-Stand: **Migration 0045 ist seit 2026-11-27 eingespielt** (Probelauf mit Rollback, dann echt;
+Stand: **Migration 0045 ist seit 2026-11-26 eingespielt** (Probelauf mit Rollback, dann echt;
 sieben offene Zeiträume für die sieben aktiven Kanäle) **und der Code ist gepusht.** Danach über die
 API geprüft: Der Kunde mit WhatsApp-Kanal zahlt in allen drei Monaten unverändert, die zwei ohne
 WhatsApp-Kanal je Monat genau 15,00 € weniger.
@@ -416,6 +416,27 @@ Kanalart, Löschen, Löschen der Organisation, Rechte). Nicht geprüft: das Auss
 8. **Neuer Kanal → Chat-Widget** (kostenlos). Erwartet: kein Hinweis, der Kanal ist sofort aktiv.
 9. **Telefonnummern → Nummer beantragen.** Erwartet: Hinweis „Kosten pro Monat (netto)“ mit
    10,00 € für Festnetz und 30,00 € für Mobilfunk.
+
+## Pakete und Verbrauchspreislisten löschen (2026-11-26)
+
+Löschen geht in **Plattform → Preise & Pakete** über das Menü „⋯“ am Ende jeder Zeile (und wie
+bisher im Menü auf der Seite des Pakets bzw. der Liste). Voraussetzung ist immer: **kein Kunde nutzt
+es mehr.**
+
+- **Paket:** löschbar, sobald kein Kunde das Paket hat. Sonst steht im Menü statt des Knopfs, warum
+  nicht.
+- **Verbrauchspreisliste:** löschbar, sobald kein Kunde nach ihr abgerechnet wird — weder direkt am
+  Kunden eingetragen noch über sein Paket. Die Standardliste ist nie löschbar. Pakete **ohne**
+  Kunden, die die Liste noch nennen, fallen auf die Standardliste zurück; das Menü sagt das vor dem
+  Löschen („2 Pakete nutzen danach die Standardliste“) und die Meldung danach nennt die Pakete.
+  (Bis 2026-11-26 blockierte schon ein Paket ohne Kunden das Löschen.)
+- Gelöscht wird in zwei Klicks („Löschen“ → „Endgültig löschen“). Der Server prüft die Voraussetzung
+  noch einmal; schlägt die Prüfung selbst fehl, wird nicht gelöscht.
+- Rechnungen sind davon nicht berührt: Sie tragen ihre Positionen und Beträge eingefroren in sich.
+
+Testen: Paket anlegen (keinem Kunden zuweisen) → „⋯“ → „Paket löschen“ → „Endgültig löschen“ →
+„Paket gelöscht.“ Bei einem Paket mit Kunden zeigt das Menü den Hinweis statt des Knopfs. Dasselbe
+mit einer zweiten Verbrauchspreisliste.
 
 ## Data Actions (Migration 0040)
 

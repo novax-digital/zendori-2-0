@@ -571,6 +571,44 @@ a:focus-visible {
   white-space: normal;
 }
 
+/* "Mit KI erstellen" below an agent's identity field (IdentityAssistant): the
+   button row, and the panel with notes and the suggested text. */
+.ai-assist-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.ai-assist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.ai-assist-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+.ai-assist-check input {
+  margin-top: 2px;
+}
+.ai-assist-result {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* A message above every app page (BillingSetupBanner). The component writes its
    height to --app-banner-h so full-height pages keep fitting the window. */
 .app-banner {

@@ -3028,3 +3028,130 @@ describe.skipIf(!enabled)('RLS: invoice run log (0047) — service role only', (
     expect(after).toEqual(before);
   });
 });
+
+describe.skipIf(!enabled)('RLS: agent identity suggestions (0049)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let coAdmin: SupabaseClient;
+  let member: SupabaseClient;
+  let stranger: SupabaseClient;
+  let anon: SupabaseClient;
+  const userIds: string[] = [];
+  let orgId: string;
+  let foreignOrgId: string;
+  const emails = ['owner', 'admin', 'member', 'stranger'].map(
+    (who) => `prompt-${who}-${randomUUID()}@test.zendori.dev`
+  );
+  const password = `pw-${randomUUID()}`;
+  const NOTES = 'Kundenservice für Solaranlagen, duzen, keine Preise nennen';
+
+  const ask = (client: SupabaseClient, org: string, notes = NOTES) =>
+    client.rpc('request_agent_prompt', {
+      p_org_id: org,
+      p_agent_kind: 'text',
+      p_agent_name: 'Lisa',
+      p_notes: notes,
+      p_current_identity: null,
+    });
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    for (const email of emails) {
+      const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+      userIds.push(created.data.user!.id);
+    }
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Prompt Org', slug: `prompt-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    const { data: foreignOrg } = await admin
+      .from('organizations')
+      .insert({ name: 'Prompt Foreign', slug: `prompt-foreign-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    foreignOrgId = foreignOrg!.id as string;
+    await admin.from('org_members').insert([
+      { org_id: orgId, user_id: userIds[0], role: 'owner' },
+      { org_id: orgId, user_id: userIds[1], role: 'admin' },
+      { org_id: orgId, user_id: userIds[2], role: 'agent' },
+      { org_id: foreignOrgId, user_id: userIds[3], role: 'owner' },
+    ]);
+
+    const signIn = async (email: string): Promise<SupabaseClient> => {
+      const client = createClient(url!, anonKey!, { auth: { persistSession: false } });
+      expect((await client.auth.signInWithPassword({ email, password })).error).toBeNull();
+      return client;
+    };
+    const clients = await Promise.all(emails.map(signIn));
+    owner = clients[0]!;
+    coAdmin = clients[1]!;
+    member = clients[2]!;
+    stranger = clients[3]!;
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (foreignOrgId) await admin.from('organizations').delete().eq('id', foreignOrgId);
+    for (const id of userIds) await admin.auth.admin.deleteUser(id);
+  });
+
+  it('owner and admin ask; a plain member, a stranger and anon cannot', async () => {
+    const asked = await ask(owner, orgId);
+    expect(asked.error).toBeNull();
+    expect(typeof asked.data).toBe('string');
+    expect((await ask(coAdmin, orgId)).error).toBeNull();
+
+    expect((await ask(member, orgId)).error).not.toBeNull();
+    expect((await ask(stranger, orgId)).error).not.toBeNull();
+    expect((await ask(anon, orgId)).error).not.toBeNull();
+    // too short to be notes
+    expect((await ask(owner, orgId, 'kurz')).error).not.toBeNull();
+
+    const { data: rows } = await admin
+      .from('agent_prompt_requests')
+      .select('requested_by, state, agent_name, notes')
+      .eq('org_id', orgId);
+    expect(rows).toHaveLength(2);
+    expect(rows!.every((row) => row.state === 'queued' && row.notes === NOTES)).toBe(true);
+    expect(rows!.map((row) => row.requested_by).sort()).toEqual([userIds[0], userIds[1]].sort());
+  });
+
+  it('a request is read only by the member who made it', async () => {
+    const { data: asked } = await ask(owner, orgId);
+    const requestId = asked as string;
+    await admin
+      .from('agent_prompt_requests')
+      .update({ state: 'succeeded', result: 'Du bist Lisa.' })
+      .eq('id', requestId);
+
+    const own = await owner.from('agent_prompt_requests').select('state, result').eq('id', requestId);
+    expect(own.data).toEqual([{ state: 'succeeded', result: 'Du bist Lisa.' }]);
+    for (const other of [coAdmin, member, stranger, anon]) {
+      const { data } = await other.from('agent_prompt_requests').select('id').eq('id', requestId);
+      expect(data ?? []).toEqual([]);
+    }
+  });
+
+  it('nobody writes a request directly', async () => {
+    const { data: asked } = await ask(owner, orgId);
+    const requestId = asked as string;
+    const inserted = await owner
+      .from('agent_prompt_requests')
+      .insert({ org_id: orgId, agent_kind: 'text', notes: NOTES });
+    expect(inserted.error).not.toBeNull();
+    await owner
+      .from('agent_prompt_requests')
+      .update({ state: 'succeeded', result: 'gefälscht' })
+      .eq('id', requestId);
+    await owner.from('agent_prompt_requests').delete().eq('id', requestId);
+    const { data: row } = await admin
+      .from('agent_prompt_requests')
+      .select('state, result')
+      .eq('id', requestId)
+      .single();
+    expect(row).toEqual({ state: 'queued', result: null });
+  });
+});

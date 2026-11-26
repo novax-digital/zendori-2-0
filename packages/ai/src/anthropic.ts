@@ -10,6 +10,8 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { AI_MODELS } from './index.js';
 import { anthropicCost, type TokenUsage } from './cost.js';
 import {
+  buildAgentIdentityPrompt,
+  buildAgentIdentityUserMessage,
   buildClassifyPrompt,
   buildCompanyProfilePrompt,
   buildCompanyProfileUserMessage,
@@ -546,6 +548,69 @@ export async function summarizeCompanyWebsite(
   if (!result) throw new Error('Das Firmenprofil lieferte kein gültiges Ergebnis.');
   const usage = toUsage(message.usage);
   return { result, usage, costUsd: anthropicCost(AI_MODELS.classify, usage) };
+}
+
+export interface AgentIdentityInput {
+  companyName: string;
+  agentKind: 'text' | 'voice';
+  agentName?: string | null;
+  /** What the member typed about the agent. */
+  notes: string;
+  /** The identity as it stands, when it is to be reworked. */
+  currentIdentity?: string | null;
+}
+
+/** The editor gives up after a good minute; a call running longer helps nobody. */
+const AGENT_IDENTITY_TIMEOUT_MS = 60_000;
+
+/** An identity is stored in agents.identity, which takes this many characters. */
+export const AGENT_IDENTITY_MAX_CHARS = 8000;
+
+/** The model's text without a code fence or quotes it may have put around it. */
+export function cleanAgentIdentity(text: string): string {
+  let out = text.trim();
+  const fenced = out.match(/^```[a-zA-Z]*\n([\s\S]*?)\n?```$/);
+  if (fenced?.[1] !== undefined) out = fenced[1].trim();
+  const quoted = out.match(/^[„“"]([\s\S]*)[“”"]$/);
+  if (quoted?.[1] !== undefined && !/[„“”"]/.test(quoted[1])) out = quoted[1].trim();
+  return out.slice(0, AGENT_IDENTITY_MAX_CHARS).trim();
+}
+
+/**
+ * Agent editor (Sonnet — the text steers every answer of the agent afterwards,
+ * and it is written once, off the latency-critical path): a suggested identity
+ * from a member's notes. Throws when the model returns no text.
+ */
+export async function suggestAgentIdentity(
+  input: AgentIdentityInput
+): Promise<AiCallResult<string>> {
+  const client = getClient();
+  const message = await client.messages.create(
+    {
+      model: AI_MODELS.draft,
+      max_tokens: 1500,
+      system: buildAgentIdentityPrompt({
+        companyName: input.companyName,
+        agentKind: input.agentKind,
+      }),
+      messages: [
+        {
+          role: 'user',
+          content: buildAgentIdentityUserMessage({
+            agentName: input.agentName,
+            notes: input.notes,
+            currentIdentity: input.currentIdentity,
+          }),
+        },
+      ],
+    },
+    // somebody is waiting in the editor: one retry at most, and no call that hangs
+    { timeout: AGENT_IDENTITY_TIMEOUT_MS, maxRetries: 1 }
+  );
+  const result = cleanAgentIdentity(extractText(message));
+  if (result.length === 0) throw new Error('Der Vorschlag für die Identität war leer.');
+  const usage = toUsage(message.usage);
+  return { result, usage, costUsd: anthropicCost(AI_MODELS.draft, usage) };
 }
 
 /** Concatenate the text blocks of a message response. */

@@ -35,6 +35,7 @@ import {
   type PricePosition,
 } from '@/lib/billing-costs';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
@@ -42,9 +43,16 @@ import Callout from '@/components/ui/Callout';
 import Drawer from '@/components/ui/Drawer';
 import { Field } from '@/components/ui/Field';
 import { EmptyState, Section } from '@/components/ui/Layout';
+import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../_components/AdminUnavailable';
-import { createPackage, createPriceList, updatePurchaseCosts } from './actions';
+import {
+  createPackage,
+  createPriceList,
+  deletePackage,
+  deletePriceList,
+  updatePurchaseCosts,
+} from './actions';
 
 const BASE = '/admin/pricing';
 
@@ -134,6 +142,8 @@ export default async function AdminPricingPage({
       list,
       positions,
       packages: packages.filter((pkg) => (pkg.priceTierId ?? defaultList?.id) === list.id).length,
+      // packages that name this list fall back to the standard list when it is deleted
+      namedByPackages: packages.filter((pkg) => pkg.priceTierId === list.id).length,
       customers: subscriptions.filter(
         (sub) => resolveOrgPriceList(catalog, sub.orgId)?.id === list.id
       ).length,
@@ -191,6 +201,7 @@ export default async function AdminPricingPage({
                     <th>Je Rufnummer pro Monat</th>
                     <th>Verbrauchspreise</th>
                     <th>Kunden</th>
+                    <th aria-label="Aktionen" />
                   </tr>
                 </thead>
                 <tbody>
@@ -243,6 +254,39 @@ export default async function AdminPricingPage({
                         {withOwnValues > 0 ? (
                           <span className="muted"> · {withOwnValues} mit eigenen Werten</span>
                         ) : null}
+                      </td>
+                      <td className="cell-actions">
+                        <Menu label={`Aktionen für Paket ${pkg.name}`}>
+                          <Link className="menu-item" href={`${BASE}/packages/${pkg.id}`}>
+                            <span className="menu-label">Bearbeiten</span>
+                          </Link>
+                          <form action={createPackage}>
+                            <input
+                              type="hidden"
+                              name="name"
+                              value={`${pkg.name} (Kopie)`.slice(0, 80)}
+                            />
+                            <input type="hidden" name="copyFrom" value={pkg.id} />
+                            <button className="menu-item" type="submit">
+                              <span className="menu-label">Kopie anlegen</span>
+                            </button>
+                          </form>
+                          <form action={deletePackage}>
+                            <input type="hidden" name="id" value={pkg.id} />
+                            <input type="hidden" name="from" value="overview" />
+                            {customers > 0 ? (
+                              <p className="menu-note">
+                                Löschen ist erst möglich, wenn kein Kunde das Paket mehr nutzt.
+                              </p>
+                            ) : (
+                              <ConfirmDeleteButton
+                                inMenu
+                                label="Paket löschen"
+                                confirmLabel="Endgültig löschen"
+                              />
+                            )}
+                          </form>
+                        </Menu>
                       </td>
                     </tr>
                     )
@@ -318,10 +362,11 @@ export default async function AdminPricingPage({
                     <th>Preise</th>
                     <th>Hinweise</th>
                     <th>Verwendet von</th>
+                    <th aria-label="Aktionen" />
                   </tr>
                 </thead>
                 <tbody>
-                  {listRows.map(({ list, positions, packages: usedBy, customers }) => {
+                  {listRows.map(({ list, positions, packages: usedBy, namedByPackages, customers }) => {
                     const below = belowCostCount(positions);
                     const unpriced = unpricedCount(positions);
                     return (
@@ -347,6 +392,52 @@ export default async function AdminPricingPage({
                         <td className="muted">
                           {usedBy} {usedBy === 1 ? 'Paket' : 'Pakete'} · {customers}{' '}
                           {customers === 1 ? 'Kunde' : 'Kunden'}
+                        </td>
+                        <td className="cell-actions">
+                          <Menu label={`Aktionen für Verbrauchspreisliste ${list.name}`}>
+                            <Link className="menu-item" href={`${BASE}/lists/${list.id}`}>
+                              <span className="menu-label">Bearbeiten</span>
+                            </Link>
+                            <form action={createPriceList}>
+                              <input
+                                type="hidden"
+                                name="name"
+                                value={`${list.name} (Kopie)`.slice(0, 80)}
+                              />
+                              <input type="hidden" name="copyFrom" value={list.id} />
+                              <button className="menu-item" type="submit">
+                                <span className="menu-label">Kopie anlegen</span>
+                              </button>
+                            </form>
+                            <form action={deletePriceList}>
+                              <input type="hidden" name="id" value={list.id} />
+                              <input type="hidden" name="from" value="overview" />
+                              {list.isDefault ? (
+                                <p className="menu-note">
+                                  Die Standardliste kann nicht gelöscht werden.
+                                </p>
+                              ) : customers > 0 ? (
+                                <p className="menu-note">
+                                  Löschen ist erst möglich, wenn kein Kunde die Liste mehr nutzt.
+                                </p>
+                              ) : (
+                                <>
+                                  {namedByPackages > 0 ? (
+                                    <p className="menu-note">
+                                      {namedByPackages === 1
+                                        ? 'Ein Paket nutzt danach die Standardliste.'
+                                        : `${namedByPackages} Pakete nutzen danach die Standardliste.`}
+                                    </p>
+                                  ) : null}
+                                  <ConfirmDeleteButton
+                                    inMenu
+                                    label="Verbrauchspreisliste löschen"
+                                    confirmLabel="Endgültig löschen"
+                                  />
+                                </>
+                              )}
+                            </form>
+                          </Menu>
                         </td>
                       </tr>
                     );

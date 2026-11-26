@@ -8,6 +8,7 @@ import {
   agentModeSchema,
   escalationTargetSchema,
   isMissingColumnError,
+  isMissingFunctionError,
   sanitizeIntakeFields,
   type AgentKind,
   type AgentMode,
@@ -463,4 +464,94 @@ export async function deleteAgent(formData: FormData): Promise<void> {
   revalidatePath('/settings/agents');
   revalidatePath('/settings/channels');
   redirect(agentsUrl(org, { notice: 'Agent gelöscht. Zugewiesene Kanäle sind jetzt ohne Agent.' }));
+}
+
+// --- "Mit KI erstellen": suggested identity (migration 0049) -------------------------
+// The web app never calls an AI provider. It queues a request; the worker writes
+// the suggestion into the row and the editor reads it until it is finished.
+
+const identityRequestSchema = z.object({
+  org: z.uuid(),
+  kind: agentKindSchema,
+  name: z.string().trim().max(80),
+  notes: z.string().trim().min(10).max(4000),
+  current: z.string().trim().max(8000).nullable(),
+});
+
+export type IdentityRequestStart = { requestId: string } | { error: string };
+
+export interface IdentitySuggestionView {
+  state: 'queued' | 'running' | 'succeeded' | 'failed';
+  result: string | null;
+  errorCode: string | null;
+}
+
+/** Queues a suggestion. Who may ask (owner/admin) and how often is decided in the database. */
+export async function startIdentitySuggestion(
+  org: string,
+  input: { kind: string; name: string; notes: string; current: string | null }
+): Promise<IdentityRequestStart> {
+  const parsed = identityRequestSchema.safeParse({
+    org,
+    kind: input?.kind,
+    // a name that is too long is not worth an error here — the form checks it on save
+    name: typeof input?.name === 'string' ? input.name.trim().slice(0, 80) : '',
+    notes: input?.notes,
+    current: typeof input?.current === 'string' && input.current.trim() !== '' ? input.current : null,
+  });
+  if (!parsed.success) {
+    return { error: 'Bitte beschreibe den Agenten in ein paar Stichpunkten (10 bis 4.000 Zeichen).' };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.rpc('request_agent_prompt', {
+    p_org_id: parsed.data.org,
+    p_agent_kind: parsed.data.kind,
+    p_agent_name: parsed.data.name,
+    p_notes: parsed.data.notes,
+    p_current_identity: parsed.data.current,
+  });
+  if (error || typeof data !== 'string') {
+    if (isMissingFunctionError(error)) {
+      return { error: 'Der KI-Vorschlag ist noch nicht verfügbar.' };
+    }
+    const message = (error as { message?: string } | null)?.message ?? '';
+    if (message.includes('rate_limited')) {
+      return {
+        error: 'Das waren viele Vorschläge in kurzer Zeit. Bitte versuche es in einer Stunde noch einmal.',
+      };
+    }
+    if (message.includes('not allowed')) {
+      return { error: 'Nur Inhaber und Admins können Agenten verwalten.' };
+    }
+    return { error: 'Der Vorschlag konnte nicht angefordert werden.' };
+  }
+  return { requestId: data };
+}
+
+/** Poll target of the editor (RLS: only the member who asked, while owner/admin). */
+export async function getIdentitySuggestion(
+  org: string,
+  requestId: string
+): Promise<IdentitySuggestionView | null> {
+  if (!z.uuid().safeParse(org).success || !z.uuid().safeParse(requestId).success) return null;
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('agent_prompt_requests')
+    .select('state, result, error_code')
+    .eq('org_id', org)
+    .eq('id', requestId)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { state: string; result: string | null; error_code: string | null };
+  const state =
+    row.state === 'succeeded' || row.state === 'failed' || row.state === 'running'
+      ? row.state
+      : 'queued';
+  return {
+    state,
+    // a suggestion is only handed out once it is complete
+    result: state === 'succeeded' ? row.result : null,
+    errorCode: state === 'failed' ? row.error_code : null,
+  };
 }

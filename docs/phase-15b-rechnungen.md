@@ -1,15 +1,15 @@
 # Phase 15b — Eigene Rechnungen
 
-Owner-Entscheidung 2026-11-27: **Zendori stellt die Rechnungen selbst** — nicht Stripe und kein
+Owner-Entscheidung 2026-11-26: **Zendori stellt die Rechnungen selbst** — nicht Stripe und kein
 externes Rechnungsprogramm. Jeder Kunde bekommt dasselbe Dokument aus einem Nummernkreis, egal ob er
 über Stripe abgerechnet wird. Stripe zieht später nur noch den Betrag ein.
 
-Stand: **Schritt 1 ist live: Migration 0046 seit 2026-11-27 eingespielt** (Probelauf mit Rollback,
+Stand: **Schritt 1 ist live: Migration 0046 seit 2026-11-26 eingespielt** (Probelauf mit Rollback,
 dann echt; über die API geprüft, ohne eine Rechnung zu erstellen) **und der Code gepusht.** IBAN und
 BIC des Rechnungsstellers sind eingetragen (die Prüfsumme der IBAN stimmt), der Bankname noch nicht.
 Es gibt noch keine Rechnung. **Schritt 2 (automatischer Monatslauf) ist live: Migration 0047 seit
-2026-11-27 eingespielt, Code gepusht.** Der Lauf ist aus, bis der Betreiber einen Startmonat
-wählt. **Schritt 3 (Stripe-Einzug) ist live: Migration 0048 seit 2026-11-27 eingespielt, Code
+2026-11-26 eingespielt, Code gepusht.** Der Lauf ist aus, bis der Betreiber einen Startmonat
+wählt. **Schritt 3 (Stripe-Einzug) ist live: Migration 0048 seit 2026-11-26 eingespielt, Code
 gepusht** — zusammen mit den Reitern auf den Abrechnungsseiten. Eingezogen wird erst, wenn für einen
 Kunden mit Stripe-Abrechnung eine Rechnung entsteht; heute ist kein Kunde eingeschaltet. Gegen das
 echte Stripe ist der Einzug noch nie gelaufen.
@@ -34,7 +34,7 @@ echte Stripe ist der Einzug noch nie gelaufen.
 - **Storno:** erzeugt eine Stornorechnung mit eigener Nummer (dieselben Positionen negativ) und
   markiert die Rechnung als storniert. Danach kann der Monat neu berechnet werden.
 
-## Reiter auf den Abrechnungsseiten (2026-11-27)
+## Reiter auf den Abrechnungsseiten (2026-11-26)
 
 Die Seiten zeigten alles untereinander. Jetzt je Seite ein Thema pro Reiter (`?tab=`):
 
@@ -208,6 +208,61 @@ vier Argumente dazu; die bisherige Form bleibt und stellt eine Überweisungsrech
    bezahlt markieren“. Erwartet: kein Einzug, auch nicht am Termin.
 8. **Kunde ohne Stripe:** Rechnung erstellen. Erwartet: wie bisher, Bitte um Überweisung.
 
+## Export für die Buchhaltung (2026-11-26)
+
+**Plattform → Rechnungen → „Exportieren“.** Zeitraum wählen — ein Monat oder „Gesamter Zeitraum“ —
+und eines von beiden herunterladen:
+
+- **„PDFs als ZIP“:** jede Rechnung und Stornorechnung als eigenes PDF (`Rechnung-ZD-2026-1010.pdf`,
+  `Stornorechnung-…pdf`) und zusätzlich die Liste als `Rechnungsliste.csv`. Liegt für eine Rechnung
+  noch kein PDF vor (wird noch erzeugt oder ist fehlgeschlagen), steht sie in der Liste und in
+  `Hinweis-fehlende-PDFs.txt` — das Archiv sieht dann nie vollständiger aus, als es ist.
+- **„Liste als CSV“:** eine Zeile je Rechnung und je Stornorechnung. Spalten: Rechnungsnummer, Art,
+  Rechnungsdatum, Leistung von/bis, Fällig am, Kunde, Adresse, Adresszusatz, PLZ, Ort, Land, USt-ID,
+  Rechnungs-E-Mail, Netto, Steuersatz, Steuer, Brutto, Steuerart (Umsatzsteuer / Reverse Charge),
+  Status (Offen / Überfällig / Bezahlt / Storniert / Stornorechnung), Bezahlt am, Bezahlt über
+  (Von Hand / Stripe), Zahlungsnotiz, Zahlungsart, Einzug ab, Einzug (geplant / läuft / eingezogen /
+  fehlgeschlagen / zurückgebucht), Storno zu Rechnung, Storniert durch, Kunden-ID.
+
+Regeln:
+
+- **Es zählt das Rechnungsdatum**, nicht der Leistungsmonat: Die Rechnung für Oktober, ausgestellt
+  am 1. November, steht im November. Eine Stornorechnung steht in dem Monat, in dem sie ausgestellt
+  wurde — mit negativen Beträgen und der Nummer der Rechnung, die sie storniert.
+- Kunde, Anschrift und Beträge kommen aus der **eingefrorenen** Rechnung, nicht aus den heutigen
+  Rechnungsdaten des Kunden.
+- Die CSV ist für deutsches Excel gemacht: Semikolon, Dezimalkomma, Datum als TT.MM.JJJJ, UTF-8 mit
+  Kennung. Beträge ohne Währungszeichen und ohne Tausenderpunkt. Texte, die Excel als Formel lesen
+  würde (ein Firmenname, der mit `=`, `+`, `-` oder `@` beginnt), bekommen ein Hochkomma davor.
+- Höchstens 3.000 Rechnungen je Export; darüber bittet die Seite um einen einzelnen Monat.
+- Nur Plattform-Admins. Alle anderen bekommen „Nicht gefunden“.
+
+Technik: Route `GET /api/billing/invoices/export?format=zip|csv&month=YYYY-MM|all`
+(`apps/web/src/app/api/billing/invoices/export/route.ts`). Das ZIP wird **gestreamt** — PDF für PDF
+aus dem privaten Bucket gelesen und weitergereicht, acht gleichzeitig —, damit weder die Antwort
+noch der Speicher mit der Zahl der Rechnungen wächst. Der ZIP-Schreiber ist selbst geschrieben
+(`packages/core/src/zip.ts`, ohne Kompression, PDFs sind schon komprimiert) — keine neue
+Abhängigkeit. CSV in `packages/core/src/billing-invoice-export.ts`, Abfrage
+`listInvoicesForExport` in `billing-invoices.ts`. Keine Migration.
+
+### Testanleitung Export
+
+Voraussetzung: mindestens eine Rechnung mit fertigem PDF (Testkunde, siehe Testanleitung Schritt 1).
+
+1. **Plattform → Rechnungen → „Exportieren“.** Erwartet: Fenster „Rechnungen exportieren“ mit
+   „Gesamter Zeitraum“ und den Monaten seit der ersten Rechnung.
+2. **„Liste als CSV“.** Erwartet: Datei `Rechnungen-gesamt.csv`. In Excel öffnen: Umlaute richtig,
+   jede Spalte in ihrer eigenen Zelle, Beträge als Zahlen (rechtsbündig, summierbar), Datum als Datum.
+3. **„PDFs als ZIP“.** Erwartet: `Rechnungen-gesamt.zip`, lässt sich entpacken, enthält je Rechnung
+   ein PDF und `Rechnungsliste.csv`.
+4. **Einen Monat ohne Rechnungen wählen.** Erwartet: kein Download, sondern im Fenster „In diesem
+   Zeitraum gibt es keine Rechnungen.“
+5. **Eine Rechnung stornieren, erneut exportieren.** Erwartet: zwei Zeilen — die Rechnung mit Status
+   „Storniert“ und „Storniert durch“, die Stornorechnung mit negativen Beträgen und „Storno zu
+   Rechnung“. Beide PDFs im ZIP.
+6. **Abgemeldet** `https://app.zendori.ai/api/billing/invoices/export?format=csv&month=all` öffnen.
+   Erwartet: „Nicht gefunden“.
+
 ## Technik
 
 - **Migration 0046:** `billing_seller` (eine Zeile), `billing_invoice_counters`,
@@ -246,8 +301,6 @@ gegen die Produktionsdaten.
 
 ## Offen
 
-- **Export für die Buchhaltung** (Owner-Wunsch 2026-11-27): Rechnungen eines Monats oder des
-  gesamten Zeitraums gebündelt herunterladen, dazu die Liste als CSV. Noch nicht gebaut.
 - **E-Rechnung** (XRechnung/ZUGFeRD): Pflicht zum Ausstellen ab 2027 (über 800.000 € Vorjahresumsatz)
   bzw. 2028. Die eingefrorenen Daten reichen dafür aus.
 - **Mit der Steuerberatung klären:** eigener Nummernkreis neben den bisherigen Rechnungen, Übergabe

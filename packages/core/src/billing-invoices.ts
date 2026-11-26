@@ -15,6 +15,7 @@ import {
   type SellerSettings,
   sellerToRow,
 } from './billing-invoice.js';
+import { type InvoiceExportRange, isInvoiceExportRange } from './billing-invoice-export.js';
 import {
   type BillingAccountRow,
   type BillingDetails,
@@ -810,6 +811,123 @@ export function invoiceableMonths(now: Date): { key: string; label: string }[] {
     }
     const key = `${year}-${String(month).padStart(2, '0')}`;
     out.push({ key, label: invoicePeriodLabel(key) });
+  }
+  return out;
+}
+
+// --- export for the bookkeeping ---------------------------------------------------
+
+/** Rows per request; the API hands out at most 1,000 per call. */
+const EXPORT_PAGE_SIZE = 500;
+/** More than this is not exported in one go — the operator picks a month instead. A multiple of the page size. */
+export const INVOICE_EXPORT_MAX = 3000;
+
+export interface InvoiceExportList {
+  /** Oldest first, in the order the numbers were given. */
+  invoices: BillingInvoice[];
+  /** Invoice id → number for cancellations and originals outside the list. */
+  numbers: Map<string, string>;
+  /** true = there are more than INVOICE_EXPORT_MAX; the list is NOT complete. */
+  tooMany: boolean;
+}
+
+function nextMonthStart(month: string): string {
+  const [year, mon] = month.split('-').map(Number) as [number, number];
+  return mon === 12 ? `${year + 1}-01-01` : `${year}-${String(mon + 1).padStart(2, '0')}-01`;
+}
+
+/**
+ * Every invoice document of a month (by invoice date) or of all time. null when
+ * the range is not valid or the invoices cannot be read.
+ */
+export async function listInvoicesForExport(
+  admin: SupabaseClient,
+  range: InvoiceExportRange
+): Promise<InvoiceExportList | null> {
+  if (!isInvoiceExportRange(range)) return null;
+  const invoices: BillingInvoice[] = [];
+  let tooMany = false;
+
+  for (let from = 0; ; from += EXPORT_PAGE_SIZE) {
+    // past the maximum only one more row is asked for: is there anything left?
+    const probing = from >= INVOICE_EXPORT_MAX;
+    const to = probing ? from : from + EXPORT_PAGE_SIZE - 1;
+    let data: unknown = null;
+    let error: unknown = null;
+    for (const columns of INVOICE_COLUMN_SETS) {
+      let query = admin
+        .from('billing_invoices')
+        .select(columns)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to);
+      if (range !== 'all') {
+        query = query.gte('issue_date', `${range}-01`).lt('issue_date', nextMonthStart(range));
+      }
+      ({ data, error } = await query);
+      if (!(error && isMissingColumnError(error))) break;
+    }
+    if (error) return null;
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    if (probing) {
+      tooMany = rows.length > 0;
+      break;
+    }
+    for (const row of rows) {
+      const invoice = parseInvoiceRow(row);
+      if (invoice) invoices.push(invoice);
+    }
+    if (rows.length < EXPORT_PAGE_SIZE) break;
+  }
+
+  // the numbers of invoices this list points at but does not contain
+  const known = new Set(invoices.map((invoice) => invoice.id));
+  const missing = new Set<string>();
+  for (const invoice of invoices) {
+    for (const id of [invoice.cancelsInvoiceId, invoice.cancelledByInvoiceId]) {
+      if (id && !known.has(id)) missing.add(id);
+    }
+  }
+  const numbers = new Map<string, string>();
+  const ids = [...missing];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin
+      .from('billing_invoices')
+      .select('id, number')
+      .in('id', ids.slice(i, i + 200));
+    if (error) return null;
+    for (const row of (data ?? []) as { id: string; number: string }[]) {
+      numbers.set(row.id, row.number);
+    }
+  }
+  return { invoices, numbers, tooMany };
+}
+
+/** The months that can be exported: from the first invoice date up to this month, newest first. */
+export async function invoiceExportMonths(
+  admin: SupabaseClient,
+  now: Date
+): Promise<{ key: string; label: string }[]> {
+  const { data, error } = await admin
+    .from('billing_invoices')
+    .select('issue_date')
+    .order('issue_date', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const first = (data as { issue_date: string } | null)?.issue_date?.slice(0, 7);
+  if (error || !first || !isPeriodKey(first)) return [];
+  const out: { key: string; label: string }[] = [];
+  let [year, month] = berlinDate(now).slice(0, 7).split('-').map(Number) as [number, number];
+  // at most ten years back, whatever the first date says
+  for (let i = 0; i < 120; i += 1) {
+    const key = `${year}-${String(month).padStart(2, '0')}`;
+    if (key < first) break;
+    out.push({ key, label: invoicePeriodLabel(key) });
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
   }
   return out;
 }

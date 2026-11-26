@@ -33,6 +33,7 @@ import {
 } from './pipeline/post-call.js';
 import { FORM_NOTIFY_QUEUE, processFormNotification } from './pipeline/form-notify.js';
 import { ACTION_RUN_QUEUE, executeQueuedRun } from './actions/execute.js';
+import { AGENT_PROMPT_QUEUE, processAgentPrompt } from './pipeline/agent-prompt.js';
 import { INTEGRATION_EVENT_QUEUE, deliverIntegrationEvent } from './actions/events.js';
 import { MCP_SYNC_QUEUE, syncMcpConnection } from './actions/mcp-sync.js';
 import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/deliver.js';
@@ -62,6 +63,7 @@ const postCallJobSchema = z.object({ voiceCallId: z.uuid() });
 const formNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const learnDistillJobSchema = z.object({ learnedAnswerId: z.uuid() });
 const actionRunJobSchema = z.object({ runId: z.uuid() });
+const agentPromptJobSchema = z.object({ requestId: z.uuid() });
 const integrationEventJobSchema = z.object({ eventId: z.uuid() });
 const mcpSyncJobSchema = z.object({ connectionId: z.uuid() });
 const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
@@ -281,6 +283,26 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), runId }, 'action run job failed');
+        }
+      }
+    }
+  );
+
+  // --- 0049: suggested agent identity ("Mit KI erstellen" in the agent editor) -----
+  // processAgentPrompt claims the request (queued → running) and closes it as
+  // succeeded/failed itself; a paid call is never redelivered.
+  await ensureQueuePolicy(boss, AGENT_PROMPT_QUEUE);
+  await boss.work(
+    AGENT_PROMPT_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { requestId: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { requestId } = agentPromptJobSchema.parse(job.data);
+        try {
+          await processAgentPrompt({ supabase, logger }, requestId);
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), requestId }, 'agent prompt job failed');
         }
       }
     }

@@ -54,10 +54,10 @@ export default async function AdminPriceListPage({
   const customerCount = subscriptions.filter(
     (sub) => resolveOrgPriceList(catalog, sub.orgId)?.id === list.id
   ).length;
-  // a list named directly on a package or a customer cannot be deleted
-  const pinned =
-    [...catalog.packages.values()].some((pkg) => pkg.priceTierId === list.id) ||
-    subscriptions.some((sub) => sub.priceTierId === list.id);
+  // packages that name this list fall back to the standard list when it is deleted
+  const namedByPackages = [...catalog.packages.values()].filter(
+    (pkg) => pkg.priceTierId === list.id
+  ).length;
 
   return (
     <div className="page">
@@ -78,16 +78,25 @@ export default async function AdminPriceListPage({
               <input type="hidden" name="id" value={list.id} />
               {list.isDefault ? (
                 <p className="menu-note">Die Standardliste kann nicht gelöscht werden.</p>
-              ) : pinned ? (
+              ) : customerCount > 0 ? (
                 <p className="menu-note">
-                  Löschen ist erst möglich, wenn kein Paket und kein Kunde die Liste mehr nutzt.
+                  Löschen ist erst möglich, wenn kein Kunde die Liste mehr nutzt.
                 </p>
               ) : (
-                <ConfirmDeleteButton
-                  inMenu
-                  label="Verbrauchspreisliste löschen"
-                  confirmLabel="Endgültig löschen"
-                />
+                <>
+                  {namedByPackages > 0 ? (
+                    <p className="menu-note">
+                      {namedByPackages === 1
+                        ? 'Ein Paket nutzt danach die Standardliste.'
+                        : `${namedByPackages} Pakete nutzen danach die Standardliste.`}
+                    </p>
+                  ) : null}
+                  <ConfirmDeleteButton
+                    inMenu
+                    label="Verbrauchspreisliste löschen"
+                    confirmLabel="Endgültig löschen"
+                  />
+                </>
               )}
             </form>
           </Menu>
