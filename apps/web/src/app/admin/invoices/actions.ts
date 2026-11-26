@@ -8,6 +8,8 @@ import {
   billingDetailsSchema,
   invoiceSellerSchema,
   isInvoiceNumberFormat,
+  isPeriodKey,
+  periodKeyOf,
 } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { billingDetailsFromForm, saveBillingDetailsRow } from '@/lib/billing-account';
@@ -15,6 +17,7 @@ import {
   cancelInvoice,
   confirmAccountVatId,
   issueInvoiceForMonth,
+  loadSellerState,
   requestInvoiceMail,
   saveSellerSettings,
   setInvoicePaid,
@@ -112,16 +115,44 @@ export async function saveSeller(formData: FormData): Promise<void> {
 
   const admin = createSupabaseAdminClient();
   if (!admin) return fail(NO_SERVICE_ROLE);
+
+  // The monthly run starts with the current month at the earliest: a month that
+  // is already over is never invoiced automatically. A stored start month stays
+  // valid as it is.
+  const autoRaw = textField(formData.get('autoInvoiceFrom'));
+  const current = await loadSellerState(admin);
+  let autoInvoiceFrom: string | null = null;
+  if (autoRaw !== '') {
+    const stored = current.settings.autoInvoiceFrom;
+    if (!isPeriodKey(autoRaw) || (autoRaw < periodKeyOf(new Date()) && autoRaw !== stored)) {
+      return fail(
+        'Der automatische Monatslauf kann frühestens mit dem laufenden Monat beginnen. Frühere Monate erstellst du von Hand.'
+      );
+    }
+    autoInvoiceFrom = autoRaw;
+  }
+
   const saved = await saveSellerSettings(
     admin,
-    { seller: seller.data, numberFormat, numberStart, paymentTermDays },
+    { seller: seller.data, numberFormat, numberStart, paymentTermDays, autoInvoiceFrom },
     userId
   );
   if (saved.error) return fail('Die Angaben konnten nicht gespeichert werden.');
 
   revalidatePath(INVOICES);
   revalidatePath(target);
-  redirect(backUrl(formData, target, { notice: 'Rechnungssteller gespeichert.' }));
+  redirect(
+    backUrl(
+      formData,
+      target,
+      saved.autoRunUnavailable
+        ? {
+            error:
+              'Gespeichert, aber der automatische Monatslauf ist noch nicht verfügbar (Migration 0047 ausstehend).',
+          }
+        : { notice: 'Rechnungssteller gespeichert.' }
+    )
+  );
 }
 
 // --- invoices -------------------------------------------------------------------

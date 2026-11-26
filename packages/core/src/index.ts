@@ -9,6 +9,8 @@ export * from './qa-csv.js';
 export * from './billing.js';
 export * from './billing-tax.js';
 export * from './billing-invoice.js';
+export * from './billing-statement.js';
+export * from './billing-invoices.js';
 export * from './permissions.js';
 export * from './tickets.js';
 export * from './ticket-service.js';

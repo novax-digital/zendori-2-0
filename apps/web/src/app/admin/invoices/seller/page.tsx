@@ -2,7 +2,13 @@
 // invoice as the seller — company, tax and bank details — plus the number
 // format and the payment term. Changes apply to invoices issued from now on;
 // an issued invoice keeps the details it was issued with.
-import { DEFAULT_INVOICE_NUMBER_FORMAT, formatInvoiceNumber } from '@zendori/core';
+import {
+  DEFAULT_INVOICE_NUMBER_FORMAT,
+  formatInvoiceNumber,
+  invoicePeriodLabel,
+  periodKeyOf,
+  shiftPeriodKey,
+} from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { loadSellerState } from '@/lib/invoices';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -26,8 +32,12 @@ export default async function AdminSellerPage({
   if (!admin) return <AdminUnavailable title="Rechnungssteller" />;
 
   const state = await loadSellerState(admin);
-  const { seller, numberFormat, numberStart, paymentTermDays } = state.settings;
+  const { seller, numberFormat, numberStart, paymentTermDays, autoInvoiceFrom } = state.settings;
   const year = new Date().getFullYear();
+  // the monthly run may start with the running month or later; a stored month stays selectable
+  const thisMonth = periodKeyOf(new Date());
+  const autoChoices = [thisMonth, shiftPeriodKey(thisMonth, 1), shiftPeriodKey(thisMonth, 2)];
+  if (autoInvoiceFrom && !autoChoices.includes(autoInvoiceFrom)) autoChoices.unshift(autoInvoiceFrom);
 
   const text = (
     name: string,
@@ -168,6 +178,34 @@ export default async function AdminSellerPage({
                   maxLength={500}
                   defaultValue={seller.footerNote}
                 />
+              </Field>
+            </Section>
+
+            <Section
+              title="Automatischer Monatslauf"
+              help="Ab dem gewählten Monat erstellt Zendori die Rechnungen von selbst: einige Stunden nach Monatsende, für jeden Kunden mit vollständigen Rechnungsdaten und einem Betrag über 0 €. Frühere Monate bleiben unberührt — die erstellst du von Hand."
+            >
+              <Field
+                label="Automatisch ab Monat"
+                htmlFor="seller-autoInvoiceFrom"
+                help={
+                  autoInvoiceFrom
+                    ? `Eingeschaltet: Die Rechnung für ${invoicePeriodLabel(autoInvoiceFrom)} entsteht Anfang des Folgemonats, danach jeden Monat.`
+                    : 'Aus: Es entsteht keine Rechnung von selbst.'
+                }
+              >
+                <select
+                  id="seller-autoInvoiceFrom"
+                  name="autoInvoiceFrom"
+                  defaultValue={autoInvoiceFrom ?? ''}
+                >
+                  <option value="">Aus — nur von Hand</option>
+                  {autoChoices.map((key) => (
+                    <option key={key} value={key}>
+                      ab {invoicePeriodLabel(key)}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </Section>
           </div>

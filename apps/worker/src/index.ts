@@ -40,6 +40,7 @@ import { workerStripe } from './billing/stripe.js';
 import { BILLING_SYNC_QUEUE, syncBillingCustomer } from './billing/customer-sync.js';
 import { sendBillingSetupMail } from './billing/setup-mail.js';
 import { INVOICE_DOCUMENT_QUEUE, processInvoiceDocument } from './billing/invoice-document.js';
+import { INVOICE_RUN_QUEUE, runInvoiceMonth } from './billing/invoice-run.js';
 import { STRIPE_EVENT_QUEUE, processStripeEvent } from './billing/stripe-events.js';
 import {
   LEARN_DISTILL_QUEUE,
@@ -66,6 +67,7 @@ const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
 const stripeEventJobSchema = z.object({ eventId: z.string().min(1).max(255) });
 const billingSyncJobSchema = z.object({ orgId: z.uuid() });
 const invoiceDocumentJobSchema = z.object({ invoiceId: z.uuid() });
+const invoiceRunJobSchema = z.object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -438,6 +440,25 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), invoiceId }, 'invoice document job failed');
+        }
+      }
+    }
+  );
+
+  // --- monthly invoice run (Phase 15b step 2, 0047) --------------------------------
+  // One month at a time: every customer gets the invoice for a finished month.
+  await ensureQueuePolicy(boss, INVOICE_RUN_QUEUE);
+  await boss.work(
+    INVOICE_RUN_QUEUE,
+    { pollingIntervalSeconds: 5, batchSize: 1 },
+    async (jobs: { data: { period: string } }[]) => {
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { period } = invoiceRunJobSchema.parse(job.data);
+        try {
+          await runInvoiceMonth({ supabase, logger }, period);
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), period }, 'invoice run job failed');
         }
       }
     }

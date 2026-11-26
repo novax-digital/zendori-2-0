@@ -51,6 +51,13 @@ import {
   type BillingSyncJob,
 } from './billing/customer-sync.js';
 import {
+  INVOICE_RUN_QUEUE,
+  INVOICE_RUN_RETRY_LIMIT,
+  dueInvoicePeriods,
+  loadAutoInvoiceFrom,
+  type InvoiceRunJob,
+} from './billing/invoice-run.js';
+import {
   INVOICE_DOCUMENT_QUEUE,
   INVOICE_DOCUMENT_RETRY_LIMIT,
   isInvoiceDocumentDue,
@@ -82,6 +89,8 @@ const MEMBER_NOTIFY_BATCH = 20;
 const STRIPE_EVENT_BATCH = 20;
 const BILLING_SYNC_BATCH = 20;
 const INVOICE_DOCUMENT_BATCH = 20;
+/** How often the scan looks whether a month is due for the invoice run. */
+const INVOICE_RUN_CHECK_MS = 15 * 60_000;
 /** Delivered events are pruned once an hour. */
 const EVENT_PRUNE_MS = 60 * 60_000;
 
@@ -131,6 +140,7 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
   let scanning = false;
   let lastStaleRunSweep = 0;
   let lastEventPrune = 0;
+  let lastInvoiceRunCheck = 0;
 
   const tick = async (): Promise<void> => {
     if (scanning) return;
@@ -157,6 +167,11 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueueRequestedBillingSyncs(boss, supabase);
       // Phase 15b: issued invoices that still need their PDF or their mail
       await enqueueDueInvoiceDocuments(boss, supabase);
+      // Phase 15b step 2: the monthly invoice run (off until a start month is set)
+      if (Date.now() - lastInvoiceRunCheck >= INVOICE_RUN_CHECK_MS) {
+        lastInvoiceRunCheck = Date.now();
+        await enqueueDueInvoiceRuns(boss, supabase);
+      }
       if (Date.now() - lastEventPrune >= EVENT_PRUNE_MS) {
         lastEventPrune = Date.now();
         await pruneIntegrationEvents(supabase);
@@ -507,6 +522,21 @@ async function enqueueRequestedBillingSyncs(boss: PgBoss, supabase: SupabaseClie
     await boss.send(BILLING_SYNC_QUEUE, { orgId: row.org_id } satisfies BillingSyncJob, {
       singletonKey: row.org_id,
       retryLimit: BILLING_SYNC_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue the monthly invoice run for every finished month that is due (0047).
+ * One job per month; pg-boss keeps a second one for the same month from
+ * starting while the first is queued or running.
+ */
+async function enqueueDueInvoiceRuns(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const autoFrom = await loadAutoInvoiceFrom(supabase);
+  for (const period of dueInvoicePeriods(autoFrom, Date.now())) {
+    await boss.send(INVOICE_RUN_QUEUE, { period } satisfies InvoiceRunJob, {
+      singletonKey: period,
+      retryLimit: INVOICE_RUN_RETRY_LIMIT,
     });
   }
 }

@@ -2957,3 +2957,74 @@ describe.skipIf(!enabled)('RLS: own invoices (0046) — service role only', () =
     await admin.storage.from('invoices').remove([path]);
   });
 });
+
+describe.skipIf(!enabled)('RLS: invoice run log (0047) — service role only', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let anon: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  const ownerEmail = `run-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Run Org', slug: `run-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+    expect(
+      (
+        await admin.from('billing_invoice_runs').insert({
+          org_id: orgId,
+          period: '2026-12',
+          outcome: 'skipped',
+          reason: 'missing_details',
+        })
+      ).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('the owner of the org and anon read and write nothing', async () => {
+    const { data: asOwner } = await owner.from('billing_invoice_runs').select('*');
+    expect(asOwner ?? []).toHaveLength(0);
+    const { data: asAnon } = await anon.from('billing_invoice_runs').select('*');
+    expect(asAnon ?? []).toHaveLength(0);
+
+    const inserted = await owner
+      .from('billing_invoice_runs')
+      .insert({ org_id: orgId, period: '2027-01', outcome: 'issued' });
+    expect(inserted.error).not.toBeNull();
+    await owner.from('billing_invoice_runs').update({ outcome: 'issued', reason: null }).eq('org_id', orgId);
+    const { data: row } = await admin
+      .from('billing_invoice_runs')
+      .select('outcome, reason')
+      .eq('org_id', orgId)
+      .single();
+    expect(row).toEqual({ outcome: 'skipped', reason: 'missing_details' });
+  });
+
+  it('a member cannot switch the monthly run on', async () => {
+    const { data: before } = await admin.from('billing_seller').select('auto_invoice_from').maybeSingle();
+    await owner.from('billing_seller').update({ auto_invoice_from: '2026-01' }).eq('id', true);
+    const { data: after } = await admin.from('billing_seller').select('auto_invoice_from').maybeSingle();
+    expect(after).toEqual(before);
+  });
+});

@@ -141,11 +141,18 @@ describe('the seller', () => {
       numberFormat: 'ZD-{YYYY}-{NNNN}',
       numberStart: 1,
       paymentTermDays: 14,
+      autoInvoiceFrom: '2026-12',
     };
     const row = sellerToRow(settings);
     expect(row.address_line2).toBeNull();
     expect(row.iban).toBe('DE02120300000000202051');
+    expect(row.auto_invoice_from).toBe('2026-12');
     expect(sellerFromRow(row)).toEqual(settings);
+    // the monthly run is off unless a valid month is stored (also before 0047)
+    expect(sellerFromRow({ ...row, auto_invoice_from: null }).autoInvoiceFrom).toBeNull();
+    expect(sellerFromRow({ ...row, auto_invoice_from: 'bald' }).autoInvoiceFrom).toBeNull();
+    const { auto_invoice_from: _absent, ...before0047 } = row;
+    expect(sellerFromRow(before0047).autoInvoiceFrom).toBeNull();
     // nothing stored yet: empty seller, default format
     expect(sellerFromRow(null).numberFormat).toBe('ZD-{YYYY}-{NNNN}');
     expect(sellerFromRow(null).seller.country).toBe('DE');

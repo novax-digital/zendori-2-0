@@ -14,6 +14,7 @@
 // Never logs addresses or amounts (§7).
 import {
   BILLING_INVOICE_COLUMNS,
+  INVOICE_BUCKET,
   formatCentsEur,
   formatDateDe,
   invoiceFileName,
@@ -46,8 +47,6 @@ export const INVOICE_DOCUMENT_RETRY_DELAYS_MS: readonly number[] = [
   30 * 60_000,
   2 * 60 * 60_000,
 ];
-export const INVOICE_BUCKET = 'invoices';
-
 const DEFAULT_APP_URL = 'https://app.zendori.ai';
 
 export interface InvoiceDocumentJob {

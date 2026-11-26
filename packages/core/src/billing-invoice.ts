@@ -79,6 +79,8 @@ export interface BillingSellerRow {
   invoice_number_format: string;
   invoice_number_start: number;
   payment_term_days: number;
+  /** 0047; absent before the migration. */
+  auto_invoice_from?: string | null;
 }
 
 export interface SellerSettings {
@@ -86,6 +88,11 @@ export interface SellerSettings {
   numberFormat: string;
   numberStart: number;
   paymentTermDays: number;
+  /**
+   * First month (YYYY-MM) whose invoices are issued by the monthly run; null =
+   * no automatic invoices (migration 0047).
+   */
+  autoInvoiceFrom: string | null;
 }
 
 export function sellerFromRow(row: BillingSellerRow | null): SellerSettings {
@@ -114,6 +121,10 @@ export function sellerFromRow(row: BillingSellerRow | null): SellerSettings {
     numberFormat: row?.invoice_number_format ?? DEFAULT_INVOICE_NUMBER_FORMAT,
     numberStart: row?.invoice_number_start ?? 1,
     paymentTermDays: row?.payment_term_days ?? 14,
+    autoInvoiceFrom:
+      typeof row?.auto_invoice_from === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(row.auto_invoice_from)
+        ? row.auto_invoice_from
+        : null,
   };
 }
 
@@ -142,6 +153,7 @@ export function sellerToRow(settings: SellerSettings): BillingSellerRow {
     invoice_number_format: settings.numberFormat,
     invoice_number_start: settings.numberStart,
     payment_term_days: settings.paymentTermDays,
+    auto_invoice_from: settings.autoInvoiceFrom,
   };
 }
 

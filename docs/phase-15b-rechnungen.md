@@ -7,8 +7,9 @@ externes Rechnungsprogramm. Jeder Kunde bekommt dasselbe Dokument aus einem Numm
 Stand: **Schritt 1 ist live: Migration 0046 seit 2026-11-27 eingespielt** (Probelauf mit Rollback,
 dann echt; über die API geprüft, ohne eine Rechnung zu erstellen) **und der Code gepusht.** IBAN und
 BIC des Rechnungsstellers sind eingetragen (die Prüfsumme der IBAN stimmt), der Bankname noch nicht.
-Es gibt noch keine Rechnung. Schritt 2 (automatischer Monatslauf) und Schritt 3 (Stripe-Einzug)
-sind nicht gebaut.
+Es gibt noch keine Rechnung. **Schritt 2 (automatischer Monatslauf) ist live: Migration 0047 seit
+2026-11-27 eingespielt, Code gepusht.** Der Lauf ist aus, bis der Betreiber einen Startmonat
+wählt. Schritt 3 (Stripe-Einzug) ist nicht gebaut.
 
 ## Was Schritt 1 kann
 
@@ -57,6 +58,50 @@ sind nicht gebaut.
   heutige Stand, sodass eine Nummer auf der Rechnung eines Monats gelandet wäre, in dem es sie noch
   nicht gab.
 
+## Schritt 2 — automatischer Monatslauf (Migration 0047)
+
+Der Worker erstellt die Rechnungen eines Monats von selbst — mit `issueInvoiceForMonth`, derselben
+Funktion wie der Knopf „Rechnung erstellen“. PDF und Mail folgen wie bei jeder Rechnung.
+
+- **Aus, bis der Betreiber einen Startmonat einträgt** (Plattform → Rechnungen → Rechnungssteller →
+  „Automatisch ab Monat“, `billing_seller.auto_invoice_from`). Zur Wahl stehen nur der laufende
+  Monat und spätere: **Ein Monat, der beim Einschalten schon vorbei war, wird nie automatisch
+  berechnet.** Der Worker prüft das selbst noch einmal.
+- **Wann:** sechs Stunden nach Monatsende (UTC), damit späte Verbrauchsbuchungen drin sind. Der
+  Scan sieht alle 15 Minuten nach. War der Worker aus, holt er bis zu drei Monate nach.
+- **Für wen:** jede Organisation. Was der Lauf für einen Kunden und Monat getan hat, steht in
+  `billing_invoice_runs` (eine Zeile je Kunde und Monat):
+  - `issued` — fertig. Wird die Rechnung später storniert, erstellt der Lauf **keine** neue; das
+    entscheidet der Betreiber.
+  - `skipped` mit endgültigem Grund — „nichts zu berechnen“ oder „schon von Hand berechnet“.
+  - `skipped` mit behebbarem Grund — Rechnungsdaten fehlen, USt-ID nicht bestätigt,
+    Rechnungssteller unvollständig, Fehler. Der Lauf versucht es alle sechs Stunden wieder; sobald
+    der Kunde seine Daten hinterlegt hat, geht die Rechnung raus.
+- **Sichtbar** unter Plattform → Rechnungen → „Automatischer Monatslauf“: ob er läuft, ab wann,
+  und die Liste der Kunden, die noch keine Rechnung bekommen haben, mit Grund und Link.
+- Eine doppelte Rechnung ist ausgeschlossen: Je Kunde und Monat lässt die Datenbank nur eine zu.
+- **Dafür umgezogen:** Die Monatsrechnung (`getOrgInvoice`, `loadBillingCatalog` …) und das
+  Ausstellen liegen jetzt in `packages/core` (`billing-statement.ts`, `billing-invoices.ts`), damit
+  App und Worker mit demselben Code rechnen. `apps/web/src/lib/billing.ts` und `…/invoices.ts`
+  reichen die Namen nur noch durch.
+- Worker: `apps/worker/src/billing/invoice-run.ts`, Queue `billing.invoice-run` (ein Monat je Job).
+
+**Reihenfolge:** Migration 0047 zuerst, dann Code und Worker. Ohne die Migration bleibt der Lauf
+aus und die Einstellung meldet, dass sie noch nicht verfügbar ist.
+
+### Testanleitung Schritt 2
+
+1. **Plattform → Rechnungen.** Erwartet: Abschnitt „Automatischer Monatslauf“ mit „Aus.“
+2. **Rechnungssteller → „Automatisch ab Monat“.** Erwartet: „Aus — nur von Hand“ und drei Monate
+   ab dem laufenden. Laufenden Monat wählen, speichern. Erwartet: „Eingeschaltet: Die Rechnung
+   für … entsteht Anfang des Folgemonats“.
+3. **Am Ersten des Folgemonats ab 7 Uhr (Winterzeit) bzw. 8 Uhr (Sommerzeit).** Erwartet: Für jeden
+   Kunden mit Rechnungsdaten und Umsatz steht eine neue Rechnung in der Liste, die Mail ist raus.
+4. **Kunde ohne Rechnungsdaten.** Erwartet: Er steht unter „Diese Kunden haben noch keine Rechnung
+   bekommen“ mit dem Grund. Rechnungsdaten eintragen: Spätestens sechs Stunden später ist die
+   Rechnung da und der Eintrag weg.
+5. **„Aus — nur von Hand“ wählen und speichern.** Erwartet: Es entsteht nichts mehr von selbst.
+
 ## Technik
 
 - **Migration 0046:** `billing_seller` (eine Zeile), `billing_invoice_counters`,
@@ -95,8 +140,6 @@ gegen die Produktionsdaten.
 
 ## Offen
 
-- **Schritt 2:** automatischer Monatslauf ab einem Startmonat, den der Betreiber einträgt (leer =
-  aus). Dafür wandert die Monatsrechnung aus `apps/web/src/lib/billing.ts` nach `packages/core`.
 - **Schritt 3:** Stripe-Einzug bei eingeschalteten Kunden (Betrag abbuchen statt überweisen),
   Zahlstatus von selbst, Rückbuchung. Die Rechnung nennt dann den Einzug statt der Überweisung.
 - **E-Rechnung** (XRechnung/ZUGFeRD): Pflicht zum Ausstellen ab 2027 (über 800.000 € Vorjahresumsatz)

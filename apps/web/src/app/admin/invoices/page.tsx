@@ -2,14 +2,22 @@
 // all customers, with what is open and what is paid. Invoices are created on
 // the customer's page (Abrechnung → Kunde) or here, for a customer and a
 // finished month; the seller's own details live one click away.
+import Link from 'next/link';
 import {
   berlinDate,
   formatCentsEur,
   invoiceDisplayStatus,
+  invoicePeriodLabel,
   type InvoiceDisplayStatus,
 } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
-import { invoiceableMonths, listInvoices, loadSellerState } from '@/lib/invoices';
+import {
+  ISSUE_FAILURE_LABELS,
+  invoiceableMonths,
+  listInvoiceRunSkips,
+  listInvoices,
+  loadSellerState,
+} from '@/lib/invoices';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import InvoiceTable from '@/components/billing/InvoiceTable';
 import DismissibleBanners from '@/components/DismissibleBanners';
@@ -47,7 +55,11 @@ export default async function AdminInvoicesPage({
   const admin = createSupabaseAdminClient();
   if (!admin) return <AdminUnavailable title="Rechnungen" />;
 
-  const [list, seller] = await Promise.all([listInvoices(admin), loadSellerState(admin)]);
+  const [list, seller, skips] = await Promise.all([
+    listInvoices(admin),
+    loadSellerState(admin),
+    listInvoiceRunSkips(admin),
+  ]);
   if (!list.available || !seller.available) {
     return (
       <div className="page">
@@ -73,10 +85,13 @@ export default async function AdminInvoicesPage({
   const paidCents = sum((s) => s === 'paid');
 
   const creating = panel === 'new';
-  const { data: orgData } = creating
-    ? await admin.from('organizations').select('id, name').order('name')
-    : { data: [] };
+  const { data: orgData } =
+    creating || skips.length > 0
+      ? await admin.from('organizations').select('id, name').order('name')
+      : { data: [] };
   const orgs = (orgData ?? []) as { id: string; name: string }[];
+  const orgName = new Map(orgs.map((org) => [org.id, org.name]));
+  const autoFrom = seller.settings.autoInvoiceFrom;
   const months = invoiceableMonths(new Date());
   const listHref = filter.key === 'all' ? BASE : `${BASE}?status=${filter.key}`;
 
@@ -111,6 +126,55 @@ export default async function AdminInvoicesPage({
             Es fehlt: {seller.missing.join(', ')}. Vorher lässt sich keine Rechnung erstellen.
           </Callout>
         ) : null}
+
+        <Section
+          title="Automatischer Monatslauf"
+          actions={
+            <Button href={`${BASE}/seller`} size="sm">
+              {autoFrom ? 'Ändern' : 'Einschalten'}
+            </Button>
+          }
+        >
+          <p className="muted">
+            {autoFrom
+              ? `Eingeschaltet ab ${invoicePeriodLabel(autoFrom)}: Die Rechnungen eines Monats entstehen einige Stunden nach Monatsende und gehen an die Rechnungs-E-Mail der Kunden.`
+              : 'Aus. Rechnungen entstehen nur, wenn du sie von Hand erstellst.'}
+          </p>
+          {skips.length > 0 ? (
+            <>
+              <Callout tone="warn" title="Diese Kunden haben noch keine Rechnung bekommen">
+                Der Monatslauf versucht es alle paar Stunden erneut, sobald der Grund behoben ist.
+              </Callout>
+              <div className="table-wrap">
+                <table className="table--compact">
+                  <thead>
+                    <tr>
+                      <th>Kunde</th>
+                      <th>Monat</th>
+                      <th>Grund</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {skips.map((skip) => (
+                      <tr key={`${skip.orgId}-${skip.period}`}>
+                        <td>
+                          <Link
+                            className="cell-title"
+                            href={`/admin/billing/${skip.orgId}?month=${skip.period}`}
+                          >
+                            {orgName.get(skip.orgId) ?? 'Organisation'}
+                          </Link>
+                        </td>
+                        <td>{invoicePeriodLabel(skip.period)}</td>
+                        <td className="muted">{ISSUE_FAILURE_LABELS[skip.reason]}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+        </Section>
 
         <Section title="Überblick">
           <Stats>
