@@ -11,6 +11,7 @@ import {
   categoryPriceEur,
   effectivePricing,
   emailCostUsd,
+  includedChannelCounts,
   isMissingColumnError,
   numberCostEur,
   numberFeeLines,
@@ -23,6 +24,7 @@ import {
   whatsappCostUsd,
   type BillingCategory,
   type BillingInterval,
+  type ChannelCounts,
   type EffectiveTerms,
   type NumberCounts,
   type NumberFees,
@@ -146,6 +148,48 @@ export async function getOrgBilling(
   };
 
   return { orgId, fromIso, toIso, lines, totalCostUsd, totalPriceEur, numberCounts };
+}
+
+/**
+ * How many channels of each kind were ACTIVE in [fromIso, toIso) — what the fee
+ * per channel is charged for (migration 0045, billing_active_channels). null =
+ * the database cannot say (function missing before the migration, or a read
+ * problem); callers then charge by quota, as before the change.
+ */
+export async function getActiveChannelCounts(
+  admin: SupabaseClient,
+  orgId: string,
+  fromIso: string,
+  toIso: string
+): Promise<ChannelCounts | null> {
+  const { data, error } = await admin.rpc('billing_active_channels', {
+    p_org_id: orgId,
+    p_from: fromIso,
+    p_to: toIso,
+  });
+  if (error || !Array.isArray(data)) return null;
+  const counts: ChannelCounts = {};
+  for (const row of data as { channel_kind: string; quantity: number | string }[]) {
+    if ((PACKAGE_CHANNEL_KINDS as readonly string[]).includes(row.channel_kind)) {
+      counts[row.channel_kind as (typeof PACKAGE_CHANNEL_KINDS)[number]] =
+        Number(row.quantity) || 0;
+    }
+  }
+  return counts;
+}
+
+/**
+ * The channels the fees are charged for in the CURRENT month: the active ones,
+ * or — while the database cannot say (before 0045) — what the terms allow.
+ */
+export async function currentChannelCounts(
+  admin: SupabaseClient,
+  orgId: string,
+  terms: EffectiveTerms | null
+): Promise<ChannelCounts> {
+  const period = currentMonth(new Date());
+  const active = await getActiveChannelCounts(admin, orgId, period.fromIso, period.toIso);
+  return active ?? (terms ? includedChannelCounts(terms) : {});
 }
 
 // --- pricing catalog (tiers, packages, subscriptions) ------------------------
@@ -447,6 +491,13 @@ export interface OrgInvoice {
   grandTotalEur: number;
   /** Our cost of the whole invoice in EUR (usage + phone numbers) — admin-only. */
   totalCostEur: number;
+  /**
+   * Channels per kind the fees were charged for: the ones that were active in
+   * the month (0045). `byQuota` = the database could not say, so the invoice
+   * charges what the package allows, as before the change.
+   */
+  channelCounts: ChannelCounts;
+  channelCountsByQuota: boolean;
   packageName: string | null;
   interval: BillingInterval | null;
 }
@@ -459,8 +510,9 @@ function isSetupMonth(startedAtIso: string, fromIso: string, toIso: string): boo
 
 /**
  * Full invoice for one org + month: usage (priced through the usage price
- * list) + monthly fees + setup. Phone numbers are a monthly fee of the package,
- * charged per active number; without a package they are passed on at cost.
+ * list) + monthly fees + setup. The fee per channel is charged for the channels
+ * that were ACTIVE in the month (0045). Phone numbers are a monthly fee of the
+ * package, charged per active number; without a package they are passed on at cost.
  */
 export async function getOrgInvoice(
   admin: SupabaseClient,
@@ -476,6 +528,8 @@ export async function getOrgInvoice(
 
   let recurring: RecurringLine[] = [];
   let terms: EffectiveTerms | null = null;
+  let channelCounts: ChannelCounts = {};
+  let channelCountsByQuota = false;
   let setupEur = 0;
   let packageName: string | null = null;
   let interval: BillingInterval | null = null;
@@ -486,7 +540,10 @@ export async function getOrgInvoice(
     // package + the customer's own values; on a yearly term each month carries
     // the monthly price minus the discount (core: recurringFeeLines)
     terms = resolveTerms(packageTermsOf(pkg), sub.own);
-    recurring = recurringFeeLines(terms, sub.interval);
+    const active = await getActiveChannelCounts(admin, orgId, period.fromIso, period.toIso);
+    channelCountsByQuota = active === null;
+    channelCounts = active ?? includedChannelCounts(terms);
+    recurring = recurringFeeLines(terms, sub.interval, channelCounts);
     if (isSetupMonth(sub.startedAt, period.fromIso, period.toIso)) {
       setupEur = round2(terms.setupFeeEur);
     }
@@ -515,6 +572,8 @@ export async function getOrgInvoice(
     setupEur,
     grandTotalEur,
     totalCostEur,
+    channelCounts,
+    channelCountsByQuota,
     packageName,
     interval,
   };

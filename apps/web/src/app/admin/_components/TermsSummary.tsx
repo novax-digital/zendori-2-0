@@ -2,7 +2,12 @@
 // monthly amount and how many values differ from the package — with the link
 // to the page where all of it is edited (Abrechnung → Kunde → Konditionen).
 // Used on Nutzer → Organisation and Abrechnung → Kunde.
-import { applicableOwnTerms, countOwnValues, recurringMonthlyTotalEur } from '@zendori/core';
+import {
+  applicableOwnTerms,
+  countOwnValues,
+  recurringMonthlyTotalEur,
+  type ChannelCounts,
+} from '@zendori/core';
 import Button from '@/components/ui/Button';
 import { Property, PropertyList } from '@/components/ui/Layout';
 import {
@@ -16,9 +21,12 @@ import {
 export default function TermsSummary({
   catalog,
   orgId,
+  channelCounts,
 }: {
   catalog: BillingCatalog;
   orgId: string;
+  /** Channels per kind that are charged this month (the active ones — currentChannelCounts). */
+  channelCounts: ChannelCounts;
 }) {
   const sub = catalog.subscriptions.get(orgId);
   const pkg = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
@@ -42,7 +50,9 @@ export default function TermsSummary({
           </Property>
           {terms ? (
             <Property label="Fest pro Monat">
-              <strong>{formatEur(recurringMonthlyTotalEur(terms, sub.interval))}</strong>
+              <strong>
+                {formatEur(recurringMonthlyTotalEur(terms, sub.interval, channelCounts))}
+              </strong>
             </Property>
           ) : null}
           <Property label="Eigene Werte">{ownValues === 0 ? 'keine' : ownValues}</Property>

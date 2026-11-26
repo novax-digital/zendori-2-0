@@ -3,7 +3,7 @@ import { ORG_ROLE_LABELS, type Channel, type ChannelKind, type OrgRole } from '@
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { CHANNEL_KIND_LABELS, countChannelsByKind } from '@/lib/channel-limits';
-import { loadBillingCatalog } from '@/lib/billing';
+import { currentChannelCounts, loadBillingCatalog, resolveOrgTerms } from '@/lib/billing';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
@@ -62,6 +62,12 @@ export default async function AdminOrgPage({
     ])
   );
   const counts = countChannelsByKind((channelData ?? []) as Pick<Channel, 'type' | 'config'>[]);
+  // what the fee per channel is charged for this month: the ACTIVE channels (0045)
+  const chargedChannels = await currentChannelCounts(
+    admin,
+    orgId,
+    resolveOrgTerms(catalog, orgId)
+  );
 
   const sub = catalog.subscriptions.get(orgId);
   const currentPackage = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
@@ -161,7 +167,7 @@ export default async function AdminOrgPage({
         </div>
 
         <aside className="page-rail" aria-label="Konditionen">
-          <TermsSummary catalog={catalog} orgId={org.id} />
+          <TermsSummary catalog={catalog} orgId={org.id} channelCounts={chargedChannels} />
         </aside>
       </div>
 

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { formDefinitionSchema } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
+import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
 import { href } from '@/lib/href';
@@ -88,6 +89,8 @@ export default async function FormBuilderPage({
     : [];
 
   const isOwner = isAdminRole(role);
+  // a builder form is a channel of kind 'form': what it costs while active (0045)
+  const feeEur = channelFeeOf(await loadChannelFees(orgId), 'form');
   const builderPath = `/settings/forms/${form.id}`;
   const builderHref = href(builderPath, { org: orgId });
   const deleting = isOwner && query.panel === 'delete';
@@ -116,13 +119,18 @@ export default async function FormBuilderPage({
         </SettingRow>
         <SettingRow
           label="Kanal aktiv"
-          help="Ein inaktives Formular nimmt keine Einsendungen an."
+          help={
+            feeEur > 0
+              ? `Ein inaktives Formular nimmt keine Einsendungen an und kostet nichts. Aktiv kostet es ${formatChannelFee(feeEur)} pro Monat.`
+              : 'Ein inaktives Formular nimmt keine Einsendungen an.'
+          }
         >
           <ActiveToggle
             orgId={orgId}
             channelId={channel.id}
             isActive={channel.is_active}
             returnTo={`${builderPath}?tab=channel`}
+            feeEur={feeEur}
           />
         </SettingRow>
       </div>

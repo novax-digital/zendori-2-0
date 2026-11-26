@@ -21,6 +21,7 @@ import {
   applicableOwnTerms,
   countOwnValues,
   formatEuroInput,
+  includedChannelCounts,
   ownTermsToText,
   readOwnTerms,
   recurringFeeLines,
@@ -29,6 +30,7 @@ import {
   termsYearlyTotalEur,
   type BillingCategory,
   type BillingInterval,
+  type ChannelCounts,
   type NumberCounts,
   type NumberKind,
   type OwnTermsText,
@@ -87,6 +89,8 @@ export interface TermsEditorProps {
   numberCosts: Record<NumberKind, number>;
   /** The customer's active phone numbers, per kind. */
   numberCounts: NumberCounts;
+  /** Channels per kind the fee is charged for this month: the ACTIVE ones (0045). */
+  channelCounts: ChannelCounts;
   /** Notice / error banners of the page, rendered above the form fields. */
   banners?: ReactNode;
 }
@@ -143,7 +147,8 @@ export default function TermsEditor(props: TermsEditorProps) {
 
     const standard = pkg ? resolveTerms(pkg.terms) : null;
     const effective = pkg ? resolveTerms(pkg.terms, own) : null;
-    const lines = effective ? recurringFeeLines(effective, interval) : [];
+    // charged is what is ACTIVE — the number typed here is only the limit
+    const lines = effective ? recurringFeeLines(effective, interval, props.channelCounts) : [];
     const lineAmount = new Map(lines.map((line) => [line.key, line.amountEur]));
 
     const defaultList = props.lists.find((list) => list.isDefault) ?? null;
@@ -229,9 +234,15 @@ export default function TermsEditor(props: TermsEditorProps) {
       lines,
       lineAmount,
       feeOff,
-      monthly: effective ? recurringMonthlyTotalEur(effective, interval) : 0,
-      standardMonthly: standard ? recurringMonthlyTotalEur(standard, interval) : 0,
-      yearly: effective ? termsYearlyTotalEur(effective) : 0,
+      monthly: effective ? recurringMonthlyTotalEur(effective, interval, props.channelCounts) : 0,
+      standardMonthly: standard
+        ? recurringMonthlyTotalEur(standard, interval, props.channelCounts)
+        : 0,
+      yearly: effective ? termsYearlyTotalEur(effective, props.channelCounts) : 0,
+      // every channel the terms allow, active
+      most: effective
+        ? recurringMonthlyTotalEur(effective, interval, includedChannelCounts(effective))
+        : 0,
       list,
       packageList,
       priceRows,
@@ -254,6 +265,7 @@ export default function TermsEditor(props: TermsEditorProps) {
     props.positions,
     props.numberCosts,
     props.numberCounts,
+    props.channelCounts,
   ]);
 
   const setFixed = (patch: Partial<typeof NO_FIXED_TEXT>): void =>
@@ -504,8 +516,9 @@ export default function TermsEditor(props: TermsEditorProps) {
                       </span>
                     </summary>
                     <p className="field-help">
-                      Anzahl 0 sperrt die Kanalart. Ohne Anzahl im Paket ist sie unbegrenzt und
-                      kostet nichts.
+                      Die Anzahl ist die Obergrenze, berechnet wird je aktivem Kanal. Anzahl 0
+                      sperrt die Kanalart. Ohne Anzahl im Paket ist sie unbegrenzt und kostet
+                      nichts.
                     </p>
                     <div className="table-wrap">
                       <table className="table--compact">
@@ -514,7 +527,8 @@ export default function TermsEditor(props: TermsEditorProps) {
                             <th>Kanal</th>
                             <th className="num">{packageLabel}</th>
                             <th className="num">Anzahl</th>
-                            <th className="num">je Kanal pro Monat</th>
+                            <th className="num">je aktivem Kanal pro Monat</th>
+                            <th className="num">Aktiv</th>
                             <th className="num">= pro Monat</th>
                             <th />
                           </tr>
@@ -575,6 +589,7 @@ export default function TermsEditor(props: TermsEditorProps) {
                                   </span>
                                   {feeError ? <div className="field-error">{feeError}</div> : null}
                                 </td>
+                                <td className="num muted">{props.channelCounts[kind] ?? 0}</td>
                                 <td className="num muted">
                                   {channel.quota === null
                                     ? '—'
@@ -860,6 +875,12 @@ export default function TermsEditor(props: TermsEditorProps) {
                       : ''}
                   </Property>
                 </PropertyList>
+                {calc.most !== calc.monthly ? (
+                  <p className="muted small">
+                    Berechnet werden nur aktive Kanäle. Wären alle erlaubten Kanäle aktiv, wären es{' '}
+                    {eur.format(calc.most)} pro Monat.
+                  </p>
+                ) : null}
                 <p className="muted small">
                   {calc.ownCount === 0
                     ? `Genau wie im Paket „${pkg.name}“.`

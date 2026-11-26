@@ -10,6 +10,8 @@ import type { ReactNode } from 'react';
 import { canViewArea, isAdminRole, type Channel } from '@zendori/core';
 import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
+import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
+import { channelKindOf } from '@/lib/channel-limits';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { appUrl } from '@/lib/env';
 import { href } from '@/lib/href';
@@ -88,6 +90,8 @@ export default async function ChannelDetailPage({
   if (!channelData) notFound();
   const channel = channelData as unknown as Channel;
   const flavor = channelFlavor(channel);
+  // what this channel costs per month while it is active (0045); 0 = free
+  const feeEur = channelFeeOf(await loadChannelFees(orgId), channelKindOf(channel));
 
   const { count: conversationCount } = await supabase
     .from('conversations')
@@ -232,12 +236,22 @@ export default async function ChannelDetailPage({
               selectId="channel-agent"
             />
           </SettingRow>
-          <SettingRow label="Kanal aktiv">
+          <SettingRow
+            label="Kanal aktiv"
+            help={
+              feeEur > 0
+                ? channel.is_active
+                  ? `Kostet ${formatChannelFee(feeEur)} pro Monat, solange der Kanal aktiv ist. Inaktiv empfängt er nichts und kostet nichts.`
+                  : `Entwurf: Der Kanal empfängt nichts und kostet nichts. Aktiv kostet er ${formatChannelFee(feeEur)} pro Monat.`
+                : undefined
+            }
+          >
             <ActiveToggle
               orgId={orgId}
               channelId={channel.id}
               isActive={channel.is_active}
               returnTo={returnTo}
+              feeEur={feeEur}
             />
           </SettingRow>
         </div>

@@ -17,6 +17,7 @@ import Link from 'next/link';
 import {
   euroInputError,
   formatEuroInput,
+  includedChannelCounts,
   readEuro,
   recurringFeeLines,
   recurringMonthlyTotalEur,
@@ -159,6 +160,9 @@ export default function PackageEditor(props: PackageEditorProps) {
       };
     });
     const effective = resolveTerms(terms);
+    // a package on its own has no channels: the rail shows the most it can come
+    // to — the base fee plus every included channel active
+    const most = includedChannelCounts(effective);
     const errors =
       [setupFee.error, baseFee.error, discountError].filter(Boolean).length +
       channelState.filter((c) => c.quotaError || c.feeError).length +
@@ -170,9 +174,9 @@ export default function PackageEditor(props: PackageEditorProps) {
       channelState,
       numberState,
       belowCost: numberState.filter((n) => n.margin !== null && n.margin < 0).length,
-      lines: recurringFeeLines(effective, 'monthly'),
-      monthly: recurringMonthlyTotalEur(effective, 'monthly'),
-      yearly: termsYearlyTotalEur(effective),
+      lines: recurringFeeLines(effective, 'monthly', most),
+      monthly: recurringMonthlyTotalEur(effective, 'monthly', most),
+      yearly: termsYearlyTotalEur(effective, most),
       setup: setupFee.value,
       discountPercent: terms.yearlyDiscountPercent,
       errors,
@@ -287,7 +291,7 @@ export default function PackageEditor(props: PackageEditorProps) {
 
             <Section
               title="Kanäle"
-              help="Wie viele Kanäle je Art enthalten sind und was jeder einzelne pro Monat kostet. Leere Anzahl = unbegrenzt und ohne Gebühr, 0 = gesperrt."
+              help="Wie viele Kanäle je Art ein Kunde haben darf und was jeder einzelne pro Monat kostet, solange er aktiv ist. Ein Kanal, der nicht eingerichtet oder ausgeschaltet ist, kostet nichts. Leere Anzahl = unbegrenzt und ohne Gebühr, 0 = gesperrt."
             >
               <div className="table-wrap">
                 <table className="table--compact">
@@ -295,8 +299,8 @@ export default function PackageEditor(props: PackageEditorProps) {
                     <tr>
                       <th>Kanal</th>
                       <th className="num">Anzahl</th>
-                      <th className="num">je Kanal pro Monat</th>
-                      <th className="num">= pro Monat</th>
+                      <th className="num">je aktivem Kanal pro Monat</th>
+                      <th className="num">= höchstens</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -445,7 +449,7 @@ export default function PackageEditor(props: PackageEditorProps) {
           <div className="rail-section" aria-live="polite">
             <h2>Das zahlt ein Kunde</h2>
             <PropertyList>
-              <Property label="Pro Monat">
+              <Property label="Höchstens pro Monat">
                 <strong>{eur.format(calc.monthly)}</strong>
               </Property>
               {calc.lines.map((line) => (
@@ -453,7 +457,7 @@ export default function PackageEditor(props: PackageEditorProps) {
                   {eur.format(line.amountEur)}
                 </Property>
               ))}
-              <Property label="Bei Jahreslaufzeit">
+              <Property label="Höchstens im Jahr">
                 <strong>{eur.format(calc.yearly)}</strong>
               </Property>
               <Property label="Einrichtung, einmalig">{eur.format(calc.setup)}</Property>
@@ -469,7 +473,8 @@ export default function PackageEditor(props: PackageEditorProps) {
               {calc.discountPercent > 0
                 ? ` abzüglich ${formatEuroInput(calc.discountPercent).replace(/,00$/, '')} %`
                 : ', ohne Rabatt'}
-              . Rufnummern kommen je aktiver Nummer dazu.
+              . Höchstens heißt: alle enthaltenen Kanäle sind aktiv. Berechnet werden nur aktive
+              Kanäle, Rufnummern kommen je aktiver Nummer dazu.
             </p>
           </div>
           <div className="rail-section">

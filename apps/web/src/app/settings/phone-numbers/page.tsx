@@ -1,6 +1,7 @@
 import type { PhoneNumberStatus, PhoneNumberType } from '@zendori/core';
 import { canViewArea, isAdminRole } from '@zendori/core';
 import { requireActiveOrg } from '@/lib/org';
+import { formatChannelFee, loadChannelFees, loadNumberFees } from '@/lib/channel-fees';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { href } from '@/lib/href';
 import DismissibleBanners from '@/components/DismissibleBanners';
@@ -68,6 +69,14 @@ export default async function PhoneNumbersPage({
   if (!canViewArea(access, 'channels')) return <NoAccessPanel title="Telefonnummern" />;
   const orgName = orgs.find((o) => o.id === orgId)?.name ?? 'Organisation';
   const isOwner = isAdminRole(role);
+  // what a number and its telephony channel cost per month — shown in the
+  // request dialog, so nobody orders a number without knowing (0043 / 0045)
+  const drawerRequested = panel === 'new';
+  const [numberFees, channelFees] =
+    drawerRequested && isOwner
+      ? await Promise.all([loadNumberFees(orgId), loadChannelFees(orgId)])
+      : [null, null];
+  const voiceFee = channelFees?.voice ?? 0;
 
   const supabase = await createSupabaseServerClient();
   const [{ data: numberData }, { data: channelData }] = await Promise.all([
@@ -187,6 +196,16 @@ export default async function PhoneNumbersPage({
               dorthin um oder nutzt die neue direkt. Stimme und Begrüßung stellst du am Voice-Kanal
               ein.
             </Callout>
+            {numberFees && (numberFees.landline > 0 || numberFees.mobile > 0 || voiceFee > 0) ? (
+              <Callout tone="warn" title="Kosten pro Monat (netto)">
+                Festnetz und National {formatChannelFee(numberFees.landline)} je Nummer, Mobilfunk{' '}
+                {formatChannelFee(numberFees.mobile)} je Nummer.
+                {voiceFee > 0
+                  ? ` Dazu kommt der Telefonie-Kanal mit ${formatChannelFee(voiceFee)} pro Monat.`
+                  : ''}{' '}
+                Berechnet wird jeder Monat, in dem die Nummer geschaltet ist.
+              </Callout>
+            ) : null}
             <form id="phone-number-form" className="stack" action={requestPhoneNumber}>
               <input type="hidden" name="org" value={orgId} />
               <Field label="Nummern-Typ" htmlFor="pn-type">

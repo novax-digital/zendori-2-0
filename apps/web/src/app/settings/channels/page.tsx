@@ -37,7 +37,8 @@ import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
 import { appUrl } from '@/lib/env';
 import { href } from '@/lib/href';
-import { countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
+import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
+import { channelKindOf, countChannelsByKind, loadChannelLimits } from '@/lib/channel-limits';
 import {
   ActiveToggle,
   FLAVOR_LABELS,
@@ -141,10 +142,12 @@ export default async function ChannelsPage({
   const canEdit = canEditArea(access, 'channels');
 
   const supabase = await createSupabaseServerClient();
-  const [channels, agentOptions, limits, { data: formData }] = await Promise.all([
+  const [channels, agentOptions, limits, fees, { data: formData }] = await Promise.all([
     listChannels(orgId),
     listAgentOptions(orgId),
     loadChannelLimits(orgId),
+    // what an ACTIVE channel of each kind costs this customer per month (0045)
+    loadChannelFees(orgId),
     // builder forms: their channel row links to the builder (a missing table on
     // a pre-0019 database simply yields no rows)
     supabase.from('forms').select('id, channel_id, public_token, definition').eq('org_id', orgId),
@@ -344,6 +347,7 @@ export default async function ChannelsPage({
   if (panel === 'new') {
     const view = selected ? createView(selected) : null;
     const q = selected ? quota(quotaKindFor(selected)) : null;
+    const selectedFee = selected ? channelFeeOf(fees, quotaKindFor(selected)) : 0;
     // Channels are created by owners/admins. Builder forms are member-managed
     // content (0019, as on the former Formulare page), so the edit right of the
     // channels area is enough for them.
@@ -406,6 +410,13 @@ export default async function ChannelsPage({
               />
             ) : null}
             <p className="muted small">{view.intro}</p>
+            {selectedFee > 0 && !q.blocked ? (
+              <Callout tone="warn" title={`Kostet ${formatChannelFee(selectedFee)} pro Monat`}>
+                {selected === 'voice'
+                  ? 'Die Gebühr für den Telefonie-Kanal fällt an, sobald deine Rufnummer geschaltet ist, für jeden Monat, in dem der Kanal aktiv ist (netto). Die Rufnummer selbst kommt dazu.'
+                  : 'Der Kanal wird als Entwurf angelegt und kostet noch nichts. Die Gebühr fällt erst an, wenn du ihn aktivierst, für jeden Monat, in dem er aktiv ist (netto).'}
+              </Callout>
+            ) : null}
             {q.blocked ? (
               <Callout tone="warn">
                 Kontingent erreicht ({q.count} von {q.limit}). Für weitere Kanäle wende dich an
@@ -517,6 +528,7 @@ export default async function ChannelsPage({
                           orgId={orgId}
                           channelId={channel.id}
                           isActive={channel.is_active}
+                          feeEur={channelFeeOf(fees, channelKindOf(channel))}
                         />
                       </td>
                       <td className="cell-actions">

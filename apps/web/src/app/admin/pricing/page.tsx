@@ -12,6 +12,7 @@ import {
   PACKAGE_CHANNEL_LABELS,
   countOwnValues,
   formatEuroInput,
+  includedChannelCounts,
   numberCostEur,
   recurringMonthlyTotalEur,
   resolveTerms,
@@ -114,9 +115,12 @@ export default async function AdminPricingPage({
 
   const packageRows = packages.map((pkg) => {
     const customers = subscriptions.filter((sub) => sub.packageId === pkg.id);
+    const terms = resolveTerms(packageTermsOf(pkg));
     return {
       pkg,
-      monthlyEur: recurringMonthlyTotalEur(resolveTerms(packageTermsOf(pkg)), 'monthly'),
+      // base fee + every included channel active: the most the fixed fees come to
+      monthlyEur: recurringMonthlyTotalEur(terms, 'monthly', includedChannelCounts(terms)),
+      baseEur: terms.baseFeeMonthlyEur,
       listName:
         (pkg.priceTierId ? catalog.tiers.get(pkg.priceTierId)?.name : defaultList?.name) ?? '—',
       customers: customers.length,
@@ -163,7 +167,7 @@ export default async function AdminPricingPage({
 
         <Section
           title="Pakete"
-          help="Ein Paket legt fest, was pro Monat anfällt: Grundgebühr, Kanäle und Rufnummern. Dazu gehört eine Verbrauchspreisliste. Abweichungen für einzelne Kunden trägst du beim Kunden ein."
+          help="Ein Paket legt fest, was pro Monat anfällt: Grundgebühr, Kanäle und Rufnummern. Die Gebühr je Kanal zahlt ein Kunde nur für aktive Kanäle. Dazu gehört eine Verbrauchspreisliste. Abweichungen für einzelne Kunden trägst du beim Kunden ein."
         >
           {packageRows.length === 0 ? (
             <EmptyState
@@ -183,14 +187,15 @@ export default async function AdminPricingPage({
                     <th>Paket</th>
                     <th>Status</th>
                     <th>Enthält</th>
-                    <th className="num">Fest pro Monat</th>
+                    <th className="num">Fest pro Monat, höchstens</th>
                     <th>Je Rufnummer pro Monat</th>
                     <th>Verbrauchspreise</th>
                     <th>Kunden</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {packageRows.map(({ pkg, monthlyEur, listName, customers, withOwnValues }) => (
+                  {packageRows.map(
+                    ({ pkg, monthlyEur, baseEur, listName, customers, withOwnValues }) => (
                     <tr key={pkg.id}>
                       <td>
                         <Link href={`${BASE}/packages/${pkg.id}`} className="cell-title">
@@ -211,9 +216,14 @@ export default async function AdminPricingPage({
                       <td className="muted">{channelSummary(pkg)}</td>
                       <td className="num">
                         <span className="strong">{formatEur(monthlyEur)}</span>
-                        {pkg.setupFeeEur > 0 || pkg.yearlyDiscountPercent > 0 ? (
+                        {monthlyEur !== baseEur ||
+                        pkg.setupFeeEur > 0 ||
+                        pkg.yearlyDiscountPercent > 0 ? (
                           <div className="cell-sub">
                             {[
+                              monthlyEur !== baseEur
+                                ? `ohne aktive Kanäle ${formatEur(baseEur)}`
+                                : null,
                               pkg.setupFeeEur > 0
                                 ? `Einrichtung ${formatEur(pkg.setupFeeEur)}`
                                 : null,
@@ -235,7 +245,8 @@ export default async function AdminPricingPage({
                         ) : null}
                       </td>
                     </tr>
-                  ))}
+                    )
+                  )}
                 </tbody>
               </table>
             </div>

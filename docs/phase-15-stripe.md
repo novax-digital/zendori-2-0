@@ -13,8 +13,8 @@ Die Aufrufe an Stripe sind gegen ein nachgebautes Stripe getestet und gegen die 
 der Testmodus wurde übersprungen; die Testanleitung unten zuerst mit der eigenen Organisation
 durchspielen.
 
-**Nachtrag 2026-11-26 — Kunde informieren (Migration 0044 eingespielt am 2026-11-26; Code gebaut,
-noch nicht gepusht):** E-Mail beim Einschalten und Hinweis in der App, siehe „Kunde informieren“.
+**Nachtrag 2026-11-26 — Kunde informieren (Migration 0044 eingespielt am 2026-11-26, Code gepusht
+`5b09312`; die Mail braucht den Worker auf diesem Stand oder neuer):** E-Mail beim Einschalten und Hinweis in der App, siehe „Kunde informieren“.
 
 ## Grundsatz
 
@@ -301,7 +301,7 @@ Wenn in Schritt 2, 4 oder 5 nichts ankommt: Admin → Kunde → „Abgleich: Feh
   nicht. Ein offener Abgleich wird nach dem Ausschalten noch abgearbeitet und legt den
   Stripe-Kunden an oder aktualisiert ihn (nur Kundendaten, kein Geld). Die E-Mail aus „Kunde
   informieren“ ist davon nicht betroffen: Sie prüft `enabled` selbst.
-- **15b** (Migration 0045 `billing_invoices` — 0043 und 0044 sind inzwischen vergeben):
+- **15b** (Migration 0046 `billing_invoices` — 0043 bis 0045 sind inzwischen vergeben):
   Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,
   Stripe-Rechnung mit Vollvergleich vor dem Abschluss (Netto, Steuer, Brutto, kein Rabatt, kein
   Guthaben), Rechnungsmail mit PDF, Zahlstatus und Rückbuchung, Warnmails an den Betreiber,

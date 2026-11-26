@@ -669,9 +669,9 @@ export type TermSource = 'package' | 'customer';
 export interface EffectiveChannel {
   kind: PackageChannelKind;
   label: string;
-  /** How many channels of this kind are included. null = not limited (and no fee). */
+  /** How many channels of this kind the customer may have. null = not limited (and no fee). */
   quota: number | null;
-  /** Fee per channel and month. */
+  /** Fee per ACTIVE channel and month. */
   feeMonthlyEur: number;
   quotaSource: TermSource;
   feeSource: TermSource;
@@ -746,12 +746,37 @@ export interface FeeLine {
   amountEur: number;
 }
 
+/** How many channels of each kind are charged (an absent kind = none). */
+export type ChannelCounts = Partial<Record<PackageChannelKind, number>>;
+
 /**
- * The recurring lines of ONE month. On a yearly term each month carries a
- * twelfth of the yearly price, i.e. the monthly price minus the discount.
- * Lines of 0 € are left out.
+ * Every channel the terms allow, active: the MOST the fixed fees can come to.
+ * Used where no customer is at hand (a package on its own) and as the fallback
+ * while the database cannot say which channels were active (before 0045).
  */
-export function recurringFeeLines(terms: EffectiveTerms, interval: BillingInterval): FeeLine[] {
+export function includedChannelCounts(terms: EffectiveTerms): ChannelCounts {
+  const counts: ChannelCounts = {};
+  for (const channel of terms.channels) {
+    if (channel.quota !== null) counts[channel.kind] = channel.quota;
+  }
+  return counts;
+}
+
+/**
+ * The recurring lines of ONE month: the base fee, and for every channel kind
+ * the fee × the channels of that kind that were ACTIVE (`activeChannels`,
+ * migration 0045) — a channel that is not set up or switched off costs nothing.
+ * The number in the package is the limit, not what is charged. A kind the
+ * package does not limit has no fee at all (0017 semantics).
+ *
+ * On a yearly term each month carries a twelfth of the yearly price, i.e. the
+ * monthly price minus the discount. Lines of 0 € are left out.
+ */
+export function recurringFeeLines(
+  terms: EffectiveTerms,
+  interval: BillingInterval,
+  activeChannels: ChannelCounts
+): FeeLine[] {
   const yearly = interval === 'yearly';
   const factor = yearly ? yearlyFactor(terms.yearlyDiscountPercent) : 1;
   const lines: FeeLine[] = [];
@@ -764,16 +789,34 @@ export function recurringFeeLines(terms: EffectiveTerms, interval: BillingInterv
     });
   }
   for (const channel of terms.channels) {
-    if (channel.quota === null || channel.quota <= 0) continue;
-    const amount = round2(channel.quota * channel.feeMonthlyEur * factor);
+    if (channel.quota === null) continue;
+    const count = Math.max(0, Math.floor(activeChannels[channel.kind] ?? 0));
+    if (count === 0) continue;
+    const amount = round2(count * channel.feeMonthlyEur * factor);
     if (amount <= 0) continue;
     lines.push({
       key: `channel:${channel.kind}`,
-      label: `${channel.label} (${channel.quota}×)`,
+      label: `${channel.label} (${count}×)`,
       amountEur: amount,
     });
   }
   return lines;
+}
+
+/**
+ * What ONE active channel of a kind costs per month on the given term (the
+ * yearly discount applied); 0 = free. This is the amount a customer is told
+ * before a channel is activated.
+ */
+export function channelMonthlyFeeEur(
+  terms: EffectiveTerms,
+  interval: BillingInterval,
+  kind: PackageChannelKind
+): number {
+  const channel = terms.channels.find((candidate) => candidate.kind === kind);
+  if (!channel || channel.quota === null) return 0;
+  const factor = interval === 'yearly' ? yearlyFactor(terms.yearlyDiscountPercent) : 1;
+  return round2(channel.feeMonthlyEur * factor);
 }
 
 /**
@@ -808,20 +851,30 @@ export function numberFeeLines(
 }
 
 /** Sum of the recurring lines of one month. */
-export function recurringMonthlyTotalEur(terms: EffectiveTerms, interval: BillingInterval): number {
-  return round2(recurringFeeLines(terms, interval).reduce((sum, line) => sum + line.amountEur, 0));
+export function recurringMonthlyTotalEur(
+  terms: EffectiveTerms,
+  interval: BillingInterval,
+  activeChannels: ChannelCounts
+): number {
+  return round2(
+    recurringFeeLines(terms, interval, activeChannels).reduce(
+      (sum, line) => sum + line.amountEur,
+      0
+    )
+  );
 }
 
 /** What a whole year costs on a yearly term (12 × the monthly sum, minus the discount). */
-export function termsYearlyTotalEur(terms: EffectiveTerms): number {
+export function termsYearlyTotalEur(terms: EffectiveTerms, activeChannels: ChannelCounts): number {
   return yearlyFromMonthlyEur(
-    recurringMonthlyTotalEur(terms, 'monthly'),
+    recurringMonthlyTotalEur(terms, 'monthly', activeChannels),
     terms.yearlyDiscountPercent
   );
 }
 
 /**
- * The channel limits that go with the terms (org_channel_limits, 0017):
+ * The channel limits that go with the terms (org_channel_limits, 0017) — how
+ * many channels a customer may HAVE, active or not:
  * a number = at most that many channels, null = no limit row for this kind.
  */
 export function channelLimitPlan(

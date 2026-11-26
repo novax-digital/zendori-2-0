@@ -4,6 +4,7 @@
 import type { AgentKind, AgentMode, Channel } from '@zendori/core';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { normalizeWidgetTheme, type WidgetTheme } from '@zendori/channels/chat-theme';
+import ActivateWithFee from '@/components/ActivateWithFee';
 import Button from '@/components/ui/Button';
 import { setChannelActive, setChannelAgent } from './actions';
 
@@ -284,18 +285,27 @@ export const VOICE_LANGUAGES: { code: string; label: string }[] = [
   { code: 'tr', label: 'Türkisch' },
 ];
 
-/** Per-channel Aktiv/Inaktiv toggle — one click flips is_active. */
+const feeFormat = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+
+/**
+ * Per-channel Aktiv/Inaktiv toggle — one click flips is_active. An inactive
+ * channel whose kind costs a monthly fee (`feeEur`, migration 0045) is the
+ * exception: the click first says what activating costs (ActivateWithFee).
+ */
 export function ActiveToggle({
   orgId,
   channelId,
   isActive,
   returnTo,
+  feeEur = 0,
 }: {
   orgId: string;
   channelId: string;
   isActive: boolean;
   /** Detail-page path to return to (validated in the action). */
   returnTo?: string;
+  /** What this channel costs per month while it is active; 0 = free. */
+  feeEur?: number;
 }) {
   return (
     <form action={setChannelActive}>
@@ -303,15 +313,25 @@ export function ActiveToggle({
       <input type="hidden" name="channelId" value={channelId} />
       <input type="hidden" name="active" value={isActive ? 'false' : 'true'} />
       {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
-      {/* a switch that is a submit button: one click posts the opposite state */}
-      <button
-        type="submit"
-        role="switch"
-        aria-checked={isActive}
-        aria-label="Kanal aktiv"
-        className="switch-btn"
-        title={isActive ? 'Aktiv — klicken zum Deaktivieren' : 'Inaktiv — klicken zum Aktivieren'}
-      />
+      {!isActive && feeEur > 0 ? (
+        <ActivateWithFee feeText={feeFormat.format(feeEur)} />
+      ) : (
+        // a switch that is a submit button: one click posts the opposite state
+        <button
+          type="submit"
+          role="switch"
+          aria-checked={isActive}
+          aria-label="Kanal aktiv"
+          className="switch-btn"
+          title={
+            isActive
+              ? feeEur > 0
+                ? `Aktiv (${feeFormat.format(feeEur)} pro Monat) — klicken zum Deaktivieren`
+                : 'Aktiv — klicken zum Deaktivieren'
+              : 'Inaktiv — klicken zum Aktivieren'
+          }
+        />
+      )}
     </form>
   );
 }

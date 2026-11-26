@@ -9,7 +9,9 @@ import {
   countOwnValues,
   effectivePricing,
   euroInputError,
+  channelMonthlyFeeEur,
   formatEuroInput,
+  includedChannelCounts,
   numberFeeLines,
   numberFeesSchema,
   ownTermsToText,
@@ -234,15 +236,15 @@ describe('resolveTerms', () => {
 describe('recurringFeeLines', () => {
   it('bills the production package exactly as before: WhatsApp (1×) 15,00 € per month', () => {
     const terms = resolveTerms(STARTER);
-    expect(recurringFeeLines(terms, 'monthly')).toEqual([
+    expect(recurringFeeLines(terms, 'monthly', includedChannelCounts(terms))).toEqual([
       { key: 'channel:whatsapp', label: 'WhatsApp (1×)', amountEur: 15 },
     ]);
-    expect(recurringMonthlyTotalEur(terms, 'monthly')).toBe(15);
+    expect(recurringMonthlyTotalEur(terms, 'monthly', includedChannelCounts(terms))).toBe(15);
   });
 
   it('charges the monthly price minus the discount on a yearly term — never 0 by accident', () => {
     const noDiscount = resolveTerms(STARTER);
-    expect(recurringFeeLines(noDiscount, 'yearly')).toEqual([
+    expect(recurringFeeLines(noDiscount, 'yearly', includedChannelCounts(noDiscount))).toEqual([
       { key: 'channel:whatsapp', label: 'WhatsApp (1×)', amountEur: 15 },
     ]);
     const discounted = resolveTerms({
@@ -250,45 +252,124 @@ describe('recurringFeeLines', () => {
       baseFeeMonthlyEur: 100,
       yearlyDiscountPercent: 10,
     });
-    expect(recurringFeeLines(discounted, 'yearly')).toEqual([
+    expect(recurringFeeLines(discounted, 'yearly', includedChannelCounts(discounted))).toEqual([
       { key: 'base', label: 'Grundgebühr (jährlich, anteilig)', amountEur: 90 },
       { key: 'channel:whatsapp', label: 'WhatsApp (1×)', amountEur: 13.5 },
     ]);
-    expect(recurringMonthlyTotalEur(discounted, 'yearly')).toBe(103.5);
+    expect(recurringMonthlyTotalEur(discounted, 'yearly', includedChannelCounts(discounted))).toBe(103.5);
     // the same year, said two ways
-    expect(termsYearlyTotalEur(discounted)).toBe(1242);
-    expect(12 * recurringMonthlyTotalEur(discounted, 'yearly')).toBe(1242);
+    expect(termsYearlyTotalEur(discounted, includedChannelCounts(discounted))).toBe(1242);
+    expect(12 * recurringMonthlyTotalEur(discounted, 'yearly', includedChannelCounts(discounted))).toBe(1242);
   });
 
   it('multiplies the fee by the number of channels', () => {
     const terms = resolveTerms(STARTER, own({ channels: { whatsapp: { quota: 3 } } }));
-    expect(recurringFeeLines(terms, 'monthly')).toEqual([
+    expect(recurringFeeLines(terms, 'monthly', includedChannelCounts(terms))).toEqual([
       { key: 'channel:whatsapp', label: 'WhatsApp (3×)', amountEur: 45 },
     ]);
   });
 
   it('leaves out blocked, unlimited and free channels', () => {
     const blocked = resolveTerms(STARTER, own({ channels: { whatsapp: { quota: 0 } } }));
-    expect(recurringFeeLines(blocked, 'monthly')).toEqual([]);
+    expect(recurringFeeLines(blocked, 'monthly', includedChannelCounts(blocked))).toEqual([]);
     const unlimited = resolveTerms(
       { ...STARTER, channels: {} },
       own({ channels: { voice: { feeMonthlyEur: 30 } } })
     );
     // a fee without a number of channels has nothing to multiply with
-    expect(recurringFeeLines(unlimited, 'monthly')).toEqual([]);
+    expect(recurringFeeLines(unlimited, 'monthly', includedChannelCounts(unlimited))).toEqual([]);
   });
 
   it('puts the base fee first', () => {
     const terms = resolveTerms({ ...STARTER, baseFeeMonthlyEur: 99 });
-    expect(recurringFeeLines(terms, 'monthly').map((line) => line.key)).toEqual([
+    expect(recurringFeeLines(terms, 'monthly', includedChannelCounts(terms)).map((line) => line.key)).toEqual([
       'base',
       'channel:whatsapp',
     ]);
-    expect(recurringFeeLines(terms, 'monthly')[0]).toEqual({
+    expect(recurringFeeLines(terms, 'monthly', includedChannelCounts(terms))[0]).toEqual({
       key: 'base',
       label: 'Grundgebühr',
       amountEur: 99,
     });
+  });
+});
+
+describe('channel fees follow the ACTIVE channels (migration 0045)', () => {
+  it('a channel that is not set up or switched off costs nothing', () => {
+    const terms = resolveTerms(STARTER);
+    // WhatsApp is in the package (1 × 15 €) but no channel is active
+    expect(recurringFeeLines(terms, 'monthly', {})).toEqual([]);
+    expect(recurringMonthlyTotalEur(terms, 'monthly', { whatsapp: 0 })).toBe(0);
+    // the base fee does not depend on channels
+    const withBase = resolveTerms({ ...STARTER, baseFeeMonthlyEur: 49 });
+    expect(recurringFeeLines(withBase, 'monthly', {})).toEqual([
+      { key: 'base', label: 'Grundgebühr', amountEur: 49 },
+    ]);
+  });
+
+  it('charges fee × active channels and names the count', () => {
+    const terms = resolveTerms(STARTER, own({ channels: { whatsapp: { quota: 3 } } }));
+    expect(recurringFeeLines(terms, 'monthly', { whatsapp: 1 })).toEqual([
+      { key: 'channel:whatsapp', label: 'WhatsApp (1×)', amountEur: 15 },
+    ]);
+    expect(recurringFeeLines(terms, 'monthly', { whatsapp: 2 })).toEqual([
+      { key: 'channel:whatsapp', label: 'WhatsApp (2×)', amountEur: 30 },
+    ]);
+  });
+
+  it('a free kind (0 €) runs through without a line, however many are active', () => {
+    const terms = resolveTerms(STARTER);
+    expect(recurringFeeLines(terms, 'monthly', { chat: 1, voice: 1, form: 1, email: 1 })).toEqual(
+      []
+    );
+  });
+
+  it('a kind the package does not limit has no fee, even with active channels', () => {
+    const terms = resolveTerms(
+      { ...STARTER, channels: {} },
+      own({ channels: { voice: { feeMonthlyEur: 30 } } })
+    );
+    expect(recurringFeeLines(terms, 'monthly', { voice: 2 })).toEqual([]);
+  });
+
+  it('charges what is active, also beyond a limit that was lowered later', () => {
+    const terms = resolveTerms(STARTER, own({ channels: { whatsapp: { quota: 0 } } }));
+    expect(recurringFeeLines(terms, 'monthly', { whatsapp: 2 })).toEqual([
+      { key: 'channel:whatsapp', label: 'WhatsApp (2×)', amountEur: 30 },
+    ]);
+  });
+
+  it('the most it can come to: every included channel active', () => {
+    const terms = resolveTerms(STARTER, own({ channels: { whatsapp: { quota: 2 } } }));
+    expect(includedChannelCounts(terms)).toEqual({
+      form: 1,
+      email: 1,
+      whatsapp: 2,
+      voice: 1,
+      chat: 1,
+    });
+    expect(recurringMonthlyTotalEur(terms, 'monthly', includedChannelCounts(terms))).toBe(30);
+    // not limited = not in the plan
+    expect(includedChannelCounts(resolveTerms({ ...STARTER, channels: {} }))).toEqual({});
+  });
+
+  it('tells what one more active channel costs — with the yearly discount applied', () => {
+    const terms = resolveTerms({ ...STARTER, yearlyDiscountPercent: 10 });
+    expect(channelMonthlyFeeEur(terms, 'monthly', 'whatsapp')).toBe(15);
+    expect(channelMonthlyFeeEur(terms, 'yearly', 'whatsapp')).toBe(13.5);
+    expect(channelMonthlyFeeEur(terms, 'monthly', 'chat')).toBe(0);
+    // not limited: no fee, whatever is typed as a fee
+    const open = resolveTerms(
+      { ...STARTER, channels: {} },
+      own({ channels: { voice: { feeMonthlyEur: 30 } } })
+    );
+    expect(channelMonthlyFeeEur(open, 'monthly', 'voice')).toBe(0);
+  });
+
+  it('ignores junk counts', () => {
+    const terms = resolveTerms(STARTER);
+    expect(recurringFeeLines(terms, 'monthly', { whatsapp: -3 })).toEqual([]);
+    expect(recurringFeeLines(terms, 'monthly', { whatsapp: 1.9 })[0]?.amountEur).toBe(15);
   });
 });
 
@@ -339,9 +420,9 @@ describe('phone numbers (monthly fee of the package, migration 0043)', () => {
     const discounted: PackageTerms = { ...STARTER, yearlyDiscountPercent: 10 };
     const terms = resolveTerms(discounted);
     // the fixed sum is base + channels only …
-    expect(recurringMonthlyTotalEur(terms, 'monthly')).toBe(15);
-    expect(recurringMonthlyTotalEur(terms, 'yearly')).toBe(13.5);
-    expect(recurringFeeLines(terms, 'yearly').map((l) => l.key)).toEqual(['channel:whatsapp']);
+    expect(recurringMonthlyTotalEur(terms, 'monthly', includedChannelCounts(terms))).toBe(15);
+    expect(recurringMonthlyTotalEur(terms, 'yearly', includedChannelCounts(terms))).toBe(13.5);
+    expect(recurringFeeLines(terms, 'yearly', includedChannelCounts(terms)).map((l) => l.key)).toEqual(['channel:whatsapp']);
     // … and a number costs the same on either term
     expect(numberFeeLines(terms, { mobile: 1, landline: 0 }, CTX)[0]?.amountEur).toBe(30);
   });
@@ -630,7 +711,10 @@ describe("a customer's own values, as typed (Konditionen)", () => {
       pkg
     );
     expect(limited.channels.voice).toEqual({ quota: 1, feeMonthlyEur: 20 });
-    expect(recurringMonthlyTotalEur(resolveTerms(pkg, limited), 'monthly')).toBe(35);
+    const limitedTerms = resolveTerms(pkg, limited);
+    expect(
+      recurringMonthlyTotalEur(limitedTerms, 'monthly', includedChannelCounts(limitedTerms))
+    ).toBe(35);
   });
 
   it('what was typed is what is charged: one more WhatsApp channel doubles the fee', () => {
@@ -639,7 +723,7 @@ describe("a customer's own values, as typed (Konditionen)", () => {
       channels: { whatsapp: { quota: '2', feeMonthlyEur: '' } },
     });
     const terms = resolveTerms(STARTER, applicableOwnTerms(read.own, STARTER));
-    expect(recurringMonthlyTotalEur(terms, 'monthly')).toBe(30);
+    expect(recurringMonthlyTotalEur(terms, 'monthly', includedChannelCounts(terms))).toBe(30);
     expect(channelLimitPlan(terms).find((limit) => limit.kind === 'whatsapp')?.maxCount).toBe(2);
   });
 });

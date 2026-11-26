@@ -554,6 +554,23 @@ a:focus-visible {
   flex-direction: column;
 }
 
+/* Activating a channel that costs a monthly fee: the price before the click
+   (ActivateWithFee, in place of the switch). */
+.fee-confirm {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 320px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  font-size: var(--fs-small);
+  text-align: left;
+  white-space: normal;
+}
+
 /* A message above every app page (BillingSetupBanner). The component writes its
    height to --app-banner-h so full-height pages keep fitting the window. */
 .app-banner {

@@ -11,6 +11,7 @@ import {
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { generatePublicToken } from '@/lib/widget/session';
 import { generateIntakeAddress } from '@/lib/email/provisioning';
+import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
 import { checkChannelQuota } from '@/lib/channel-limits';
 
 // Form-builder server actions (Phase 10). Content management is member-level
@@ -104,12 +105,17 @@ export async function createForm(formData: FormData): Promise<void> {
     );
   }
 
+  // a paid kind starts as a draft: the form can be built in peace, the fee
+  // starts when the channel is activated (0045)
+  const feeEur = channelFeeOf(await loadChannelFees(org), 'form');
+
   const { data: channelRow, error: channelError } = await supabase
     .from('channels')
     .insert({
       org_id: org,
       type: 'email',
       name,
+      is_active: feeEur <= 0,
       config: {
         type: 'email',
         mode: 'inbound',
@@ -144,7 +150,14 @@ export async function createForm(formData: FormData): Promise<void> {
 
   revalidatePath('/settings/forms');
   revalidatePath('/settings/channels');
-  redirect(builderUrl(org, (formRow as { id: string }).id, { notice: 'Formular angelegt — jetzt Felder und Design anpassen.' }));
+  redirect(
+    builderUrl(org, (formRow as { id: string }).id, {
+      notice:
+        feeEur > 0
+          ? `Formular als Entwurf angelegt — jetzt Felder und Design anpassen. Aktiv kostet es ${formatChannelFee(feeEur)} pro Monat; es startet erst, wenn du den Kanal aktivierst.`
+          : 'Formular angelegt — jetzt Felder und Design anpassen.',
+    })
+  );
 }
 
 // --- save definition --------------------------------------------------------------

@@ -41,6 +41,12 @@ export function isMissingRelationError(err: unknown): boolean {
   return code === '42P01' || code === 'PGRST205';
 }
 
+/** Missing function: Postgres 42883 or PostgREST PGRST202 (not in the schema cache). */
+export function isMissingFunctionError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === '42883' || code === 'PGRST202';
+}
+
 /** Missing column: Postgres 42703 (select) or PostgREST PGRST204 (insert/update payload). */
 export function isMissingColumnError(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;

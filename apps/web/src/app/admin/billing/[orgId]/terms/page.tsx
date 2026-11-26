@@ -7,7 +7,12 @@ import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { NO_OWN_TERMS, numberCostEur, type BillingCategory } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
-import { loadBillingCatalog, packageTermsOf } from '@/lib/billing';
+import {
+  currentChannelCounts,
+  loadBillingCatalog,
+  packageTermsOf,
+  resolveOrgTerms,
+} from '@/lib/billing';
 import { loadAvgTokenCosts, pricePositions } from '@/lib/billing-costs';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
@@ -99,6 +104,9 @@ export default async function AdminOrgTermsPage({
     else numberCounts.landline += 1;
   }
 
+  // what the fee per channel is charged for this month: the ACTIVE channels (0045)
+  const channelCounts = await currentChannelCounts(admin, orgId, resolveOrgTerms(catalog, orgId));
+
   const customerHref = `/admin/billing/${org.id}`;
 
   return (
@@ -144,6 +152,7 @@ export default async function AdminOrgTermsPage({
         positions={positions}
         numberCosts={numberCosts}
         numberCounts={numberCounts}
+        channelCounts={channelCounts}
         banners={<DismissibleBanners error={error} notice={notice} />}
       />
     </div>

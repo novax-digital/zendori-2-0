@@ -20,11 +20,12 @@ import {
   WIDGET_RADII,
   WIDGET_SCHEMES,
 } from '@zendori/channels';
-import { encryptSecret } from '@zendori/core';
+import { encryptSecret, type Channel } from '@zendori/core';
+import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { DEFAULT_THEME, generatePublicToken } from '@/lib/widget/session';
 import { generateIntakeAddress } from '@/lib/email/provisioning';
-import { checkChannelQuota } from '@/lib/channel-limits';
+import { channelKindOf, checkChannelQuota } from '@/lib/channel-limits';
 
 function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -83,6 +84,19 @@ function createErrorUrl(formData: FormData, org: string, error: string): string 
   return `/settings/channels?${params.toString()}`;
 }
 
+// --- channels that cost a monthly fee (migration 0045) ----------------------------
+// The fee per channel is charged for ACTIVE channels only. A channel of a kind
+// that costs this customer something is therefore created as a draft
+// (inactive): it can be set up in peace, and the fee starts with a deliberate
+// "Kostenpflichtig aktivieren". Free kinds are active at once, as before.
+
+/** Notice after creating a channel: what was created, and — for a draft — what activating costs. */
+function createdNotice(what: string, feeEur: number, extra = ''): string {
+  return feeEur > 0
+    ? `${what} als Entwurf angelegt. Aktiv kostet der Kanal ${formatChannelFee(feeEur)} pro Monat — er startet erst, wenn du ihn aktivierst.${extra}`
+    : `${what} angelegt.${extra}`;
+}
+
 // --- create widget channel -----------------------------------------------------
 
 const createWidgetChannelSchema = z.object({
@@ -110,11 +124,15 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
   const quotaError = await checkChannelQuota(org, 'chat');
   if (quotaError) redirect(createErrorUrl(formData, org, quotaError));
 
+  const feeEur = channelFeeOf(await loadChannelFees(org), 'chat');
+
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.from('channels').insert({
     org_id: org,
     type: 'chat',
     name,
+    // a paid kind starts as a draft (0045)
+    is_active: feeEur <= 0,
     config: {
       widget: true,
       public_token: generatePublicToken(),
@@ -128,7 +146,7 @@ export async function createWidgetChannel(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: 'Widget-Channel angelegt.' }));
+  redirect(channelsUrl(org, { notice: createdNotice('Widget-Channel', feeEur) }));
 }
 
 // --- update widget theme ---------------------------------------------------------
@@ -323,11 +341,13 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
   if (!config.success) {
     redirect(createErrorUrl(formData, org, 'Intake-Adresse konnte nicht angelegt werden.'));
   }
+  const feeEur = channelFeeOf(await loadChannelFees(org), purpose === 'form' ? 'form' : 'email');
   const { error } = await supabase.from('channels').insert({
     org_id: org,
     type: 'email',
     name,
-    is_active: true,
+    // a paid kind starts as a draft (0045)
+    is_active: feeEur <= 0,
     config: config.data,
   });
   if (error) {
@@ -337,7 +357,7 @@ export async function createIntakeAddress(formData: FormData): Promise<void> {
   revalidatePath('/settings/channels');
   redirect(
     channelsUrl(org, {
-      notice: purpose === 'form' ? 'Formular-Adresse angelegt.' : 'E-Mail-Adresse angelegt.',
+      notice: createdNotice(purpose === 'form' ? 'Formular-Adresse' : 'E-Mail-Adresse', feeEur),
     })
   );
 }
@@ -508,6 +528,10 @@ const setChannelActiveSchema = z.object({
  * Flips a single channel's is_active flag. Used by the per-channel Aktiv/Inaktiv
  * toggle in the channel gallery. RLS ensures the caller may only touch channels
  * of an org they belong to.
+ *
+ * Activating a channel whose kind costs a monthly fee (0045) needs the explicit
+ * confirmation of the toggle (`confirmFee`): the fee is charged for every month
+ * the channel is active, so it must never start by a slip or a stale form.
  */
 export async function setChannelActive(formData: FormData): Promise<void> {
   const parsed = setChannelActiveSchema.safeParse({
@@ -524,8 +548,33 @@ export async function setChannelActive(formData: FormData): Promise<void> {
   }
   const { org, channelId, active } = parsed.data;
   const isActive = active === 'true';
+  const back = (message: { error?: string; notice?: string }): string =>
+    channelsUrl(org, message, returnToOf(formData));
 
   const supabase = await createSupabaseServerClient();
+
+  // what this channel costs while it is active (the member's own session reads
+  // the channel, so RLS decides whether it exists for the caller at all)
+  let feeEur = 0;
+  if (isActive) {
+    const { data: current } = await supabase
+      .from('channels')
+      .select('type, config, is_active')
+      .eq('org_id', org)
+      .eq('id', channelId)
+      .maybeSingle();
+    if (!current) redirect(back({ error: 'Kanal-Status konnte nicht geändert werden.' }));
+    const row = current as Pick<Channel, 'type' | 'config'> & { is_active: boolean };
+    feeEur = channelFeeOf(await loadChannelFees(org), channelKindOf(row));
+    if (feeEur > 0 && !row.is_active && formData.get('confirmFee') !== '1') {
+      redirect(
+        back({
+          error: `Aktiv kostet dieser Kanal ${formatChannelFee(feeEur)} pro Monat. Bitte bestätige das Aktivieren am Schalter.`,
+        })
+      );
+    }
+  }
+
   const { data, error } = await supabase
     .from('channels')
     .update({ is_active: isActive })
@@ -533,11 +582,19 @@ export async function setChannelActive(formData: FormData): Promise<void> {
     .eq('id', channelId)
     .select('id');
   if (error || !data || data.length === 0) {
-    redirect(channelsUrl(org, { error: 'Kanal-Status konnte nicht geändert werden.' }, returnToOf(formData)));
+    redirect(back({ error: 'Kanal-Status konnte nicht geändert werden.' }));
   }
 
   revalidatePath('/settings/channels');
-  redirect(channelsUrl(org, { notice: isActive ? 'Kanal aktiviert.' : 'Kanal deaktiviert.' }, returnToOf(formData)));
+  redirect(
+    back({
+      notice: isActive
+        ? feeEur > 0
+          ? `Kanal aktiviert. Er kostet ${formatChannelFee(feeEur)} pro Monat, solange er aktiv ist.`
+          : 'Kanal aktiviert.'
+        : 'Kanal deaktiviert. Er empfängt jetzt nichts mehr.',
+    })
+  );
 }
 
 // --- rename a channel ------------------------------------------------------------
@@ -659,12 +716,15 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
     redirect(createErrorUrl(formData, org, 'WhatsApp-Kanal konnte nicht angelegt werden.'));
   }
 
+  const feeEur = channelFeeOf(await loadChannelFees(org), 'whatsapp');
+
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.from('channels').insert({
     org_id: org,
     type: 'whatsapp',
     name,
-    is_active: true,
+    // a paid kind starts as a draft (0045)
+    is_active: feeEur <= 0,
     config: config.data,
   });
   if (error) {
@@ -680,8 +740,11 @@ export async function createWhatsappTwilioChannel(formData: FormData): Promise<v
   revalidatePath('/settings/channels');
   redirect(
     channelsUrl(org, {
-      notice:
-        'WhatsApp-Kanal (Twilio) angelegt. Bitte die Webhook-URL im Twilio-Console eintragen.',
+      notice: createdNotice(
+        'WhatsApp-Kanal (Twilio)',
+        feeEur,
+        ' Bitte die Webhook-URL im Twilio-Console eintragen.'
+      ),
     })
   );
 }

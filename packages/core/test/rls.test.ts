@@ -2722,3 +2722,114 @@ describe.skipIf(!enabled)('RLS: Stripe billing (0041) — service role only', ()
     expect(rows ?? []).toHaveLength(0);
   });
 });
+
+describe.skipIf(!enabled)('RLS: channel_active_periods (0045) — service role only', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let anon: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  let channelId: string;
+  const ownerEmail = `periods-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Periods Org', slug: `periods-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+
+    // the owner creates an ACTIVE channel with their own session: the trigger
+    // (security definer) writes the period although the member may not
+    const { data: channel, error } = await owner
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Widget', config: { widget: true } })
+      .select('id')
+      .single();
+    expect(error).toBeNull();
+    channelId = channel!.id as string;
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('activating a channel opens a period — visible to the service role only', async () => {
+    const { data: asAdmin } = await admin
+      .from('channel_active_periods')
+      .select('channel_id, channel_kind, active_until')
+      .eq('org_id', orgId);
+    expect(asAdmin).toEqual([{ channel_id: channelId, channel_kind: 'chat', active_until: null }]);
+
+    const { data: asOwner } = await owner.from('channel_active_periods').select('*');
+    expect(asOwner ?? []).toHaveLength(0);
+    const { data: asAnon } = await anon.from('channel_active_periods').select('*');
+    expect(asAnon ?? []).toHaveLength(0);
+  });
+
+  it('a member can neither write a period nor ask for the count', async () => {
+    const inserted = await owner
+      .from('channel_active_periods')
+      .insert({ org_id: orgId, channel_id: randomUUID(), channel_kind: 'whatsapp' });
+    expect(inserted.error).not.toBeNull();
+    // nothing was removed either (no policy = no rows to delete)
+    await owner.from('channel_active_periods').delete().eq('org_id', orgId);
+    const { data: still } = await admin
+      .from('channel_active_periods')
+      .select('id')
+      .eq('org_id', orgId);
+    expect(still).toHaveLength(1);
+
+    const span = { p_org_id: orgId, p_from: '2000-01-01T00:00:00Z', p_to: '2100-01-01T00:00:00Z' };
+    expect((await owner.rpc('billing_active_channels', span)).error).not.toBeNull();
+    expect((await anon.rpc('billing_active_channels', span)).error).not.toBeNull();
+    const counted = await admin.rpc('billing_active_channels', span);
+    expect(counted.error).toBeNull();
+    expect(counted.data).toEqual([{ channel_kind: 'chat', quantity: 1 }]);
+  });
+
+  it('deactivating by the member closes the period; a draft never has one', async () => {
+    expect(
+      (await owner.from('channels').update({ is_active: false }).eq('id', channelId)).error
+    ).toBeNull();
+    const { data: closed } = await admin
+      .from('channel_active_periods')
+      .select('active_until')
+      .eq('channel_id', channelId);
+    expect(closed).toHaveLength(1);
+    expect(closed![0]!.active_until).not.toBeNull();
+
+    const { data: draft } = await owner
+      .from('channels')
+      .insert({
+        org_id: orgId,
+        type: 'chat',
+        name: 'Entwurf',
+        is_active: false,
+        config: { widget: true },
+      })
+      .select('id')
+      .single();
+    const { data: none } = await admin
+      .from('channel_active_periods')
+      .select('id')
+      .eq('channel_id', draft!.id as string);
+    expect(none).toHaveLength(0);
+  });
+});

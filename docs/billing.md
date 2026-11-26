@@ -243,8 +243,7 @@ Am besten mit einem Testkunden: Jede Änderung wirkt sofort, auch auf den laufen
 
 Stand: **Migration 0043 ist seit 2026-11-26 eingespielt** (Probelauf mit Rollback, dann echt;
 danach über die API mit dem neuen Code geprüft: neun Monatsrechnungen — drei Kunden, drei Monate —
-auf den Cent gleich). **Der Code ist gebaut, aber noch nicht gepusht**; bis dahin zeigt die
-laufende App alles wie vorher.
+auf den Cent gleich). **Der Code ist gepusht (`5b09312`).**
 
 Zwei Arten von Preisen, zwei Orte:
 
@@ -300,9 +299,8 @@ Gegenproben (eigene Liste, eigener Preis, Kunde ohne Paket, kein Abo, leere Date
 Werte entstehen richtig, die zwei Abbrüche greifen und hinterlassen nichts. Nicht geprüft: das
 Aussehen im Browser und das Speichern (kein Login).
 
-**Offen (Entscheidung des Owners):** Die Kanal-Gebühr wird weiter nach dem **Kontingent** berechnet
-(Anzahl × Gebühr), nicht nach den tatsächlich eingerichteten Kanälen. Wer WhatsApp im Paket hat,
-zahlt die Gebühr auch ohne verbundenen Kanal.
+**Entschieden am 2026-11-26:** Die Kanal-Gebühr fällt nur noch für aktive Kanäle an — siehe
+„Kanal-Gebühr nur für aktive Kanäle“ (Migration 0045).
 
 ### Testanleitung
 
@@ -326,6 +324,98 @@ zahlt die Gebühr auch ohne verbundenen Kanal.
    25,00 €. `1.500` eintippen: „Nicht eindeutig …“. Feld leeren.
 9. **Einstellungen → Abrechnung des Kunden.** Erwartet: Kachel „Monatliche Gebühren“ enthält die
    Rufnummer; „Gesamt“ wie vorher.
+
+## Kanal-Gebühr nur für aktive Kanäle (Migration 0045, Owner-Entscheidung 2026-11-26)
+
+Stand: **Migration 0045 ist seit 2026-11-27 eingespielt** (Probelauf mit Rollback, dann echt;
+sieben offene Zeiträume für die sieben aktiven Kanäle) **und der Code ist gepusht.** Danach über die
+API geprüft: Der Kunde mit WhatsApp-Kanal zahlt in allen drei Monaten unverändert, die zwei ohne
+WhatsApp-Kanal je Monat genau 15,00 € weniger.
+
+Bisher rechnete ein Paket „Anzahl × Gebühr“ für das ab, was es **erlaubte**: Wer WhatsApp im Paket
+hatte, zahlte die Gebühr auch ohne verbundenen Kanal (zwei der drei Kunden). Jetzt gilt:
+
+- **Ein Kanal kostet seine Gebühr nur, solange er aktiv ist** (`channels.is_active`). Die Anzahl im
+  Paket ist nur noch die Obergrenze, wie viele Kanäle ein Kunde haben darf.
+- **Inaktiv = Entwurf.** Ein inaktiver Kanal lässt sich in Ruhe einrichten, empfängt nichts und
+  kostet nichts. „Aktivieren“ ist das Veröffentlichen.
+- **Der Monat zählt voll**, sobald der Kanal darin aktiv war — keine tagesgenaue Abrechnung, sonst
+  ließe er sich kurz vor Monatsende ausschalten. **Kulanz bei Fehlklick:** Ein Kanal, der innerhalb
+  einer Stunde wieder ausgeschaltet wurde, zählt nicht.
+- Eine Kanalart mit **0,00 €** läuft ohne Kosten und ohne Rechnungszeile durch, egal wie viele
+  Kanäle aktiv sind. Eine Kanalart ohne Anzahl im Paket (unbegrenzt) hat weiterhin keine Gebühr.
+- Bei Jahreslaufzeit gilt der Rabatt wie bisher auch für die Kanal-Gebühr.
+
+**Der Kunde erfährt den Preis, bevor er anfällt:**
+
+- **Anlegen:** Kostet die Kanalart bei diesem Kunden etwas, wird der neue Kanal als **Entwurf**
+  angelegt (Chat-Widget, Formular-Adresse, E-Mail-Adresse, Formular-Builder, WhatsApp). Im Dialog
+  „Neuer Kanal“ steht vorher „Kostet 15,00 € pro Monat“, in der Meldung danach noch einmal.
+  Kostenlose Kanalarten sind wie bisher sofort aktiv.
+- **Aktivieren:** Der Schalter eines kostenpflichtigen, inaktiven Kanals aktiviert nicht sofort. Er
+  zeigt zuerst „Aktiv kostet dieser Kanal 15,00 € pro Monat (netto) …“ mit dem Knopf
+  **„Kostenpflichtig aktivieren“**. Die Server-Aktion verweigert das Aktivieren ohne diese
+  Bestätigung, auch bei einem alten Formular.
+- **Telefonie:** Der Voice-Kanal wird vom Worker aktiv, sobald die Nummer geschaltet ist. Deshalb
+  steht der Preis im Dialog „Nummer beantragen“: Gebühr je Rufnummer und, falls vorhanden, die
+  Gebühr des Telefonie-Kanals.
+- **Deaktivieren:** Meldung „Kanal deaktiviert. Er empfängt jetzt nichts mehr.“
+- Der Betrag ist der dieses Kunden: eigener Wert vor Paket, bei Jahreslaufzeit abzüglich Rabatt
+  (`channelMonthlyFeeEur()` in core, `apps/web/src/lib/channel-fees.ts`). Aktivieren darf, wer
+  Kanäle bearbeiten darf.
+
+**Admin.** Paket-Seite: Spalte „je aktivem Kanal pro Monat“, rechts „Höchstens pro Monat“ (alle
+enthaltenen Kanäle aktiv). Übersicht: „Fest pro Monat, höchstens“ mit „ohne aktive Kanäle …“
+darunter. Konditionen am Kunden: Spalte „Aktiv“ und „Fest pro Monat“ nach den tatsächlich aktiven
+Kanälen, darunter der Höchstbetrag.
+
+**Technik (Migration 0045).** Die Datenbank kannte nur den aktuellen Zustand eines Kanals. Neu:
+
+- `channel_active_periods` (org_id, channel_id, channel_kind, active_from, active_until) — ein
+  Eintrag je Zeitraum, in dem ein Kanal aktiv war. Nur Service Role (RLS an, keine Policies).
+  `channel_id` hat bewusst keinen Fremdschlüssel: Der Zeitraum überlebt das Löschen des Kanals, der
+  Monat wird noch berechnet. Mit der Organisation wird alles gelöscht (`org.purge`).
+- Trigger auf `channels`: Aktivieren öffnet einen Zeitraum, Deaktivieren oder Löschen schließt ihn;
+  wechselt die Kanalart, endet der alte und beginnt ein neuer. Test-Kanäle werden nie erfasst.
+- `billing_active_channels(org, von, bis)` zählt die Kanäle je Art, die im Zeitraum aktiv waren
+  (nur Service Role).
+- **Nachtrag der Bestandsdaten:** Jeder heute aktive Kanal gilt als aktiv seit seiner Anlage.
+- `recurringFeeLines(terms, interval, activeChannels)` in `packages/core/src/billing.ts` rechnet
+  Gebühr × aktive Kanäle; `getOrgInvoice` holt die Zahl aus der Funktion.
+
+**Reihenfolge:** Migration zuerst, dann der Code. Ohne die Funktion rechnet der neue Code wie
+bisher nach Kontingent (im Admin steht dann „Kanäle nach Kontingent“ an der Rechnung).
+
+**Was sich für die Bestandskunden ändert:** Zwei der drei Kunden haben keinen WhatsApp-Kanal und
+zahlen die 15,00 € nicht mehr — auch nicht für zurückliegende Monate in der Anzeige. Beim dritten
+bleibt es bei 15,00 € ab dem Monat, in dem der Kanal angelegt wurde.
+
+**Geprüft:** typecheck, lint, Tests und Build grün (neue Tests: „channel fees follow the ACTIVE
+channels“ in `packages/core/test/billing-terms.test.ts`, RLS-Test für die neue Tabelle). Die
+Migration auf einer lokalen Kopie der Kanäle (ohne Zugangsdaten): sechs offene Zeiträume für die
+sechs aktiven Kanäle; dazu 21 Prüfungen von Trigger und Zählregel (Entwurf, Aktivieren, Aus- und
+wieder Einschalten im selben Monat, zweiter Kanal, 59 und 60 Minuten, Test-Kanal, Wechsel der
+Kanalart, Löschen, Löschen der Organisation, Rechte). Nicht geprüft: das Aussehen im Browser.
+
+### Testanleitung
+
+1. **Admin → Abrechnung → Kunde ohne WhatsApp-Kanal.** Erwartet: keine Zeile „WhatsApp (1×)“ mehr,
+   die Summe ist um 15,00 € niedriger. Beim Kunden mit WhatsApp-Kanal steht die Zeile weiter.
+2. **Admin → Preise & Pakete → Starter.** Erwartet: Spalte „je aktivem Kanal pro Monat“, rechts
+   „Höchstens pro Monat 15,00 €“.
+3. **Konditionen eines Kunden ohne WhatsApp-Kanal.** Erwartet: in „Kanäle“ bei WhatsApp „Aktiv 0“
+   und 0,00 €; rechts „Fest pro Monat 0,00 €“ und der Satz mit dem Höchstbetrag 15,00 €.
+4. **Als Kunde: Kanäle → Neuer Kanal → WhatsApp.** Erwartet: gelber Hinweis „Kostet 15,00 € pro
+   Monat“. Nach dem Anlegen: Meldung „… als Entwurf angelegt …“, der Kanal steht auf „Inaktiv“.
+5. **Schalter des Entwurfs anklicken.** Erwartet: kein Aktivieren, sondern der Text mit dem Preis und
+   „Kostenpflichtig aktivieren“ / „Abbrechen“. „Abbrechen“: Schalter wie vorher.
+6. **„Kostenpflichtig aktivieren“.** Erwartet: „Kanal aktiviert. Er kostet 15,00 € pro Monat …“.
+   In der Rechnung des Kunden erscheint „WhatsApp (1×) 15,00 €“.
+7. **Innerhalb einer Stunde wieder deaktivieren.** Erwartet: „Kanal deaktiviert. Er empfängt jetzt
+   nichts mehr.“ Die Zeile verschwindet wieder aus der Rechnung.
+8. **Neuer Kanal → Chat-Widget** (kostenlos). Erwartet: kein Hinweis, der Kanal ist sofort aktiv.
+9. **Telefonnummern → Nummer beantragen.** Erwartet: Hinweis „Kosten pro Monat (netto)“ mit
+   10,00 € für Festnetz und 30,00 € für Mobilfunk.
 
 ## Data Actions (Migration 0040)
 

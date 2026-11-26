@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
+  currentChannelCounts,
   currentMonth,
   formatEur,
   formatEurCost,
@@ -14,12 +15,14 @@ import {
   loadBillingCatalog,
   parseMonthKey,
   recentMonths,
+  resolveOrgTerms,
 } from '@/lib/billing';
 import { loadBillingAccountState, loadSetupMailState } from '@/lib/billing-account';
 import { href } from '@/lib/href';
 import { stripeRuntime } from '@/lib/stripe';
 import { periodKeyOf, shiftPeriodKey } from '@zendori/core';
 import DismissibleBanners from '@/components/DismissibleBanners';
+import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { EmptyState, Section } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
@@ -86,6 +89,12 @@ export default async function AdminOrgBillingPage({
   const period = parseMonthKey(month, currentMonth(new Date()));
   const catalog = await loadBillingCatalog(admin);
   const invoice = await getOrgInvoice(admin, orgId, period, catalog);
+  // the side rail always describes the CURRENT month, whatever month is shown
+  const chargedChannels = await currentChannelCounts(
+    admin,
+    orgId,
+    resolveOrgTerms(catalog, orgId)
+  );
 
   const costEur = (usd: number) => Math.round(usd * catalog.ctx.usdToEur * 100) / 100;
 
@@ -185,6 +194,12 @@ export default async function AdminOrgBillingPage({
                 'Kein Paket zugewiesen: Berechnet werden nur der Verbrauch und Rufnummern zum Einkaufspreis.'
               )
             }
+            // 0045 missing: the database cannot say which channels were active
+            actions={
+              invoice.channelCountsByQuota && invoice.packageName ? (
+                <Badge tone="warn">Kanäle nach Kontingent (Migration 0045 ausstehend)</Badge>
+              ) : undefined
+            }
           >
             <div className="table-wrap">
               <table className="table--compact">
@@ -267,7 +282,7 @@ export default async function AdminOrgBillingPage({
         </div>
 
         <aside className="page-rail" aria-label="Konditionen und Stripe">
-          <TermsSummary catalog={catalog} orgId={orgId} />
+          <TermsSummary catalog={catalog} orgId={orgId} channelCounts={chargedChannels} />
           <StripeBillingSummary
             orgId={orgId}
             livemode={runtime ? runtime.livemode : null}
