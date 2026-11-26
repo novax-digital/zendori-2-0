@@ -1,8 +1,10 @@
 # Phase 15 — Stripe: Zahlungsart, Rechnung, Einzug
 
-Owner-Auftrag 2026-11-25. Stand: **Teilphase 15a gebaut, nicht gepusht; Migration 0041 nicht
-eingespielt.** Teilphase 15b (Monatsabschluss und Rechnungen) ist noch nicht gebaut. Es entsteht in
-15a keine einzige Rechnung und es wird nichts eingezogen.
+Owner-Auftrag 2026-11-25. Stand: **Teilphase 15a gebaut und gepusht (`9ed734d`); Migration 0041 ist
+seit 2026-11-26 eingespielt** (nach dem Deploy, Probelauf mit Rollback). Stripe selbst ist noch
+aus: Es sind keine Schlüssel gesetzt, der Webhook antwortet mit 503. Teilphase 15b (Monatsabschluss
+und Rechnungen) ist noch nicht gebaut. Es entsteht in 15a keine einzige Rechnung und es wird nichts
+eingezogen.
 
 Die Aufrufe an Stripe sind gegen ein nachgebautes Stripe getestet und gegen die Stripe-Doku
 (API-Version `2026-11-18.endive`) geschrieben. **Gegen das echte Stripe ist noch nichts gelaufen** —
@@ -164,9 +166,10 @@ Ohne `STRIPE_SECRET_KEY` verhält sich alles wie vor Phase 15.
 
 ## Rollout-Reihenfolge
 
-1. App deployen (Web und Worker vertragen die fehlenden Tabellen: Funktion aus).
-2. Migration 0041 einspielen (Plan + Diff, Freigabe).
-3. Variablen in Vercel und im Worker setzen, Worker neu starten.
+1. App deployen (Web und Worker vertragen die fehlenden Tabellen: Funktion aus). **Erledigt
+   2026-11-26** (Web auf Vercel; Worker-Image `9ed734ddea48fcb764df018ed2cd041d997397b7` gebaut).
+2. Migration 0041 einspielen (Plan + Diff, Freigabe). **Erledigt 2026-11-26.**
+3. Variablen in Vercel und im Worker setzen, Worker neu starten. **Offen (Owner).**
 
 ## Manuelle Testanleitung 15a (Stripe-Testmodus)
 
