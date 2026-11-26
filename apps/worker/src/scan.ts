@@ -51,6 +51,12 @@ import {
   type BillingSyncJob,
 } from './billing/customer-sync.js';
 import {
+  INVOICE_COLLECT_QUEUE,
+  INVOICE_COLLECT_RETRY_LIMIT,
+  isInvoiceCollectionDue,
+  type InvoiceCollectJob,
+} from './billing/invoice-collect.js';
+import {
   INVOICE_RUN_QUEUE,
   INVOICE_RUN_RETRY_LIMIT,
   dueInvoicePeriods,
@@ -167,6 +173,8 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       await enqueueRequestedBillingSyncs(boss, supabase);
       // Phase 15b: issued invoices that still need their PDF or their mail
       await enqueueDueInvoiceDocuments(boss, supabase);
+      // Phase 15b step 3: invoices whose charge is due, and debits that are under way
+      await enqueueDueInvoiceCollections(boss, supabase);
       // Phase 15b step 2: the monthly invoice run (off until a start month is set)
       if (Date.now() - lastInvoiceRunCheck >= INVOICE_RUN_CHECK_MS) {
         lastInvoiceRunCheck = Date.now();
@@ -522,6 +530,42 @@ async function enqueueRequestedBillingSyncs(boss: PgBoss, supabase: SupabaseClie
     await boss.send(BILLING_SYNC_QUEUE, { orgId: row.org_id } satisfies BillingSyncJob, {
       singletonKey: row.org_id,
       retryLimit: BILLING_SYNC_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue invoices that are to be charged through Stripe now, and running
+ * debits whose daily look is due (0048). Only rows of this worker's Stripe mode;
+ * a no-op without STRIPE_SECRET_KEY and before the migration.
+ */
+async function enqueueDueInvoiceCollections(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const stripe = workerStripe();
+  if (!stripe) return;
+  const { data, error } = await supabase
+    .from('billing_invoices')
+    .select('id, collect_state, collect_on, collect_next_attempt_at')
+    .in('collect_state', ['scheduled', 'processing'])
+    .eq('collect_livemode', stripe.livemode)
+    .order('collect_on', { ascending: true })
+    .limit(INVOICE_DOCUMENT_BATCH);
+  if (error) {
+    const code = (error as { code?: string }).code;
+    // billing_invoices (0046) or its collect columns (0048) do not exist yet
+    if (isMissingTable(error as { code?: string }) || code === '42703') return;
+    throw error;
+  }
+  const nowMs = Date.now();
+  for (const row of (data ?? []) as {
+    id: string;
+    collect_state: string;
+    collect_on: string | null;
+    collect_next_attempt_at: string | null;
+  }[]) {
+    if (!isInvoiceCollectionDue(row, nowMs)) continue;
+    await boss.send(INVOICE_COLLECT_QUEUE, { invoiceId: row.id } satisfies InvoiceCollectJob, {
+      singletonKey: row.id,
+      retryLimit: INVOICE_COLLECT_RETRY_LIMIT,
     });
   }
 }

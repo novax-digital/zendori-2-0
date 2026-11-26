@@ -5,6 +5,7 @@ import {
   berlinDate,
   buildInvoiceAmounts,
   cancellationAmounts,
+  collectErrorLabel,
   formatCentsEur,
   formatDateDe,
   formatInvoiceNumber,
@@ -142,11 +143,16 @@ describe('the seller', () => {
       numberStart: 1,
       paymentTermDays: 14,
       autoInvoiceFrom: '2026-12',
+      collectAfterDays: 5,
     };
     const row = sellerToRow(settings);
     expect(row.address_line2).toBeNull();
     expect(row.iban).toBe('DE02120300000000202051');
     expect(row.auto_invoice_from).toBe('2026-12');
+    expect(row.collect_after_days).toBe(5);
+    // before 0048 the column is absent: three days
+    const { collect_after_days: _days, ...before0048 } = row;
+    expect(sellerFromRow(before0048).collectAfterDays).toBe(3);
     expect(sellerFromRow(row)).toEqual(settings);
     // the monthly run is off unless a valid month is stored (also before 0047)
     expect(sellerFromRow({ ...row, auto_invoice_from: null }).autoInvoiceFrom).toBeNull();
@@ -223,6 +229,31 @@ describe('an invoice as read from the database', () => {
     created_at: '2026-12-01T08:00:00Z',
   };
 
+  it('reads a row from before 0048 as a transfer invoice without a charge', () => {
+    const invoice = parseInvoiceRow(ROW)!;
+    expect(invoice.paymentMethod).toBe('transfer');
+    expect(invoice.collectState).toBe('none');
+    expect(invoice.collectOn).toBeNull();
+    const collected = parseInvoiceRow({
+      ...ROW,
+      payment_method: 'sepa_debit',
+      payment_label: 'SEPA-Lastschrift •••• 3000',
+      collect_on: '2026-12-04',
+      collect_state: 'failed',
+      collect_error: 'insufficient_funds',
+    })!;
+    expect(collected).toMatchObject({
+      paymentMethod: 'sepa_debit',
+      paymentLabel: 'SEPA-Lastschrift •••• 3000',
+      collectOn: '2026-12-04',
+      collectState: 'failed',
+      collectError: 'insufficient_funds',
+    });
+    expect(collectErrorLabel('insufficient_funds')).toBe('Konto nicht gedeckt');
+    expect(collectErrorLabel('something_new')).toBe('something_new');
+    expect(collectErrorLabel(null)).toBe('unbekannter Grund');
+  });
+
   it('parses the frozen parts and fills what an older row lacks', () => {
     const invoice = parseInvoiceRow(ROW)!;
     expect(invoice.orgId).toBeNull(); // the organization is gone, the invoice stays
@@ -240,6 +271,10 @@ describe('an invoice as read from the database', () => {
     expect(invoiceDisplayStatus(invoice, '2026-12-15')).toBe('open'); // due today is not late
     expect(invoiceDisplayStatus(invoice, '2026-12-16')).toBe('overdue');
     expect(invoiceDisplayStatus({ ...invoice, paymentStatus: 'paid' }, '2027-01-01')).toBe('paid');
+    // a charge that is planned or running is not "overdue"; a failed one is, once the date passed
+    expect(invoiceDisplayStatus({ ...invoice, collectState: 'scheduled' }, '2027-01-01')).toBe('open');
+    expect(invoiceDisplayStatus({ ...invoice, collectState: 'processing' }, '2027-01-01')).toBe('open');
+    expect(invoiceDisplayStatus({ ...invoice, collectState: 'failed' }, '2027-01-01')).toBe('overdue');
     expect(
       invoiceDisplayStatus({ ...invoice, cancelledByInvoiceId: 'x', paymentStatus: 'void' }, '2027-01-01')
     ).toBe('cancelled');

@@ -23,3 +23,4 @@ export * from './stripe/customers.js';
 export * from './stripe/customer-store.js';
 export * from './stripe/checkout.js';
 export * from './stripe/events.js';
+export * from './stripe/payments.js';

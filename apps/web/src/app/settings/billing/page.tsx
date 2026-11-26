@@ -31,7 +31,7 @@ import DismissibleBanners from '@/components/DismissibleBanners';
 import SettingsFrame from '@/components/SettingsTabs';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
-import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
+import { EmptyState, Section, Stat, Stats, Tabs } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import { BillingRecipientSection, CustomerInvoicesSection } from './InvoiceSections';
 import StripeBillingSection, { BillingDetailsDrawer } from './StripeBillingSection';
@@ -87,6 +87,7 @@ export default async function CustomerBillingPage({
     org?: string;
     month?: string;
     vpage?: string;
+    tab?: string;
     panel?: string;
     payment?: string;
     was?: string;
@@ -94,7 +95,7 @@ export default async function CustomerBillingPage({
     notice?: string;
   }>;
 }) {
-  const { org, month, vpage, panel, payment, was, error, notice } = await searchParams;
+  const { org, month, vpage, tab, panel, payment, was, error, notice } = await searchParams;
   const { orgId, access, role } = await requireActiveOrg(org);
 
   if (!canViewArea(access, 'billing')) {
@@ -224,7 +225,7 @@ export default async function CustomerBillingPage({
   const page = Math.min(totalPages, Math.max(1, Number.parseInt(vpage ?? '1', 10) || 1));
   const pageRows = logRows.slice((page - 1) * LOG_PAGE_SIZE, page * LOG_PAGE_SIZE);
   const logHref = (p: number) =>
-    href('/settings/billing', { org: orgId, month: period.key, vpage: p });
+    href('/settings/billing', { org: orgId, month: period.key, tab: 'usage', vpage: p });
   const usageTotalEur = usedLines.reduce((sum, line) => sum + line.priceEur, 0);
 
   // --- Stripe billing (Phase 15a): only once the operator enabled it -----------
@@ -234,8 +235,6 @@ export default async function CustomerBillingPage({
   const account = runtime ? await loadBillingAccountState(admin, orgId, runtime.livemode) : null;
   const stripeBilling = runtime && account?.stripe?.enabled ? { runtime, account } : null;
   const canEditBilling = isAdminRole(role);
-  const pageHref = (extra: Record<string, string | undefined> = {}) =>
-    href('/settings/billing', { org: orgId, month: month ?? undefined, ...extra });
   // --- own invoices (Phase 15b): for every organization, with or without Stripe ---
   // Before migration 0046 the list reads as "not available" and nothing shows.
   const [recipient, invoiceList] = await Promise.all([
@@ -252,18 +251,76 @@ export default async function CustomerBillingPage({
     typeof was === 'string' &&
     (stripeBilling?.account.stripe?.paymentMethodId ?? 'none') === was;
 
+  // --- page tabs: Verbrauch · Rechnungen · Rechnungsdaten ------------------------------
+  // One thing per tab instead of everything below each other. The details tab
+  // exists once there is something to fill in (own invoices or Stripe billing).
+  const hasDetailsTab = stripeBilling !== null || invoicesAvailable;
+  const setupIncomplete =
+    hasDetailsTab &&
+    (recipient.details === null ||
+      (stripeBilling !== null && stripeBilling.account.stripe?.paymentMethodId == null));
+  type BillingTab = 'usage' | 'invoices' | 'details';
+  const requestedTab: BillingTab | null =
+    tab === 'usage' || tab === 'invoices' || tab === 'details' ? tab : null;
+  const activeTab: BillingTab =
+    // coming back from Stripe's payment page, or with the details dialog open
+    hasDetailsTab && (panel === 'details' || payment !== undefined)
+      ? 'details'
+      : requestedTab === 'details' && hasDetailsTab
+        ? 'details'
+        : requestedTab === 'invoices' && invoicesAvailable
+          ? 'invoices'
+          : requestedTab === 'usage'
+            ? 'usage'
+            : // no tab asked for: where something is to do, else the month
+              setupIncomplete && canEditBilling
+              ? 'details'
+              : 'usage';
+  const tabHref = (key: BillingTab): string =>
+    href('/settings/billing', { org: orgId, month: month ?? undefined, tab: key });
+  const pageHref = (extra: Record<string, string | undefined> = {}) =>
+    href('/settings/billing', {
+      org: orgId,
+      month: month ?? undefined,
+      tab: activeTab,
+      ...extra,
+    });
+  const tabItems = [
+    { label: 'Verbrauch', href: tabHref('usage'), active: activeTab === 'usage' },
+    ...(invoicesAvailable
+      ? [
+          {
+            label: 'Rechnungen',
+            href: tabHref('invoices'),
+            active: activeTab === 'invoices',
+            count: invoiceList.invoices.filter((item) => item.kind === 'invoice').length,
+          },
+        ]
+      : []),
+    ...(hasDetailsTab
+      ? [
+          {
+            label: stripeBilling ? 'Zahlung und Rechnungsdaten' : 'Rechnungsdaten',
+            href: tabHref('details'),
+            active: activeTab === 'details',
+          },
+        ]
+      : []),
+  ];
+
   return (
     <SettingsFrame access={access} orgId={orgId}>
       <div className="page">
         <PageHeader
           title="Abrechnung"
-          subtitle="Deine Monatsrechnung aus monatlichen Gebühren und Verbrauch, alle Beträge netto in Euro."
+          subtitle="Verbrauch und monatliche Gebühren, deine Rechnungen und deine Rechnungsdaten."
+          tabs={tabItems.length > 1 ? <Tabs label="Abrechnung" items={tabItems} /> : undefined}
         />
 
         <div className="page-body">
           <DismissibleBanners error={detailsOpen ? undefined : error} notice={notice} />
 
-          {stripeBilling ? (
+          {activeTab !== 'details' ? null : stripeBilling ? (
             <StripeBillingSection
               orgId={orgId}
               canEdit={canEditBilling}
@@ -282,15 +339,18 @@ export default async function CustomerBillingPage({
             />
           ) : null}
 
-          {invoicesAvailable ? (
+          {activeTab === 'invoices' ? (
             <CustomerInvoicesSection
               invoices={invoiceList.invoices}
               today={berlinDate(new Date())}
             />
           ) : null}
 
+          {activeTab === 'usage' ? (
+            <>
           <form method="get" className="toolbar">
             <input type="hidden" name="org" value={orgId} />
+            <input type="hidden" name="tab" value="usage" />
             <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
               {months.map((m) => (
                 <option key={m.key} value={m.key}>
@@ -417,6 +477,8 @@ export default async function CustomerBillingPage({
               </>
             )}
           </Section>
+            </>
+          ) : null}
         </div>
       </div>
 

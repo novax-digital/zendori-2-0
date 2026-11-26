@@ -32,7 +32,8 @@ export default async function AdminSellerPage({
   if (!admin) return <AdminUnavailable title="Rechnungssteller" />;
 
   const state = await loadSellerState(admin);
-  const { seller, numberFormat, numberStart, paymentTermDays, autoInvoiceFrom } = state.settings;
+  const { seller, numberFormat, numberStart, paymentTermDays, autoInvoiceFrom, collectAfterDays } =
+    state.settings;
   const year = new Date().getFullYear();
   // the monthly run may start with the running month or later; a stored month stays selectable
   const thisMonth = periodKeyOf(new Date());
@@ -154,7 +155,11 @@ export default async function AdminSellerPage({
                     defaultValue={numberStart}
                   />
                 </Field>
-                <Field label="Zahlungsziel in Tagen" htmlFor="seller-paymentTermDays">
+                <Field
+                  label="Zahlungsziel in Tagen"
+                  htmlFor="seller-paymentTermDays"
+                  help="Für Rechnungen, die überwiesen werden."
+                >
                   <input
                     id="seller-paymentTermDays"
                     name="paymentTermDays"
@@ -167,6 +172,22 @@ export default async function AdminSellerPage({
                   />
                 </Field>
               </div>
+              <Field
+                label="Einzug nach Tagen"
+                htmlFor="seller-collectAfterDays"
+                help="Für Kunden mit Stripe-Abrechnung: So viele Tage nach dem Rechnungsdatum wird der Betrag von der hinterlegten Zahlungsart eingezogen. Die Rechnung nennt das Datum und kündigt damit die Lastschrift an."
+              >
+                <input
+                  id="seller-collectAfterDays"
+                  name="collectAfterDays"
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={1}
+                  required
+                  defaultValue={collectAfterDays}
+                />
+              </Field>
               <Field
                 label="Hinweis am Ende der Rechnung (optional)"
                 htmlFor="seller-footerNote"

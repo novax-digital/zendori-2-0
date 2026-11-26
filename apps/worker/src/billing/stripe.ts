@@ -4,6 +4,7 @@
 // touches rows of its own mode.
 import { loadWorkerEnv, type Logger, type SupabaseClient } from '@zendori/core';
 import { retrieveStripeAccount, stripeKeyLivemode, type StripeConfig } from '@zendori/integrations';
+import type { SendEmailParams } from '@zendori/channels';
 
 export interface StripeRuntime {
   config: StripeConfig;
@@ -46,6 +47,13 @@ export interface BillingDeps {
   now?: () => number;
   /** The Stripe account of the key; injectable for tests. */
   accountId?: () => Promise<string>;
+  /**
+   * Sender (RESEND_FROM) and app URL (APP_URL) for the mail that tells the
+   * operator about a failed or reversed charge (15b step 3); `send` for tests.
+   */
+  from?: string | undefined;
+  appUrl?: string | undefined;
+  send?: (params: SendEmailParams) => Promise<unknown>;
 }
 
 export function billingNow(deps: BillingDeps): number {

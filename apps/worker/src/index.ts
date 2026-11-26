@@ -41,6 +41,7 @@ import { BILLING_SYNC_QUEUE, syncBillingCustomer } from './billing/customer-sync
 import { sendBillingSetupMail } from './billing/setup-mail.js';
 import { INVOICE_DOCUMENT_QUEUE, processInvoiceDocument } from './billing/invoice-document.js';
 import { INVOICE_RUN_QUEUE, runInvoiceMonth } from './billing/invoice-run.js';
+import { INVOICE_COLLECT_QUEUE, processInvoiceCollection } from './billing/invoice-collect.js';
 import { STRIPE_EVENT_QUEUE, processStripeEvent } from './billing/stripe-events.js';
 import {
   LEARN_DISTILL_QUEUE,
@@ -375,7 +376,17 @@ async function main(): Promise<void> {
       for (const job of jobs) {
         const { eventId } = stripeEventJobSchema.parse(job.data);
         try {
-          await processStripeEvent({ supabase, logger, stripe }, eventId);
+          await processStripeEvent(
+            {
+              supabase,
+              logger,
+              stripe,
+              // for the mail to the operator when a charge failed or was reversed
+              from: process.env.RESEND_FROM,
+              appUrl: process.env.APP_URL,
+            },
+            eventId
+          );
         } catch (err) {
           logger.error({ err: toErrorInfo(err) }, 'stripe event job failed');
         }
@@ -456,9 +467,43 @@ async function main(): Promise<void> {
       for (const job of jobs) {
         const { period } = invoiceRunJobSchema.parse(job.data);
         try {
-          await runInvoiceMonth({ supabase, logger }, period);
+          // with the worker's Stripe mode: customers billed through Stripe get an
+          // invoice that is collected (0048)
+          await runInvoiceMonth(
+            { supabase, logger, stripeLivemode: workerStripe()?.livemode ?? null },
+            period
+          );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), period }, 'invoice run job failed');
+        }
+      }
+    }
+  );
+
+  // --- collecting invoices through Stripe (Phase 15b step 3, 0048) -------------------
+  await ensureQueuePolicy(boss, INVOICE_COLLECT_QUEUE);
+  await boss.work(
+    INVOICE_COLLECT_QUEUE,
+    { pollingIntervalSeconds: 5 },
+    async (jobs: { data: { invoiceId: string } }[]) => {
+      const stripe = workerStripe();
+      if (!stripe) return;
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { invoiceId } = invoiceDocumentJobSchema.parse(job.data);
+        try {
+          await processInvoiceCollection(
+            {
+              supabase,
+              logger,
+              stripe,
+              from: process.env.RESEND_FROM,
+              appUrl: process.env.APP_URL,
+            },
+            invoiceId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), invoiceId }, 'invoice collection job failed');
         }
       }
     }

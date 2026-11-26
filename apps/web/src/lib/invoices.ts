@@ -18,6 +18,7 @@ export {
   cancelInvoice,
   setInvoicePaid,
   requestInvoiceMail,
+  requestInvoiceCollection,
   invoiceableMonths,
   type SellerState,
   type InvoiceList,

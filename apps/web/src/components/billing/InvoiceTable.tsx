@@ -5,6 +5,7 @@
 import Link from 'next/link';
 import {
   INVOICE_DISPLAY_STATUS_LABELS,
+  collectErrorLabel,
   formatCentsEur,
   formatDateDe,
   invoiceDisplayStatus,
@@ -16,6 +17,7 @@ import {
   cancelInvoiceAction,
   markInvoicePaid,
   resendInvoice,
+  retryInvoiceCollection,
 } from '@/app/admin/invoices/actions';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import Badge, { type BadgeTone } from '@/components/ui/Badge';
@@ -47,6 +49,27 @@ function deliveryText(invoice: BillingInvoice): string {
     return `gesendet an ${invoice.mailTo ?? '—'}`;
   }
   return 'nicht gesendet';
+}
+
+/**
+ * Where the charge through Stripe stands, in a few words; null for an invoice
+ * that is paid by transfer. The customer sees no internal reason codes.
+ */
+function collectionText(invoice: BillingInvoice, mode: 'admin' | 'customer'): string | null {
+  switch (invoice.collectState) {
+    case 'scheduled':
+      return invoice.collectOn ? `Einzug ab ${formatDateDe(invoice.collectOn)}` : 'Einzug geplant';
+    case 'processing':
+      return 'Einzug läuft';
+    case 'failed':
+      return mode === 'admin'
+        ? `Einzug fehlgeschlagen: ${collectErrorLabel(invoice.collectError)}`
+        : 'Einzug fehlgeschlagen — bitte prüfe deine Zahlungsart';
+    case 'disputed':
+      return 'Zahlung zurückgebucht';
+    default:
+      return null;
+  }
 }
 
 export default function InvoiceTable({
@@ -133,12 +156,15 @@ export default function InvoiceTable({
                     {INVOICE_DISPLAY_STATUS_LABELS[status]}
                   </Badge>
                   {status === 'open' || status === 'overdue' ? (
-                    invoice.dueDate ? (
+                    collectionText(invoice, mode) ? (
+                      <div className="cell-sub">{collectionText(invoice, mode)}</div>
+                    ) : invoice.dueDate ? (
                       <div className="cell-sub">fällig am {formatDateDe(invoice.dueDate)}</div>
                     ) : null
                   ) : status === 'paid' && invoice.paidAt ? (
                     <div className="cell-sub">
                       am {formatDateDe(invoice.paidAt.slice(0, 10))}
+                      {invoice.paidVia === 'stripe' ? ' · eingezogen' : ''}
                       {mode === 'admin' && invoice.paidNote ? ` · ${invoice.paidNote}` : ''}
                     </div>
                   ) : null}
@@ -160,7 +186,22 @@ export default function InvoiceTable({
                           <span className="menu-label">PDF öffnen</span>
                         </a>
                       ) : null}
-                      {status === 'open' || status === 'overdue' ? (
+                      {(status === 'open' || status === 'overdue') &&
+                      invoice.collectState === 'failed' ? (
+                        <form action={retryInvoiceCollection}>
+                          {hidden}
+                          <p className="menu-note">
+                            Versucht den Einzug über Stripe noch einmal, von der Zahlungsart, die
+                            der Kunde jetzt hinterlegt hat.
+                          </p>
+                          <button className="menu-item" type="submit">
+                            <span className="menu-label">Einzug erneut versuchen</span>
+                          </button>
+                        </form>
+                      ) : null}
+                      {/* not while a debit is under way: it would be paid twice */}
+                      {(status === 'open' || status === 'overdue') &&
+                      invoice.collectState !== 'processing' ? (
                         <form action={markInvoicePaid}>
                           {hidden}
                           <input type="hidden" name="paid" value="true" />

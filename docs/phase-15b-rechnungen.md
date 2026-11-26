@@ -9,7 +9,10 @@ dann echt; über die API geprüft, ohne eine Rechnung zu erstellen) **und der Co
 BIC des Rechnungsstellers sind eingetragen (die Prüfsumme der IBAN stimmt), der Bankname noch nicht.
 Es gibt noch keine Rechnung. **Schritt 2 (automatischer Monatslauf) ist live: Migration 0047 seit
 2026-11-27 eingespielt, Code gepusht.** Der Lauf ist aus, bis der Betreiber einen Startmonat
-wählt. Schritt 3 (Stripe-Einzug) ist nicht gebaut.
+wählt. **Schritt 3 (Stripe-Einzug) ist live: Migration 0048 seit 2026-11-27 eingespielt, Code
+gepusht** — zusammen mit den Reitern auf den Abrechnungsseiten. Eingezogen wird erst, wenn für einen
+Kunden mit Stripe-Abrechnung eine Rechnung entsteht; heute ist kein Kunde eingeschaltet. Gegen das
+echte Stripe ist der Einzug noch nie gelaufen.
 
 ## Was Schritt 1 kann
 
@@ -30,6 +33,19 @@ wählt. Schritt 3 (Stripe-Einzug) ist nicht gebaut.
   geht an die aktuell hinterlegte Adresse.
 - **Storno:** erzeugt eine Stornorechnung mit eigener Nummer (dieselben Positionen negativ) und
   markiert die Rechnung als storniert. Danach kann der Monat neu berechnet werden.
+
+## Reiter auf den Abrechnungsseiten (2026-11-27)
+
+Die Seiten zeigten alles untereinander. Jetzt je Seite ein Thema pro Reiter (`?tab=`):
+
+- **Kunde, Einstellungen → Abrechnung:** „Verbrauch“ (Monat, Kennzahlen, Rechnungspositionen,
+  Kosten-Log), „Rechnungen“ (mit Anzahl), „Rechnungsdaten“ bzw. „Zahlung und Rechnungsdaten“ bei
+  Stripe. Ohne Angabe öffnet sich „Verbrauch“ — außer es fehlt noch etwas (Rechnungsdaten oder
+  Zahlungsart): Dann landet ein Inhaber oder Admin direkt auf dem Reiter, auf dem er es einträgt.
+  Der Rückweg von der Stripe-Seite und das Speichern der Rechnungsdaten führen dorthin zurück.
+- **Admin, Abrechnung → Kunde:** „Verbrauch“ (Monat, Rechnung des Monats, letzte Vorgänge) und
+  „Rechnungen“. Nach „Rechnung erstellen“ öffnet sich der Reiter „Rechnungen“. Statt eines
+  gesperrten Knopfs steht dort der nächste Schritt („Erst Rechnungsdaten eintragen“).
 
 ## Regeln
 
@@ -102,6 +118,96 @@ aus und die Einstellung meldet, dass sie noch nicht verfügbar ist.
    Rechnung da und der Eintrag weg.
 5. **„Aus — nur von Hand“ wählen und speichern.** Erwartet: Es entsteht nichts mehr von selbst.
 
+## Schritt 3 — Einzug über Stripe (Migration 0048)
+
+Für einen Kunden, den der Betreiber über Stripe abrechnet, wird der Rechnungsbetrag eingezogen
+statt überwiesen. Stripe erstellt weiterhin keine Rechnung — es bewegt nur das Geld.
+
+**Wann eine Rechnung eingezogen wird** (`decideCollection`, beim Erstellen entschieden und mit der
+Rechnung eingefroren): Stripe ist eingerichtet, der Kunde ist im aktuellen Modus (Test/Live)
+eingeschaltet, der Monat liegt nicht vor „Ab Monat“, eine Zahlungsart ist hinterlegt und der Betrag
+ist mindestens 0,50 €. Sonst bittet die Rechnung wie bisher um Überweisung. Nichts an Stripe kann
+verhindern, dass eine Rechnung entsteht.
+
+**Was der Kunde liest:** „Den Rechnungsbetrag ziehen wir frühestens am 04.12.2026 von Ihrer
+hinterlegten Zahlungsart ein (SEPA-Lastschrift •••• 3000). Sie müssen nichts überweisen.“ — auf dem
+PDF und in der Mail. Das ist zugleich die Vorankündigung der Lastschrift. Der Termin ist
+Rechnungsdatum + „Einzug nach Tagen“ (Rechnungssteller, Vorgabe 3).
+
+**Ablauf im Worker** (`apps/worker/src/billing/invoice-collect.ts`, Queue `billing.invoice-collect`):
+
+1. Am angekündigten Tag (nie früher) legt der Worker bei Stripe eine Zahlung über den
+   Bruttobetrag an und bestätigt sie sofort gegen die hinterlegte Zahlungsart.
+2. Karte: meist sofort „bezahlt“. SEPA-Lastschrift: „Einzug läuft“, das Ergebnis kommt nach
+   einigen Bankarbeitstagen. Stripe meldet es per Ereignis; zusätzlich fragt der Worker einmal am
+   Tag selbst nach, solange ein Einzug läuft.
+3. Erfolg → Rechnung „bezahlt“ (über Stripe). Fehlschlag (abgelehnt, nicht gedeckt, keine
+   Zahlungsart) → Rechnung bleibt **offen**, Status „Einzug fehlgeschlagen“ mit Grund.
+   Rückbuchung nach Erfolg → Rechnung wieder **offen**, Status „Zahlung zurückgebucht“.
+4. Bei Fehlschlag und Rückbuchung bekommt der Betreiber eine Mail (an die E-Mail des
+   Rechnungsstellers). **Es gibt keinen automatischen zweiten Versuch** — im Menü der Rechnung
+   steht „Einzug erneut versuchen“.
+
+**Was nie passieren darf, und wodurch es ausgeschlossen ist:**
+
+- **Kein Einzug vor dem angekündigten Tag** — Termin steht eingefroren in der Rechnung.
+- **Kein Einzug für eine bezahlte oder stornierte Rechnung** — „Als bezahlt markieren“ und Storno
+  nehmen einen geplanten Einzug zurück; der Worker prüft den Status direkt vor dem Abbuchen noch
+  einmal. Läuft eine Lastschrift schon, lässt sich die Rechnung nicht von Hand als bezahlt markieren.
+- **Keine doppelte Abbuchung** — jede Anfrage trägt einen Schlüssel aus Rechnung und Versuch, den
+  Stripe nur einmal ausführt. Wurde ein Versuch begonnen, aber sein Ergebnis nicht gespeichert
+  (Absturz), fragt der Worker zuerst bei Stripe nach, ob die Zahlung existiert.
+- **Keine fremde Zahlung** — eine Zahlung wird nur übernommen, wenn sie die Rechnung nennt, der
+  Betrag stimmt und sie dem Stripe-Kunden dieser Organisation gehört. Übernommen wird immer der
+  aktuelle Stand bei Stripe, nie der Inhalt eines Ereignisses.
+- **Test und Live getrennt** — eine Rechnung merkt sich den Modus; der Worker fasst nur Rechnungen
+  seines Modus an.
+
+An Stripe gehen dabei nur Betrag, Rechnungsnummer und IDs — keine Positionen, keine Kundendaten.
+
+**Migration 0048:** `billing_seller.collect_after_days`; an `billing_invoices` eingefroren
+`payment_method`, `payment_label`, `collect_on`, dazu der Stand des Einzugs (`collect_state`,
+`collect_livemode`, `stripe_payment_intent_id`, `collect_attempts`, `collect_error`,
+`collect_started_at`, `collect_next_attempt_at`, `collected_at`). `issue_billing_invoice` bekommt
+vier Argumente dazu; die bisherige Form bleibt und stellt eine Überweisungsrechnung aus.
+
+**Vor dem Einschalten (Aufgaben des Betreibers):**
+
+1. **Webhook bei Stripe erweitern** — der Endpunkt braucht zusätzlich `payment_intent.succeeded`,
+   `payment_intent.payment_failed`, `payment_intent.processing`, `payment_intent.canceled` und
+   `charge.dispute.created`. Ohne sie funktioniert der Einzug trotzdem, das Ergebnis einer
+   Lastschrift kommt dann aber erst mit der täglichen Nachfrage an. Befehl (fragt verdeckt nach dem
+   Schlüssel, ergänzt die Ereignisse am bestehenden Endpunkt):
+
+   ```bash
+   read -rs "SK?Stripe-Schlüssel: " && echo && EP=$(curl -s https://api.stripe.com/v1/webhook_endpoints -u "$SK:" -G -d limit=100 | python3 -c "import sys,json; print(next(e['id'] for e in json.load(sys.stdin)['data'] if e['url']=='https://app.zendori.ai/api/hooks/stripe'))") && curl -s https://api.stripe.com/v1/webhook_endpoints/$EP -u "$SK:" -d "enabled_events[]=checkout.session.completed" -d "enabled_events[]=setup_intent.succeeded" -d "enabled_events[]=customer.updated" -d "enabled_events[]=customer.deleted" -d "enabled_events[]=customer.tax_id.created" -d "enabled_events[]=customer.tax_id.updated" -d "enabled_events[]=customer.tax_id.deleted" -d "enabled_events[]=payment_method.attached" -d "enabled_events[]=payment_method.detached" -d "enabled_events[]=payment_method.updated" -d "enabled_events[]=payment_method.automatically_updated" -d "enabled_events[]=mandate.updated" -d "enabled_events[]=payment_intent.succeeded" -d "enabled_events[]=payment_intent.payment_failed" -d "enabled_events[]=payment_intent.processing" -d "enabled_events[]=payment_intent.canceled" -d "enabled_events[]=charge.dispute.created" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id'), len(d.get('enabled_events', [])), 'Ereignisse', d.get('error', {}).get('message', ''))"; unset SK EP
+   ```
+
+   Erwartet: `we_… 17 Ereignisse`.
+2. **Erst im Stripe-Testmodus durchspielen.** Gegen das echte Stripe ist der Einzug nie gelaufen;
+   die Tests laufen gegen ein nachgebautes Stripe.
+3. Ein eingeschränkter Stripe-Schlüssel braucht zusätzlich Schreibrecht auf PaymentIntents und
+   Leserecht auf Disputes.
+
+### Testanleitung Schritt 3 (Stripe-Testmodus)
+
+1. Testschlüssel in Web und Worker, eigene Organisation im Admin auf Stripe schalten,
+   Rechnungsdaten und Test-IBAN `DE89370400440532013000` hinterlegen.
+2. **Rechnungssteller → „Einzug nach Tagen“ auf 0**, speichern.
+3. **Rechnung für den Vormonat erstellen.** Erwartet: Meldung „… Der Betrag wird ab dem … über
+   Stripe eingezogen.“ In der Liste steht unter dem Status „Einzug ab …“. Im PDF steht der Satz
+   zum Einzug statt der Bitte um Überweisung, im Fuß weiter die Bankverbindung.
+4. **Nach wenigen Sekunden neu laden.** Erwartet: „Einzug läuft“. Im Stripe-Dashboard (Testdaten)
+   steht die Zahlung mit der Beschreibung „Rechnung ZD-…“.
+5. **Nach einigen Minuten** (Testmodus bestätigt Lastschriften schnell). Erwartet: Status
+   „Bezahlt … · eingezogen“.
+6. **Fehlschlag:** Test-IBAN `DE62370400440532013001` hinterlegen (Lastschrift scheitert), nächste
+   Rechnung erstellen. Erwartet: „Einzug fehlgeschlagen: …“, Rechnung offen, Mail an die Adresse
+   des Rechnungsstellers. Menü → „Einzug erneut versuchen“ startet einen neuen Versuch.
+7. **Geplanten Einzug zurücknehmen:** „Einzug nach Tagen“ auf 3, Rechnung erstellen, dann „Als
+   bezahlt markieren“. Erwartet: kein Einzug, auch nicht am Termin.
+8. **Kunde ohne Stripe:** Rechnung erstellen. Erwartet: wie bisher, Bitte um Überweisung.
+
 ## Technik
 
 - **Migration 0046:** `billing_seller` (eine Zeile), `billing_invoice_counters`,
@@ -140,8 +246,8 @@ gegen die Produktionsdaten.
 
 ## Offen
 
-- **Schritt 3:** Stripe-Einzug bei eingeschalteten Kunden (Betrag abbuchen statt überweisen),
-  Zahlstatus von selbst, Rückbuchung. Die Rechnung nennt dann den Einzug statt der Überweisung.
+- **Export für die Buchhaltung** (Owner-Wunsch 2026-11-27): Rechnungen eines Monats oder des
+  gesamten Zeitraums gebündelt herunterladen, dazu die Liste als CSV. Noch nicht gebaut.
 - **E-Rechnung** (XRechnung/ZUGFeRD): Pflicht zum Ausstellen ab 2027 (über 800.000 € Vorjahresumsatz)
   bzw. 2028. Die eingefrorenen Daten reichen dafür aus.
 - **Mit der Steuerberatung klären:** eigener Nummernkreis neben den bisherigen Rechnungen, Übergabe

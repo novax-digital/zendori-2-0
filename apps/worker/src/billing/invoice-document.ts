@@ -13,13 +13,14 @@
 //
 // Never logs addresses or amounts (§7).
 import {
-  BILLING_INVOICE_COLUMNS,
   INVOICE_BUCKET,
+  INVOICE_COLUMN_SETS,
   formatCentsEur,
   formatDateDe,
   invoiceFileName,
   invoicePdfPath,
   invoicePeriodLabel,
+  isMissingColumnError,
   isMissingRelationError,
   parseInvoiceRow,
   type BillingInvoice,
@@ -136,11 +137,17 @@ export async function processInvoiceDocument(
   const { supabase, logger } = deps;
   const nowMs = (deps.now ?? Date.now)();
 
-  const { data, error } = await supabase
-    .from('billing_invoices')
-    .select(`${BILLING_INVOICE_COLUMNS}, pdf_attempts, mail_attempts, next_attempt_at`)
-    .eq('id', invoiceId)
-    .maybeSingle();
+  // with the columns of 0048 (how the invoice is paid) once they exist
+  let data: unknown = null;
+  let error: unknown = null;
+  for (const columns of INVOICE_COLUMN_SETS) {
+    ({ data, error } = await supabase
+      .from('billing_invoices')
+      .select(`${columns}, pdf_attempts, mail_attempts, next_attempt_at`)
+      .eq('id', invoiceId)
+      .maybeSingle());
+    if (!(error && isMissingColumnError(error))) break;
+  }
   if (error) {
     if (isMissingRelationError(error)) return;
     throw error;
@@ -231,6 +238,10 @@ export async function processInvoiceDocument(
       dueDateText:
         invoice.kind === 'invoice' && invoice.dueDate && invoice.grossCents > 0
           ? formatDateDe(invoice.dueDate)
+          : null,
+      collection:
+        invoice.kind === 'invoice' && invoice.paymentMethod !== 'transfer' && invoice.collectOn
+          ? { dateText: formatDateDe(invoice.collectOn), label: invoice.paymentLabel }
           : null,
       cancelsNumber,
       recipientName: invoice.recipient.legalName,

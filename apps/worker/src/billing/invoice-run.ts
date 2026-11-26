@@ -45,6 +45,11 @@ export interface InvoiceRunDeps {
   supabase: SupabaseClient;
   logger: Logger;
   now?: () => number;
+  /**
+   * The worker's Stripe mode (null = Stripe is not configured): decides whether
+   * the invoice of a customer billed through Stripe is collected (0048).
+   */
+  stripeLivemode?: boolean | null;
   /** Injectable for tests. */
   issue?: typeof issueInvoiceForMonth;
 }
@@ -157,6 +162,7 @@ export async function runInvoiceMonth(
         period,
         userId: null,
         now: new Date(nowMs),
+        stripeLivemode: deps.stripeLivemode ?? null,
       });
       if (result.ok) {
         outcome = 'issued';

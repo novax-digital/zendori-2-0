@@ -41,8 +41,9 @@ function textField(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** The billing page on the tab these actions belong to ("Rechnungsdaten" / payment). */
 function pageUrl(org: string, params: Record<string, string | undefined> = {}): string {
-  return href('/settings/billing', { org, ...params });
+  return href('/settings/billing', { org, tab: 'details', ...params });
 }
 
 const NOT_AVAILABLE = 'Die Abrechnung über Stripe ist für diese Organisation nicht eingerichtet.';

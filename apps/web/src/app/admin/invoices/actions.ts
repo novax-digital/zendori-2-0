@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   billingDetailsErrorMessage,
   billingDetailsSchema,
+  formatDateDe,
   invoiceSellerSchema,
   isInvoiceNumberFormat,
   isPeriodKey,
@@ -18,10 +19,12 @@ import {
   confirmAccountVatId,
   issueInvoiceForMonth,
   loadSellerState,
+  requestInvoiceCollection,
   requestInvoiceMail,
   saveSellerSettings,
   setInvoicePaid,
 } from '@/lib/invoices';
+import { stripeRuntime } from '@/lib/stripe';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 // Own invoices, operator side (Phase 15b): the seller's details, issuing an
@@ -112,6 +115,10 @@ export async function saveSeller(formData: FormData): Promise<void> {
   if (!Number.isInteger(paymentTermDays) || paymentTermDays < 0 || paymentTermDays > 90) {
     return fail('Das Zahlungsziel muss zwischen 0 und 90 Tagen liegen.');
   }
+  const collectAfterDays = Number(textField(formData.get('collectAfterDays')) || '3');
+  if (!Number.isInteger(collectAfterDays) || collectAfterDays < 0 || collectAfterDays > 30) {
+    return fail('Die Tage bis zum Einzug müssen zwischen 0 und 30 liegen.');
+  }
 
   const admin = createSupabaseAdminClient();
   if (!admin) return fail(NO_SERVICE_ROLE);
@@ -134,7 +141,14 @@ export async function saveSeller(formData: FormData): Promise<void> {
 
   const saved = await saveSellerSettings(
     admin,
-    { seller: seller.data, numberFormat, numberStart, paymentTermDays, autoInvoiceFrom },
+    {
+      seller: seller.data,
+      numberFormat,
+      numberStart,
+      paymentTermDays,
+      autoInvoiceFrom,
+      collectAfterDays,
+    },
     userId
   );
   if (saved.error) return fail('Die Angaben konnten nicht gespeichert werden.');
@@ -173,7 +187,12 @@ export async function createInvoice(formData: FormData): Promise<void> {
   const admin = createSupabaseAdminClient();
   if (!admin) redirect(backUrl(formData, fallback, { error: NO_SERVICE_ROLE }));
 
-  const result = await issueInvoiceForMonth(admin, { ...parsed.data, userId });
+  const result = await issueInvoiceForMonth(admin, {
+    ...parsed.data,
+    userId,
+    // a customer billed through Stripe (in the mode of this key) gets an invoice that is collected
+    stripeLivemode: stripeRuntime()?.livemode ?? null,
+  });
   revalidateInvoices(parsed.data.orgId);
   redirect(
     backUrl(
@@ -181,7 +200,11 @@ export async function createInvoice(formData: FormData): Promise<void> {
       fallback,
       result.ok
         ? {
-            notice: `Rechnung ${result.invoice.number} erstellt. Das PDF wird erzeugt und an ${result.invoice.mailTo ?? 'die Rechnungs-E-Mail'} gesendet.`,
+            notice: `Rechnung ${result.invoice.number} erstellt. Das PDF wird erzeugt und an ${result.invoice.mailTo ?? 'die Rechnungs-E-Mail'} gesendet.${
+              result.invoice.collectOn
+                ? ` Der Betrag wird ab dem ${formatDateDe(result.invoice.collectOn)} über Stripe eingezogen.`
+                : ''
+            }`,
           }
         : { error: result.error }
     )
@@ -234,6 +257,25 @@ export async function resendInvoice(formData: FormData): Promise<void> {
       formData,
       INVOICES,
       result.error ? { error: result.error } : { notice: 'Die Rechnung wird erneut gesendet.' }
+    )
+  );
+}
+
+/** Asks the worker to charge an invoice again after a failed charge. */
+export async function retryInvoiceCollection(formData: FormData): Promise<void> {
+  await requirePlatformAdmin();
+  const invoiceId = invoiceIdOf(formData);
+  const admin = createSupabaseAdminClient();
+  if (!admin) redirect(backUrl(formData, INVOICES, { error: NO_SERVICE_ROLE }));
+  const result = await requestInvoiceCollection(admin, invoiceId);
+  revalidateInvoices(textField(formData.get('orgId')) || null);
+  redirect(
+    backUrl(
+      formData,
+      INVOICES,
+      result.error
+        ? { error: result.error }
+        : { notice: 'Der Einzug wird erneut versucht.' }
     )
   );
 }

@@ -10,6 +10,7 @@ import { isMissingRelationError, type SupabaseClient } from '@zendori/core';
 import {
   isStripeRetryable,
   retrieveCheckoutSession,
+  retrieveDispute,
   retrieveMandate,
   retrieveSetupIntent,
   setDefaultPaymentMethod,
@@ -26,6 +27,11 @@ import {
   refreshFromStripe,
   type StripeCustomerRow,
 } from './account.js';
+import {
+  applyPaymentIntentById,
+  loadCollectRow,
+  markCollectionDisputed,
+} from './invoice-collect.js';
 import { billingNow, type BillingDeps } from './stripe.js';
 
 export const STRIPE_EVENT_QUEUE = 'billing.stripe-event';
@@ -152,6 +158,28 @@ async function handleAccountEvent(deps: BillingDeps, event: EventRow): Promise<O
 }
 
 /**
+ * An event about the charge of an invoice (15b step 3). The event only says
+ * WHICH payment changed; what is applied is the PaymentIntent as Stripe has it
+ * now. A payment that is not one of our invoices is skipped.
+ */
+async function handlePaymentEvent(deps: BillingDeps, event: EventRow): Promise<Outcome> {
+  if (!event.object_id) return { kind: 'skipped', reason: 'no_object' };
+  if (event.type === 'charge.dispute.created') {
+    const dispute = await retrieveDispute(deps.stripe.config, event.object_id);
+    const paymentIntentId = stripeRefId(dispute?.payment_intent);
+    if (!paymentIntentId) return { kind: 'skipped', reason: 'no_payment_intent' };
+    const row = await loadCollectRow(deps.supabase, { paymentIntentId });
+    if (!row || row.collect_livemode !== deps.stripe.livemode) {
+      return { kind: 'skipped', reason: 'not_an_invoice' };
+    }
+    await markCollectionDisputed(deps, row);
+    return DONE;
+  }
+  const result = await applyPaymentIntentById(deps, event.object_id);
+  return result === 'unknown' ? { kind: 'skipped', reason: 'not_an_invoice' } : DONE;
+}
+
+/**
  * One attempt for one stored event. Idempotent per attempt: only a pending
  * event whose time has come can be leased, so a duplicate job is a no-op.
  */
@@ -182,7 +210,10 @@ export async function processStripeEvent(deps: BillingDeps, eventId: string): Pr
     logged = 'skipped:unhandled_type';
   } else {
     try {
-      const outcome = await handleAccountEvent(deps, event);
+      const outcome =
+        stripeEventScope(event.type) === 'payment'
+          ? await handlePaymentEvent(deps, event)
+          : await handleAccountEvent(deps, event);
       if (outcome.kind === 'done') {
         patch = {
           state: 'done',

@@ -14,6 +14,11 @@ export interface InvoiceEmailInput {
   grossText: string;
   /** "15.12.2026"; null on a cancellation or when nothing is to pay. */
   dueDateText: string | null;
+  /**
+   * Set when the amount is collected from the stored payment method instead of
+   * being transferred: the earliest day and what it is charged to.
+   */
+  collection?: { dateText: string; label: string | null } | null;
   /** For a cancellation: the number of the cancelled invoice. */
   cancelsNumber?: string | null;
   recipientName: string;
@@ -43,7 +48,9 @@ export function renderInvoiceEmail(input: InvoiceEmailInput): {
       ]
     : [
         `im Anhang erhalten Sie Ihre Rechnung <strong>${number}</strong> für die Nutzung von Zendori im ${period}.`,
-        input.dueDateText
+        input.collection
+          ? `Den Rechnungsbetrag ziehen wir frühestens am ${escapeHtml(input.collection.dateText)} von Ihrer hinterlegten Zahlungsart ein${input.collection.label ? ` (${escapeHtml(input.collection.label)})` : ''}. Sie müssen nichts überweisen.`
+          : input.dueDateText
           ? `Bitte überweisen Sie den Rechnungsbetrag bis zum ${escapeHtml(input.dueDateText)}. Die Bankverbindung steht auf der Rechnung; als Verwendungszweck genügt die Rechnungsnummer.`
           : 'Die Bankverbindung steht auf der Rechnung; als Verwendungszweck genügt die Rechnungsnummer.',
       ];
@@ -53,7 +60,9 @@ export function renderInvoiceEmail(input: InvoiceEmailInput): {
     { label: 'Leistungszeitraum', value: input.periodLabel },
     { label: cancellation ? 'Gutschrift' : 'Rechnungsbetrag', value: input.grossText },
   ];
-  if (!cancellation && input.dueDateText) {
+  if (!cancellation && input.collection) {
+    details.push({ label: 'Einzug ab', value: input.collection.dateText });
+  } else if (!cancellation && input.dueDateText) {
     details.push({ label: 'Fällig am', value: input.dueDateText });
   }
 

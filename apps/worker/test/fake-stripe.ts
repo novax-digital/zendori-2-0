@@ -22,6 +22,13 @@ export interface FakeStripe {
   setupIntents: Map<string, Obj>;
   sessions: Map<string, Obj>;
   mandates: Map<string, Obj>;
+  paymentIntents: Map<string, Obj>;
+  disputes: Map<string, Obj>;
+  /**
+   * What a new PaymentIntent answers with: its status, or a decline (402 with
+   * this error code). Default: `processing` for sepa_debit, `succeeded` for card.
+   */
+  nextCharge: { status?: string; decline?: string } | null;
   /** Queue failures: the next matching request answers with this status. */
   failNext(match: (call: FakeCall) => boolean, status: number, code?: string): void;
   /** Calls that changed something at Stripe. */
@@ -44,6 +51,8 @@ export function createFakeStripe(accountId = 'acct_test'): FakeStripe {
   const setupIntents = new Map<string, Obj>();
   const sessions = new Map<string, Obj>();
   const mandates = new Map<string, Obj>();
+  const paymentIntents = new Map<string, Obj>();
+  const disputes = new Map<string, Obj>();
   const idempotent = new Map<string, Obj>();
   const failures: { match: (call: FakeCall) => boolean; status: number; code?: string }[] = [];
   let sequence = 0;
@@ -150,10 +159,52 @@ export function createFakeStripe(accountId = 'acct_test'): FakeStripe {
       }
     }
 
+    if (resource === 'payment_intents' && !id && method === 'POST') {
+      const key = call.idempotencyKey;
+      if (key && idempotent.has(key)) return reply(200, idempotent.get(key));
+      const type = call.params.get('payment_method_types[0]') ?? 'card';
+      const plan = api.nextCharge;
+      api.nextCharge = null;
+      const metadata: Record<string, string> = {};
+      for (const [name, value] of call.params) {
+        const match = /^metadata\[(.+)\]$/.exec(name);
+        if (match) metadata[match[1]!] = value;
+      }
+      const intent: Obj = {
+        id: nextId('pi'),
+        object: 'payment_intent',
+        amount: Number(call.params.get('amount')),
+        currency: call.params.get('currency'),
+        customer: call.params.get('customer'),
+        payment_method: call.params.get('payment_method'),
+        metadata,
+        status: plan?.decline
+          ? 'requires_payment_method'
+          : (plan?.status ?? (type === 'sepa_debit' ? 'processing' : 'succeeded')),
+        last_payment_error: plan?.decline ? { code: plan.decline } : null,
+      };
+      paymentIntents.set(intent.id as string, intent);
+      if (plan?.decline) {
+        return reply(402, { error: { type: 'card_error', code: plan.decline } });
+      }
+      if (key) idempotent.set(key, intent);
+      return reply(200, intent);
+    }
+    if (resource === 'payment_intents' && !id && method === 'GET') {
+      const customer = call.params.get('customer');
+      return reply(200, {
+        object: 'list',
+        data: [...paymentIntents.values()].filter((intent) => intent.customer === customer),
+        has_more: false,
+      });
+    }
+
     const lookup: Record<string, Map<string, Obj>> = {
       payment_methods: paymentMethods,
       setup_intents: setupIntents,
       mandates,
+      payment_intents: paymentIntents,
+      disputes,
     };
     if (resource && lookup[resource] && id && method === 'GET') {
       const found = lookup[resource]!.get(id);
@@ -170,7 +221,7 @@ export function createFakeStripe(accountId = 'acct_test'): FakeStripe {
     return reply(400, { error: { type: 'invalid_request_error', code: 'fake_unhandled' } });
   }) as unknown as typeof fetch;
 
-  return {
+  const api: FakeStripe = {
     config: { secretKey: 'sk_test_fake', fetchImpl, sleep: async () => {} },
     calls,
     accountId,
@@ -186,5 +237,9 @@ export function createFakeStripe(accountId = 'acct_test'): FakeStripe {
     writes() {
       return calls.filter((call) => call.method !== 'GET');
     },
+    paymentIntents,
+    disputes,
+    nextCharge: null,
   };
+  return api;
 }

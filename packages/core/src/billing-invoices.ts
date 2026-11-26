@@ -1,6 +1,7 @@
 import {
   addDays,
   berlinDate,
+  BILLING_INVOICE_COLLECT_COLUMNS,
   BILLING_INVOICE_COLUMNS,
   type BillingInvoice,
   type BillingSellerRow,
@@ -88,10 +89,15 @@ export async function saveSellerSettings(
   let { error } = await admin.from('billing_seller').upsert(row, { onConflict: 'id' });
   let autoRunUnavailable = false;
   if (error && isMissingColumnError(error)) {
-    // 0047 not applied yet: everything but the start month of the automatic run is saved
-    autoRunUnavailable = settings.autoInvoiceFrom !== null;
-    const { auto_invoice_from: _dropped, ...withoutAutoRun } = row;
-    ({ error } = await admin.from('billing_seller').upsert(withoutAutoRun, { onConflict: 'id' }));
+    // 0048 not applied yet: the days until a charge are not stored (the default applies)
+    const { collect_after_days: _days, ...without0048 } = row;
+    ({ error } = await admin.from('billing_seller').upsert(without0048, { onConflict: 'id' }));
+    if (error && isMissingColumnError(error)) {
+      // 0047 not applied yet either: everything but the start month of the run is saved
+      autoRunUnavailable = settings.autoInvoiceFrom !== null;
+      const { auto_invoice_from: _from, ...without0047 } = without0048;
+      ({ error } = await admin.from('billing_seller').upsert(without0047, { onConflict: 'id' }));
+    }
   }
   return { error: Boolean(error), autoRunUnavailable };
 }
@@ -104,17 +110,32 @@ export interface InvoiceList {
   invoices: BillingInvoice[];
 }
 
+/**
+ * The invoice columns with those of 0048 (how it is paid, the charge) — or, as
+ * long as that migration is missing, without them: an invoice then reads as a
+ * transfer invoice without a charge.
+ */
+export const INVOICE_COLUMN_SETS: readonly string[] = [
+  `${BILLING_INVOICE_COLUMNS}, ${BILLING_INVOICE_COLLECT_COLUMNS}`,
+  BILLING_INVOICE_COLUMNS,
+];
+
 export async function listInvoices(
   admin: SupabaseClient,
   filter: { orgId?: string; limit?: number } = {}
 ): Promise<InvoiceList> {
-  let query = admin
-    .from('billing_invoices')
-    .select(BILLING_INVOICE_COLUMNS)
-    .order('created_at', { ascending: false })
-    .limit(filter.limit ?? 500);
-  if (filter.orgId) query = query.eq('org_id', filter.orgId);
-  const { data, error } = await query;
+  let data: unknown = null;
+  let error: unknown = null;
+  for (const columns of INVOICE_COLUMN_SETS) {
+    let query = admin
+      .from('billing_invoices')
+      .select(columns)
+      .order('created_at', { ascending: false })
+      .limit(filter.limit ?? 500);
+    if (filter.orgId) query = query.eq('org_id', filter.orgId);
+    ({ data, error } = await query);
+    if (!(error && isMissingColumnError(error))) break;
+  }
   if (error) return { available: !isMissingRelationError(error), invoices: [] };
   const invoices = ((data ?? []) as unknown as Record<string, unknown>[])
     .map(parseInvoiceRow)
@@ -126,11 +147,16 @@ export async function loadInvoice(
   admin: SupabaseClient,
   invoiceId: string
 ): Promise<BillingInvoice | null> {
-  const { data, error } = await admin
-    .from('billing_invoices')
-    .select(BILLING_INVOICE_COLUMNS)
-    .eq('id', invoiceId)
-    .maybeSingle();
+  let data: unknown = null;
+  let error: unknown = null;
+  for (const columns of INVOICE_COLUMN_SETS) {
+    ({ data, error } = await admin
+      .from('billing_invoices')
+      .select(columns)
+      .eq('id', invoiceId)
+      .maybeSingle());
+    if (!(error && isMissingColumnError(error))) break;
+  }
   if (error) return null;
   return parseInvoiceRow((data as unknown as Record<string, unknown> | null) ?? null);
 }
@@ -343,6 +369,60 @@ function issueArgs(input: {
   };
 }
 
+/** The smallest amount Stripe charges in EUR (cents). Below it the invoice asks for a transfer. */
+export const MIN_COLLECT_CENTS = 50;
+
+export interface InvoiceCollection {
+  type: 'sepa_debit' | 'card';
+  /** "SEPA-Lastschrift •••• 3000" — what the invoice prints. */
+  label: string;
+  livemode: boolean;
+}
+
+/**
+ * Is this invoice collected through Stripe? Yes when — in the caller's Stripe
+ * mode — the operator switched the customer to Stripe billing, the month is
+ * not before the first month to be billed that way, and a payment method is
+ * on file. Otherwise (also before migration 0048) the invoice asks for a
+ * transfer; nothing about Stripe can keep an invoice from being issued.
+ */
+export async function decideCollection(
+  admin: SupabaseClient,
+  input: { orgId: string; period: string; stripeLivemode: boolean | null; grossCents: number }
+): Promise<InvoiceCollection | null> {
+  if (input.stripeLivemode === null || input.grossCents < MIN_COLLECT_CENTS) return null;
+  // without 0048 the invoice could not carry the charge
+  const probe = await admin.from('billing_invoices').select('collect_state').limit(1);
+  if (probe.error) return null;
+  const { data, error } = await admin
+    .from('billing_stripe_customers')
+    .select(
+      'enabled, invoice_from, stripe_customer_id, payment_method_id, payment_method_type, payment_method_label'
+    )
+    .eq('org_id', input.orgId)
+    .eq('livemode', input.stripeLivemode)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as {
+    enabled: boolean;
+    invoice_from: string | null;
+    stripe_customer_id: string | null;
+    payment_method_id: string | null;
+    payment_method_type: string | null;
+    payment_method_label: string | null;
+  };
+  if (!row.enabled || !row.stripe_customer_id || !row.payment_method_id) return null;
+  if (isPeriodKey(row.invoice_from) && input.period < row.invoice_from) return null;
+  if (row.payment_method_type !== 'sepa_debit' && row.payment_method_type !== 'card') return null;
+  return {
+    type: row.payment_method_type,
+    label:
+      row.payment_method_label ??
+      (row.payment_method_type === 'sepa_debit' ? 'SEPA-Lastschrift' : 'Karte'),
+    livemode: input.stripeLivemode,
+  };
+}
+
 /**
  * Issues the invoice of one customer for one month: calculates the month as
  * the billing pages show it, freezes lines and amounts, and stores it with the
@@ -352,8 +432,18 @@ function issueArgs(input: {
  */
 export async function issueInvoiceForMonth(
   admin: SupabaseClient,
-  /** `userId` null = issued by the monthly run. */
-  input: { orgId: string; period: string; userId: string | null; now?: Date }
+  /**
+   * `userId` null = issued by the monthly run. `stripeLivemode` = the Stripe
+   * mode of the caller (null/absent = Stripe is not configured): a customer who
+   * is billed through Stripe in that mode gets an invoice that is collected.
+   */
+  input: {
+    orgId: string;
+    period: string;
+    userId: string | null;
+    now?: Date;
+    stripeLivemode?: boolean | null;
+  }
 ): Promise<IssueResult> {
   const now = input.now ?? new Date();
   if (!isPeriodKey(input.period)) {
@@ -469,26 +559,47 @@ export async function issueInvoiceForMonth(
   }
 
   const issueDate = berlinDate(now);
+  const collection = await decideCollection(admin, {
+    orgId: input.orgId,
+    period: input.period,
+    stripeLivemode: input.stripeLivemode ?? null,
+    grossCents: amounts.grossCents,
+  });
+  const collectOn = collection
+    ? addDays(issueDate, sellerState.settings.collectAfterDays)
+    : null;
+  const base = issueArgs({
+    orgId: input.orgId,
+    kind: 'invoice',
+    period: input.period,
+    issueDate,
+    // a collected invoice is due on the day it is collected
+    dueDate: collectOn ?? addDays(issueDate, sellerState.settings.paymentTermDays),
+    seller: sellerState.settings.seller,
+    recipient: details,
+    lines: amounts.lines,
+    taxMode: tax.mode,
+    taxPercent: tax.percent,
+    netCents: amounts.netCents,
+    taxCents: amounts.taxCents,
+    grossCents: amounts.grossCents,
+    mailTo: details.billingEmail,
+    cancelsInvoiceId: null,
+    userId: input.userId,
+  });
+  // The 16-argument form issues a transfer invoice (and exists before 0048);
+  // the charge needs the four arguments of 0048.
   const { data, error } = await admin.rpc(
     'issue_billing_invoice',
-    issueArgs({
-      orgId: input.orgId,
-      kind: 'invoice',
-      period: input.period,
-      issueDate,
-      dueDate: addDays(issueDate, sellerState.settings.paymentTermDays),
-      seller: sellerState.settings.seller,
-      recipient: details,
-      lines: amounts.lines,
-      taxMode: tax.mode,
-      taxPercent: tax.percent,
-      netCents: amounts.netCents,
-      taxCents: amounts.taxCents,
-      grossCents: amounts.grossCents,
-      mailTo: details.billingEmail,
-      cancelsInvoiceId: null,
-      userId: input.userId,
-    })
+    collection && collectOn
+      ? {
+          ...base,
+          p_payment_method: collection.type,
+          p_payment_label: collection.label,
+          p_collect_on: collectOn,
+          p_collect_livemode: collection.livemode,
+        }
+      : base
   );
   const invoice = parseInvoiceRow((data as Record<string, unknown> | null) ?? null);
   if (error || !invoice) {
@@ -590,7 +701,62 @@ export async function setInvoicePaid(
     .eq('id', invoice.id)
     // never touch a cancelled invoice, whatever happened in between
     .neq('payment_status', 'void');
-  return { error: error ? 'Der Zahlstatus konnte nicht gespeichert werden.' : null };
+  if (error) return { error: 'Der Zahlstatus konnte nicht gespeichert werden.' };
+  if (input.paid && (invoice.collectState === 'scheduled' || invoice.collectState === 'failed')) {
+    // Paid by hand: the charge must not happen on top of it. One that is
+    // already under way at Stripe cannot be taken back here and stays visible.
+    const { error: stopError } = await admin
+      .from('billing_invoices')
+      .update({ collect_state: 'none', collect_next_attempt_at: null })
+      .eq('id', invoice.id)
+      .in('collect_state', ['scheduled', 'failed']);
+    if (stopError) {
+      return {
+        error:
+          'Als bezahlt markiert, aber der geplante Einzug konnte nicht gestoppt werden. Bitte erneut versuchen.',
+      };
+    }
+  }
+  return { error: null };
+}
+
+/**
+ * Asks the worker to charge an invoice again after a failed charge. A new
+ * attempt uses a new idempotency key at Stripe; the date printed on the invoice
+ * stays as it is.
+ */
+export async function requestInvoiceCollection(
+  admin: SupabaseClient,
+  invoiceId: string
+): Promise<{ error: string | null }> {
+  const invoice = await loadInvoice(admin, invoiceId);
+  if (
+    !invoice ||
+    invoice.kind !== 'invoice' ||
+    invoice.paymentStatus !== 'open' ||
+    invoice.paymentMethod === 'transfer' ||
+    invoice.collectState !== 'failed'
+  ) {
+    return { error: 'Für diese Rechnung kann kein Einzug angestoßen werden.' };
+  }
+  const { data: row } = await admin
+    .from('billing_invoices')
+    .select('collect_attempts')
+    .eq('id', invoice.id)
+    .maybeSingle();
+  const attempts = Number((row as { collect_attempts: number } | null)?.collect_attempts) || 0;
+  const { error } = await admin
+    .from('billing_invoices')
+    .update({
+      collect_state: 'scheduled',
+      collect_attempts: attempts + 1,
+      collect_error: null,
+      collect_next_attempt_at: null,
+      stripe_payment_intent_id: null,
+    })
+    .eq('id', invoice.id)
+    .eq('collect_state', 'failed');
+  return { error: error ? 'Der Einzug konnte nicht vorgemerkt werden.' : null };
 }
 
 /**

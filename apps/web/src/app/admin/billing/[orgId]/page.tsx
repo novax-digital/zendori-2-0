@@ -29,7 +29,7 @@ import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Drawer from '@/components/ui/Drawer';
-import { EmptyState, Property, PropertyList, Section } from '@/components/ui/Layout';
+import { EmptyState, Property, PropertyList, Section, Tabs } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../../_components/AdminUnavailable';
 import TermsSummary from '../../_components/TermsSummary';
@@ -78,11 +78,17 @@ export default async function AdminOrgBillingPage({
   searchParams,
 }: {
   params: Promise<{ orgId: string }>;
-  searchParams: Promise<{ month?: string; error?: string; notice?: string; panel?: string }>;
+  searchParams: Promise<{
+    month?: string;
+    tab?: string;
+    error?: string;
+    notice?: string;
+    panel?: string;
+  }>;
 }) {
   await requirePlatformAdmin();
   const { orgId } = await params;
-  const { month, error, notice, panel } = await searchParams;
+  const { month, tab, error, notice, panel } = await searchParams;
 
   const admin = createSupabaseAdminClient();
   if (!admin) return <AdminUnavailable title="Abrechnung" />;
@@ -139,7 +145,8 @@ export default async function AdminOrgBillingPage({
     .slice(0, 30);
 
   const base = `/admin/billing/${orgId}`;
-  const closeHref = href(base, { month });
+  // drawers close back to the tab they were opened on
+  const closeHref = href(base, { month, tab: tab === 'invoices' ? 'invoices' : undefined });
 
   // Stripe billing (Phase 15a): the switch and its drawer (?panel=stripe). The
   // row belongs to the CURRENT Stripe mode; without a key the block only says so.
@@ -169,7 +176,11 @@ export default async function AdminOrgBillingPage({
       candidate.cancelledByInvoiceId === null
   );
   const periodFinished = period.key < periodKeyOf(new Date());
-  const pageHref = href(base, { month });
+  // Two tabs so the page shows one thing at a time: what the month comes to
+  // (Verbrauch), and the invoices that were issued (Rechnungen).
+  const activeTab: 'usage' | 'invoices' = tab === 'invoices' && invoicesAvailable ? 'invoices' : 'usage';
+  const pageHref = href(base, { month, tab: activeTab });
+  const invoicesHref = href(base, { month, tab: 'invoices' });
   const detailsEditing = panel === 'details';
   const monthLabel = (key: string): string => parseMonthKey(key, period).label;
   const thisMonthKey = periodKeyOf(new Date());
@@ -192,7 +203,27 @@ export default async function AdminOrgBillingPage({
           { label: org.name },
         ]}
         title={org.name}
-        subtitle="Rechnung, Konditionen und letzte Vorgänge dieses Kunden."
+        subtitle="Verbrauch, Rechnungen und Konditionen dieses Kunden."
+        tabs={
+          invoicesAvailable ? (
+            <Tabs
+              label="Abrechnung des Kunden"
+              items={[
+                {
+                  label: 'Verbrauch',
+                  href: href(base, { month }),
+                  active: activeTab === 'usage',
+                },
+                {
+                  label: 'Rechnungen',
+                  href: invoicesHref,
+                  active: activeTab === 'invoices',
+                  count: orgInvoices.invoices.filter((item) => item.kind === 'invoice').length,
+                },
+              ]}
+            />
+          ) : undefined
+        }
       />
 
       <div className="page-split">
@@ -202,6 +233,8 @@ export default async function AdminOrgBillingPage({
             notice={notice}
           />
 
+          {activeTab === 'usage' ? (
+            <>
           <form method="get" className="toolbar">
             <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
               {months.map((m) => (
@@ -235,17 +268,21 @@ export default async function AdminOrgBillingPage({
                   <Badge tone="success">Rechnung {periodInvoice.number} erstellt</Badge>
                 ) : !periodFinished ? (
                   <span className="muted small">Rechnung erst nach Monatsende</span>
-                ) : invoice.grandTotalEur <= 0 ? null : (
+                ) : invoice.grandTotalEur <= 0 ? null : seller.missing.length > 0 ? (
+                  // what stands in the way of an invoice, as the next step
+                  <Button href="/admin/invoices/seller" size="sm">
+                    Erst Rechnungssteller ergänzen
+                  </Button>
+                ) : recipient.details === null ? (
+                  <Button href={href(base, { month, panel: 'details' })} size="sm" scroll={false}>
+                    Erst Rechnungsdaten eintragen
+                  </Button>
+                ) : (
                   <form action={createInvoice}>
                     <input type="hidden" name="orgId" value={orgId} />
                     <input type="hidden" name="period" value={period.key} />
-                    <input type="hidden" name="returnTo" value={pageHref} />
-                    <Button
-                      type="submit"
-                      size="sm"
-                      variant="primary"
-                      disabled={seller.missing.length > 0 || recipient.details === null}
-                    >
+                    <input type="hidden" name="returnTo" value={invoicesHref} />
+                    <Button type="submit" size="sm" variant="primary">
                       Rechnung erstellen
                     </Button>
                   </form>
@@ -294,8 +331,10 @@ export default async function AdminOrgBillingPage({
               </table>
             </div>
           </Section>
+            </>
+          ) : null}
 
-          {invoicesAvailable ? (
+          {activeTab === 'invoices' ? (
             <Section
               title="Rechnungen"
               help="Erstellte Rechnungen dieses Kunden. Eine Rechnung ist unveränderbar; korrigiert wird per Storno und neuer Rechnung."
@@ -327,7 +366,7 @@ export default async function AdminOrgBillingPage({
               {orgInvoices.invoices.length === 0 ? (
                 <EmptyState
                   title="Noch keine Rechnung"
-                  text="Wähle oben einen abgeschlossenen Monat und erstelle die Rechnung dort."
+                  text="Wähle im Reiter „Verbrauch“ einen abgeschlossenen Monat und erstelle die Rechnung dort."
                 />
               ) : (
                 <InvoiceTable
@@ -340,6 +379,7 @@ export default async function AdminOrgBillingPage({
             </Section>
           ) : null}
 
+          {activeTab === 'usage' ? (
           <Section
             title="Letzte Vorgänge"
             help="WhatsApp-, E-Mail- und Rufnummern-Kosten werden aus Mengen × Preistabelle berechnet und erscheinen nur in der Rechnung, nicht als Einzelvorgang."
@@ -376,6 +416,7 @@ export default async function AdminOrgBillingPage({
               </div>
             )}
           </Section>
+          ) : null}
         </div>
 
         <aside className="page-rail" aria-label="Konditionen und Stripe">

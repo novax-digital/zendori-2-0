@@ -184,7 +184,12 @@ export function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
       ['Leistungszeitraum', invoiceServicePeriod(invoice.period)],
     ];
     if (cancellation && input.cancelsNumber) facts.push(['Zu Rechnung', input.cancelsNumber]);
-    if (!cancellation && invoice.dueDate) facts.push(['Fällig am', formatDateDe(invoice.dueDate)]);
+    const collected = !cancellation && invoice.paymentMethod !== 'transfer' && invoice.collectOn;
+    if (collected && invoice.collectOn) {
+      facts.push(['Einzug ab', formatDateDe(invoice.collectOn)]);
+    } else if (!cancellation && invoice.dueDate) {
+      facts.push(['Fällig am', formatDateDe(invoice.dueDate)]);
+    }
     if (recipient.vatId) facts.push(['USt-ID des Kunden', recipient.vatId]);
     const factsLeft = right - 220;
     let factsY = windowTop + 16;
@@ -297,6 +302,11 @@ export function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> {
     if (cancellation) {
       note(
         'Ein bereits gezahlter Betrag wird erstattet oder mit der nächsten Rechnung verrechnet.'
+      );
+    } else if (collected && invoice.collectOn && invoice.grossCents > 0) {
+      // the announcement a SEPA debit needs — and the same sentence for a card
+      note(
+        `Den Rechnungsbetrag ziehen wir frühestens am ${formatDateDe(invoice.collectOn)} von Ihrer hinterlegten Zahlungsart ein${invoice.paymentLabel ? ` (${invoice.paymentLabel})` : ''}. Sie müssen nichts überweisen.`
       );
     } else if (invoice.grossCents > 0) {
       const bank = [

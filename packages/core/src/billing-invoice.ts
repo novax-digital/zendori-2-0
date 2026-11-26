@@ -81,6 +81,8 @@ export interface BillingSellerRow {
   payment_term_days: number;
   /** 0047; absent before the migration. */
   auto_invoice_from?: string | null;
+  /** 0048; absent before the migration. */
+  collect_after_days?: number | null;
 }
 
 export interface SellerSettings {
@@ -93,7 +95,14 @@ export interface SellerSettings {
    * no automatic invoices (migration 0047).
    */
   autoInvoiceFrom: string | null;
+  /**
+   * Days between the invoice date and the charge of a customer billed through
+   * Stripe (migration 0048). The invoice announces the date.
+   */
+  collectAfterDays: number;
 }
+
+export const DEFAULT_COLLECT_AFTER_DAYS = 3;
 
 export function sellerFromRow(row: BillingSellerRow | null): SellerSettings {
   const text = (value: string | null | undefined): string => (value ?? '').trim();
@@ -125,6 +134,12 @@ export function sellerFromRow(row: BillingSellerRow | null): SellerSettings {
       typeof row?.auto_invoice_from === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(row.auto_invoice_from)
         ? row.auto_invoice_from
         : null,
+    collectAfterDays:
+      typeof row?.collect_after_days === 'number' &&
+      Number.isInteger(row.collect_after_days) &&
+      row.collect_after_days >= 0
+        ? row.collect_after_days
+        : DEFAULT_COLLECT_AFTER_DAYS,
   };
 }
 
@@ -154,6 +169,7 @@ export function sellerToRow(settings: SellerSettings): BillingSellerRow {
     invoice_number_start: settings.numberStart,
     payment_term_days: settings.paymentTermDays,
     auto_invoice_from: settings.autoInvoiceFrom,
+    collect_after_days: settings.collectAfterDays,
   };
 }
 
@@ -227,6 +243,40 @@ export type InvoiceKind = (typeof INVOICE_KINDS)[number];
 
 export const INVOICE_PAYMENT_STATUSES = ['open', 'paid', 'void'] as const;
 export type InvoicePaymentStatus = (typeof INVOICE_PAYMENT_STATUSES)[number];
+
+/** How an invoice says it is paid — frozen with the document (0048). */
+export const INVOICE_PAYMENT_METHODS = ['transfer', 'sepa_debit', 'card'] as const;
+export type InvoicePaymentMethod = (typeof INVOICE_PAYMENT_METHODS)[number];
+
+/** Where the charge of a collected invoice stands (0048). */
+export const INVOICE_COLLECT_STATES = [
+  'none',
+  'scheduled',
+  'processing',
+  'succeeded',
+  'failed',
+  'disputed',
+] as const;
+export type InvoiceCollectState = (typeof INVOICE_COLLECT_STATES)[number];
+
+/** Why a charge did not go through, in words for the operator. */
+export function collectErrorLabel(code: string | null): string {
+  if (!code) return 'unbekannter Grund';
+  const known: Record<string, string> = {
+    not_enabled: 'Stripe-Abrechnung ist für den Kunden ausgeschaltet',
+    no_payment_method: 'keine Zahlungsart hinterlegt',
+    payment_method_changed: 'die Zahlungsart wurde geändert',
+    amount_too_small: 'Betrag zu klein für einen Einzug',
+    card_declined: 'Karte abgelehnt',
+    expired_card: 'Karte abgelaufen',
+    insufficient_funds: 'Konto nicht gedeckt',
+    authentication_required: 'Karte verlangt eine Freigabe durch den Kunden',
+    debit_not_authorized: 'Lastschrift widerrufen',
+    payment_intent_canceled: 'Einzug abgebrochen',
+    payment_failed: 'Einzug fehlgeschlagen',
+  };
+  return known[code] ?? code;
+}
 
 export interface InvoiceAmounts {
   lines: InvoiceLine[];
@@ -358,6 +408,15 @@ export interface BillingInvoice {
   paidAt: string | null;
   paidVia: 'manual' | 'stripe' | null;
   paidNote: string | null;
+  /** What the invoice says about paying (frozen). */
+  paymentMethod: InvoicePaymentMethod;
+  /** e.g. "SEPA-Lastschrift •••• 3000" (frozen); null on a transfer invoice. */
+  paymentLabel: string | null;
+  /** Earliest day of the charge as printed (frozen); null on a transfer invoice. */
+  collectOn: string | null;
+  collectState: InvoiceCollectState;
+  collectError: string | null;
+  collectedAt: string | null;
   pdfState: 'pending' | 'ready' | 'failed';
   pdfPath: string | null;
   mailState: 'none' | 'pending' | 'sent' | 'failed';
@@ -369,6 +428,10 @@ export interface BillingInvoice {
 
 export const BILLING_INVOICE_COLUMNS =
   'id, org_id, kind, number, period, issue_date, due_date, seller, recipient, lines, tax_mode, tax_percent, net_cents, tax_cents, gross_cents, cancels_invoice_id, cancelled_by_invoice_id, payment_status, paid_at, paid_via, paid_note, pdf_state, pdf_path, mail_state, mail_to, mail_sent_at, mail_error, created_at';
+
+/** The columns of migration 0048; selected in addition once they exist. */
+export const BILLING_INVOICE_COLLECT_COLUMNS =
+  'payment_method, payment_label, collect_on, collect_state, collect_error, collected_at';
 
 /** A row of billing_invoices; null when the frozen parts do not parse (never expected). */
 export function parseInvoiceRow(row: Record<string, unknown> | null): BillingInvoice | null {
@@ -401,6 +464,18 @@ export function parseInvoiceRow(row: Record<string, unknown> | null): BillingInv
     paidAt: text(row.paid_at),
     paidVia: row.paid_via === 'manual' || row.paid_via === 'stripe' ? row.paid_via : null,
     paidNote: text(row.paid_note),
+    // absent before 0048: a transfer invoice without a charge
+    paymentMethod:
+      row.payment_method === 'sepa_debit' || row.payment_method === 'card'
+        ? row.payment_method
+        : 'transfer',
+    paymentLabel: text(row.payment_label),
+    collectOn: text(row.collect_on),
+    collectState: (INVOICE_COLLECT_STATES as readonly string[]).includes(String(row.collect_state))
+      ? (row.collect_state as InvoiceCollectState)
+      : 'none',
+    collectError: text(row.collect_error),
+    collectedAt: text(row.collected_at),
     pdfState: row.pdf_state === 'ready' ? 'ready' : row.pdf_state === 'failed' ? 'failed' : 'pending',
     pdfPath: text(row.pdf_path),
     mailState:
@@ -427,12 +502,17 @@ export const INVOICE_DISPLAY_STATUS_LABELS: Record<InvoiceDisplayStatus, string>
 
 /** `today` as YYYY-MM-DD (berlinDate). */
 export function invoiceDisplayStatus(
-  invoice: Pick<BillingInvoice, 'kind' | 'paymentStatus' | 'dueDate' | 'cancelledByInvoiceId'>,
+  invoice: Pick<BillingInvoice, 'kind' | 'paymentStatus' | 'dueDate' | 'cancelledByInvoiceId'> & {
+    collectState?: InvoiceCollectState;
+  },
   today: string
 ): InvoiceDisplayStatus {
   if (invoice.kind === 'cancellation') return 'cancellation';
   if (invoice.cancelledByInvoiceId !== null || invoice.paymentStatus === 'void') return 'cancelled';
   if (invoice.paymentStatus === 'paid') return 'paid';
+  // while a charge is planned or under way (a SEPA debit takes days) the
+  // customer is not late — the next step is ours
+  if (invoice.collectState === 'scheduled' || invoice.collectState === 'processing') return 'open';
   return invoice.dueDate !== null && invoice.dueDate < today ? 'overdue' : 'open';
 }
 

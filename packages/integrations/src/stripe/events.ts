@@ -22,11 +22,25 @@ export const STRIPE_ACCOUNT_EVENT_TYPES = [
   'mandate.updated',
 ] as const;
 
-export type StripeEventScope = 'account';
+/**
+ * Events about the charge of an invoice (15b step 3). The endpoint in Stripe
+ * has to subscribe to them; docs/phase-15b-rechnungen.md has the command.
+ */
+export const STRIPE_PAYMENT_EVENT_TYPES = [
+  'payment_intent.succeeded',
+  'payment_intent.payment_failed',
+  'payment_intent.processing',
+  'payment_intent.canceled',
+  // a SEPA debit or a card payment is reversed after it went through
+  'charge.dispute.created',
+] as const;
+
+export type StripeEventScope = 'account' | 'payment';
 
 /** null = an event Zendori does not act on (acknowledged, not stored). */
 export function stripeEventScope(type: string): StripeEventScope | null {
   if ((STRIPE_ACCOUNT_EVENT_TYPES as readonly string[]).includes(type)) return 'account';
+  if ((STRIPE_PAYMENT_EVENT_TYPES as readonly string[]).includes(type)) return 'payment';
   return null;
 }
 
