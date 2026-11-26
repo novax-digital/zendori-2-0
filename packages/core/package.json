@@ -17,6 +17,10 @@
     "./tickets": {
       "types": "./src/tickets.ts",
       "default": "./src/tickets.ts"
+    },
+    "./billing": {
+      "types": "./src/billing.ts",
+      "default": "./src/billing.ts"
     }
   },
   "scripts": {

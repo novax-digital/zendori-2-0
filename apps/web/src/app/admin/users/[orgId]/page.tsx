@@ -13,8 +13,7 @@ import { Field } from '@/components/ui/Field';
 import { Section } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../../_components/AdminUnavailable';
-import PlanDrawer from '../../_components/PlanDrawer';
-import PlanSummary from '../../_components/PlanSummary';
+import TermsSummary from '../../_components/TermsSummary';
 import { addMember } from '../actions';
 
 type MemberRow = { user_id: string; role: string; created_at: string };
@@ -50,7 +49,7 @@ export default async function AdminOrgPage({
     .order('created_at', { ascending: true });
   const members = (memberData ?? []) as MemberRow[];
 
-  // Effective quotas (0017, plan-derived since the unification) + live counts.
+  // Effective quotas (0017, derived from the customer's terms) + live counts.
   const [{ data: limitData }, { data: channelData }, catalog] = await Promise.all([
     admin.from('org_channel_limits').select('channel_kind, max_count').eq('org_id', orgId),
     admin.from('channels').select('type, config').eq('org_id', orgId),
@@ -66,10 +65,6 @@ export default async function AdminOrgPage({
 
   const sub = catalog.subscriptions.get(orgId);
   const currentPackage = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
-  const tiers = [...catalog.tiers.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const packages = [...catalog.packages.values()]
-    .filter((p) => p.isActive)
-    .sort((a, b) => a.name.localeCompare(b.name));
 
   const emailByUserId = new Map<string, string>();
   await Promise.all(
@@ -80,16 +75,15 @@ export default async function AdminOrgPage({
   );
 
   const base = `/admin/users/${org.id}`;
-  // Both forms live in drawers (?panel=member | plan); their errors show inside.
+  // The invite form lives in a drawer (?panel=member); its errors show inside.
   const inviting = panel === 'member';
-  const planning = panel === 'plan';
 
   return (
     <div className="page">
       <PageHeader
         breadcrumb={[{ label: 'Nutzer', href: '/admin/users' }, { label: org.name }]}
         title={org.name}
-        subtitle="Team, Plan und Kanal-Kontingente dieser Organisation."
+        subtitle="Team, Konditionen und Kanal-Kontingente dieser Organisation."
         actions={
           <Button href={`${base}?panel=member`} variant="primary" icon="plus" scroll={false}>
             Mitglied einladen
@@ -99,10 +93,7 @@ export default async function AdminOrgPage({
 
       <div className="page-split">
         <div className="page-body">
-          <DismissibleBanners
-            error={inviting || planning ? undefined : error}
-            notice={notice}
-          />
+          <DismissibleBanners error={inviting ? undefined : error} notice={notice} />
 
           <Section
             title="Mitglieder"
@@ -140,8 +131,8 @@ export default async function AdminOrgPage({
             title="Wirksame Kanal-Kontingente"
             help={
               currentPackage
-                ? `Aus dem Plan „${currentPackage.name}" übernommen, hier nur zur Kontrolle.`
-                : 'Kein Plan zugewiesen. Ohne Plan gelten keine Kontingent-Grenzen.'
+                ? `Aus dem Paket „${currentPackage.name}“ und den eigenen Werten dieses Kunden, hier nur zur Kontrolle.`
+                : 'Kein Paket zugewiesen. Die Tabelle zeigt, was gerade gilt.'
             }
           >
             <div className="table-wrap form-narrow">
@@ -169,13 +160,8 @@ export default async function AdminOrgPage({
           </Section>
         </div>
 
-        <aside className="page-rail" aria-label="Plan">
-          <PlanSummary
-            subscription={sub}
-            packageName={currentPackage?.name}
-            tierName={sub?.priceTierId ? catalog.tiers.get(sub.priceTierId)?.name : undefined}
-            changeHref={`${base}?panel=plan`}
-          />
+        <aside className="page-rail" aria-label="Konditionen">
+          <TermsSummary catalog={catalog} orgId={org.id} />
         </aside>
       </div>
 
@@ -220,18 +206,6 @@ export default async function AdminOrgPage({
             </Field>
           </form>
         </Drawer>
-      ) : null}
-
-      {planning ? (
-        <PlanDrawer
-          orgId={org.id}
-          closeHref={base}
-          returnTo="org"
-          subscription={sub}
-          packages={packages}
-          tiers={tiers}
-          error={error}
-        />
       ) : null}
     </div>
   );

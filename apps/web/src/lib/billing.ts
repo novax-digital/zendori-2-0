@@ -5,17 +5,25 @@ import {
   DEFAULT_NUMBER_COST_LANDLINE_EUR,
   DEFAULT_NUMBER_COST_MOBILE_EUR,
   DEFAULT_USD_TO_EUR,
+  NO_OWN_TERMS,
   PACKAGE_CHANNEL_KINDS,
-  PACKAGE_CHANNEL_LABELS,
   categoryPriceEur,
+  effectivePricing,
   emailCostUsd,
+  isMissingColumnError,
   packageChannelsSchema,
   priceTierPricingSchema,
+  recurringFeeLines,
+  resolveTerms,
+  subscriptionOwnChannelsSchema,
   whatsappCostUsd,
   type BillingCategory,
   type BillingInterval,
+  type EffectiveTerms,
   type PackageChannels,
+  type PackageTerms,
   type PricingContext,
+  type SubscriptionOwnTerms,
   type SupabaseClient,
   type TierPricing,
 } from '@zendori/core';
@@ -158,7 +166,10 @@ export interface PackageRow {
   priceTierId: string | null;
   setupFeeEur: number;
   baseFeeMonthlyEur: number;
+  /** Stored for older code only (0042): the year follows from month + discount. */
   baseFeeYearlyEur: number;
+  /** Discount on a yearly term in percent (0042; 0 before the migration). */
+  yearlyDiscountPercent: number;
   channels: PackageChannels;
   isActive: boolean;
 }
@@ -170,6 +181,8 @@ export interface SubscriptionRow {
   interval: BillingInterval;
   setupFeeEur: number | null;
   startedAt: string;
+  /** The customer's own values (0042); everything empty = exactly the package. */
+  own: SubscriptionOwnTerms;
 }
 
 export interface BillingCatalog {
@@ -230,6 +243,7 @@ function parsePackage(row: {
   setup_fee_eur: number | string;
   base_fee_monthly_eur: number | string;
   base_fee_yearly_eur: number | string;
+  yearly_discount_percent?: number | string | null;
   channels: unknown;
   is_active: boolean;
 }): PackageRow {
@@ -241,6 +255,7 @@ function parsePackage(row: {
     setupFeeEur: Number(row.setup_fee_eur) || 0,
     baseFeeMonthlyEur: Number(row.base_fee_monthly_eur) || 0,
     baseFeeYearlyEur: Number(row.base_fee_yearly_eur) || 0,
+    yearlyDiscountPercent: Number(row.yearly_discount_percent) || 0,
     channels: channels.success ? (channels.data as PackageChannels) : {},
     isActive: row.is_active,
   };
@@ -266,50 +281,132 @@ export async function loadBillingCatalog(admin: SupabaseClient): Promise<Billing
     if (tier.isDefault) catalog.defaultTier = tier;
   }
 
-  const { data: pkgData } = await admin
+  // The 0042 columns (yearly discount, a customer's own values) may not exist
+  // yet: a missing column falls back to the columns that always existed, so a
+  // deploy ahead of the migration bills exactly as before.
+  let { data: pkgData, error: pkgError } = await admin
     .from('packages')
-    .select('id, name, price_tier_id, setup_fee_eur, base_fee_monthly_eur, base_fee_yearly_eur, channels, is_active');
-  for (const row of (pkgData ?? []) as Parameters<typeof parsePackage>[0][]) {
+    .select(`${PACKAGE_COLUMNS}, yearly_discount_percent`);
+  if (pkgError && isMissingColumnError(pkgError)) {
+    ({ data: pkgData, error: pkgError } = await admin.from('packages').select(PACKAGE_COLUMNS));
+  }
+  for (const row of (pkgData ?? []) as unknown as Parameters<typeof parsePackage>[0][]) {
     const pkg = parsePackage(row);
     catalog.packages.set(pkg.id, pkg);
   }
 
-  const { data: subData } = await admin
+  let { data: subData, error: subError } = await admin
     .from('org_subscriptions')
-    .select('org_id, package_id, price_tier_id, billing_interval, setup_fee_eur, started_at');
-  for (const row of (subData ?? []) as {
-    org_id: string;
-    package_id: string | null;
-    price_tier_id: string | null;
-    billing_interval: BillingInterval;
-    setup_fee_eur: number | string | null;
-    started_at: string;
-  }[]) {
+    .select(
+      `${SUBSCRIPTION_COLUMNS}, base_fee_monthly_eur, yearly_discount_percent, channels, pricing`
+    );
+  if (subError && isMissingColumnError(subError)) {
+    ({ data: subData, error: subError } = await admin
+      .from('org_subscriptions')
+      .select(SUBSCRIPTION_COLUMNS));
+  }
+  for (const row of (subData ?? []) as unknown as SubscriptionDbRow[]) {
+    const setupFeeEur = row.setup_fee_eur === null ? null : Number(row.setup_fee_eur);
     catalog.subscriptions.set(row.org_id, {
       orgId: row.org_id,
       packageId: row.package_id,
       priceTierId: row.price_tier_id,
       interval: row.billing_interval === 'yearly' ? 'yearly' : 'monthly',
-      setupFeeEur: row.setup_fee_eur === null ? null : Number(row.setup_fee_eur),
+      setupFeeEur,
       startedAt: row.started_at,
+      own: parseOwnTerms(row, setupFeeEur),
     });
   }
 
   return catalog;
 }
 
-/** The tier pricing that applies to an org: subscription tier → package tier → default. */
-export function resolveOrgTier(catalog: BillingCatalog, orgId: string): TierPricing | null {
+const PACKAGE_COLUMNS =
+  'id, name, price_tier_id, setup_fee_eur, base_fee_monthly_eur, base_fee_yearly_eur, channels, is_active';
+const SUBSCRIPTION_COLUMNS =
+  'org_id, package_id, price_tier_id, billing_interval, setup_fee_eur, started_at';
+
+interface SubscriptionDbRow {
+  org_id: string;
+  package_id: string | null;
+  price_tier_id: string | null;
+  billing_interval: BillingInterval;
+  setup_fee_eur: number | string | null;
+  started_at: string;
+  base_fee_monthly_eur?: number | string | null;
+  yearly_discount_percent?: number | string | null;
+  channels?: unknown;
+  pricing?: unknown;
+}
+
+/** null/absent → null; a stored number (0 included) stays a number. */
+const ownNumber = (value: number | string | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+/** A customer's own values out of the subscription row (0042 columns optional). */
+function parseOwnTerms(row: SubscriptionDbRow, setupFeeEur: number | null): SubscriptionOwnTerms {
+  const channels = subscriptionOwnChannelsSchema.safeParse(row.channels ?? {});
+  const pricing = priceTierPricingSchema.safeParse(row.pricing ?? {});
+  return {
+    ...NO_OWN_TERMS,
+    setupFeeEur,
+    baseFeeMonthlyEur: ownNumber(row.base_fee_monthly_eur),
+    yearlyDiscountPercent: ownNumber(row.yearly_discount_percent),
+    channels: channels.success ? channels.data : {},
+    pricing: pricing.success ? (pricing.data as TierPricing) : {},
+  };
+}
+
+/** The price list that applies to an org: subscription list → package list → default. */
+export function resolveOrgPriceList(catalog: BillingCatalog, orgId: string): PriceTier | null {
   const sub = catalog.subscriptions.get(orgId);
   const pkg = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
   const tierId = sub?.priceTierId ?? pkg?.priceTierId ?? catalog.defaultTier?.id ?? null;
   const tier = tierId ? catalog.tiers.get(tierId) : catalog.defaultTier;
-  return tier?.pricing ?? null;
+  return tier ?? null;
+}
+
+/**
+ * The unit prices that apply to an org: its price list (see above) with the
+ * customer's own unit prices on top (0042).
+ */
+export function resolveOrgTier(catalog: BillingCatalog, orgId: string): TierPricing | null {
+  const list = resolveOrgPriceList(catalog, orgId);
+  const own = catalog.subscriptions.get(orgId)?.own.pricing ?? {};
+  return effectivePricing(list?.pricing ?? null, own);
+}
+
+/** The fixed part of a package in the shape the terms math works with. */
+export function packageTermsOf(pkg: PackageRow): PackageTerms {
+  const channels: PackageTerms['channels'] = {};
+  for (const kind of PACKAGE_CHANNEL_KINDS) {
+    const term = pkg.channels[kind];
+    if (term) channels[kind] = { quota: term.quota, feeMonthlyEur: term.feeMonthlyEur };
+  }
+  return {
+    setupFeeEur: pkg.setupFeeEur,
+    baseFeeMonthlyEur: pkg.baseFeeMonthlyEur,
+    yearlyDiscountPercent: pkg.yearlyDiscountPercent,
+    channels,
+  };
+}
+
+/** What applies to an org: its package with the org's own values on top; null without a package. */
+export function resolveOrgTerms(catalog: BillingCatalog, orgId: string): EffectiveTerms | null {
+  const sub = catalog.subscriptions.get(orgId);
+  const pkg = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
+  if (!sub || !pkg) return null;
+  return resolveTerms(packageTermsOf(pkg), sub.own);
 }
 
 // --- combined invoice --------------------------------------------------------
 
 export interface RecurringLine {
+  /** `base`, `channel:<kind>` or `setup`. */
+  key: string;
   label: string;
   amountEur: number;
 }
@@ -322,28 +419,6 @@ export interface OrgInvoice {
   grandTotalEur: number;
   packageName: string | null;
   interval: BillingInterval | null;
-}
-
-/** Recurring fee lines for a package (monthly-equivalent; yearly shown ÷12). */
-function recurringLines(pkg: PackageRow, interval: BillingInterval): RecurringLine[] {
-  const yearly = interval === 'yearly';
-  const lines: RecurringLine[] = [];
-  const base = yearly ? pkg.baseFeeYearlyEur / 12 : pkg.baseFeeMonthlyEur;
-  if (base > 0) {
-    lines.push({
-      label: yearly ? 'Grundgebühr (jährlich, anteilig)' : 'Grundgebühr',
-      amountEur: round2(base),
-    });
-  }
-  for (const kind of PACKAGE_CHANNEL_KINDS) {
-    const term = pkg.channels[kind];
-    if (!term || term.quota <= 0) continue;
-    const fee = yearly ? term.feeYearlyEur / 12 : term.feeMonthlyEur;
-    const amount = round2(term.quota * fee);
-    if (amount <= 0) continue;
-    lines.push({ label: `${PACKAGE_CHANNEL_LABELS[kind]} (${term.quota}×)`, amountEur: amount });
-  }
-  return lines;
 }
 
 /** Does the given month contain the subscription's start (for the one-time setup fee)? */
@@ -373,10 +448,15 @@ export async function getOrgInvoice(
   if (sub && pkg) {
     interval = sub.interval;
     packageName = pkg.name;
-    recurring = recurringLines(pkg, sub.interval);
+    // package + the customer's own values; on a yearly term each month carries
+    // the monthly price minus the discount (core: recurringFeeLines)
+    const terms = resolveTerms(packageTermsOf(pkg), sub.own);
+    recurring = recurringFeeLines(terms, sub.interval);
     if (isSetupMonth(sub.startedAt, period.fromIso, period.toIso)) {
-      setupEur = round2(sub.setupFeeEur ?? pkg.setupFeeEur);
-      if (setupEur > 0) recurring.push({ label: 'Einrichtung (einmalig)', amountEur: setupEur });
+      setupEur = round2(terms.setupFeeEur);
+      if (setupEur > 0) {
+        recurring.push({ key: 'setup', label: 'Einrichtung (einmalig)', amountEur: setupEur });
+      }
     }
   }
 

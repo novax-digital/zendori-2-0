@@ -35,7 +35,7 @@ const SETTINGS_HUB = new Set([
   'notifications',
 ]);
 /** /admin/<page> that are lists; the sub-navigation there is a layout and stays mounted. */
-const ADMIN_LISTS = new Set(['users', 'phone-numbers', 'demo', 'billing']);
+const ADMIN_LISTS = new Set(['users', 'phone-numbers', 'demo', 'billing', 'pricing']);
 
 export function skeletonVariant(pathname: string): Variant {
   const [area, page, ...rest] = pathname.split('/').filter(Boolean);

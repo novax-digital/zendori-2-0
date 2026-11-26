@@ -2534,3 +2534,191 @@ describe.skipIf(!enabled)('RLS: member notifications (0038)', () => {
     expect(data).toEqual([{ user_id: ownerId }]);
   });
 });
+
+describe.skipIf(!enabled)('RLS: Stripe billing (0041) — service role only', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let anon: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  const ownerEmail = `stripe-owner-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+  const eventId = `evt_rls_${randomUUID()}`;
+  const customerId = `cus_rls_${randomUUID()}`;
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+    ownerId = created.data.user!.id;
+
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Stripe Org', slug: `stripe-org-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    orgId = org!.id as string;
+    await admin.from('org_members').insert({ org_id: orgId, user_id: ownerId, role: 'owner' });
+
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    anon = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    expect((await owner.auth.signInWithPassword({ email: ownerEmail, password })).error).toBeNull();
+
+    // the service role (web behind its own access check, worker) writes all three
+    expect(
+      (
+        await admin.from('billing_accounts').insert({
+          org_id: orgId,
+          legal_name: 'RLS GmbH',
+          address_line1: 'Hauptstraße 1',
+          postal_code: '10115',
+          city: 'Berlin',
+          country: 'DE',
+          billing_email: 'rechnung@test.zendori.dev',
+        })
+      ).error
+    ).toBeNull();
+    expect(
+      (
+        await admin.from('billing_stripe_customers').insert({
+          org_id: orgId,
+          livemode: false,
+          enabled: true,
+          invoice_from: '2026-12',
+          stripe_customer_id: customerId,
+        })
+      ).error
+    ).toBeNull();
+    expect(
+      (
+        await admin
+          .from('stripe_events')
+          .insert({ event_id: eventId, type: 'customer.updated', livemode: false })
+      ).error
+    ).toBeNull();
+  });
+
+  afterAll(async () => {
+    await admin.from('stripe_events').delete().eq('event_id', eventId);
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('the owner of the org and anon read nothing', async () => {
+    for (const table of ['billing_accounts', 'billing_stripe_customers', 'stripe_events']) {
+      const { data: asOwner } = await owner.from(table).select('*');
+      expect(asOwner ?? []).toHaveLength(0);
+      const { data: asAnon } = await anon.from(table).select('*');
+      expect(asAnon ?? []).toHaveLength(0);
+    }
+  });
+
+  it('clients cannot enable billing, change details or plant an event', async () => {
+    await owner
+      .from('billing_stripe_customers')
+      .update({ enabled: false, payment_method_label: 'x' })
+      .eq('org_id', orgId);
+    await owner.from('billing_accounts').update({ legal_name: 'Hack' }).eq('org_id', orgId);
+    await owner.from('billing_accounts').delete().eq('org_id', orgId);
+    expect(
+      (
+        await owner
+          .from('billing_stripe_customers')
+          .insert({ org_id: orgId, livemode: true, enabled: true, invoice_from: '2026-12' })
+      ).error
+    ).not.toBeNull();
+    expect(
+      (
+        await owner
+          .from('stripe_events')
+          .insert({ event_id: `evt_hack_${randomUUID()}`, type: 'customer.updated', livemode: true })
+      ).error
+    ).not.toBeNull();
+
+    const { data: row } = await admin
+      .from('billing_stripe_customers')
+      .select('enabled, payment_method_label')
+      .eq('org_id', orgId)
+      .eq('livemode', false)
+      .single();
+    expect(row).toEqual({ enabled: true, payment_method_label: null });
+    const { data: account } = await admin
+      .from('billing_accounts')
+      .select('legal_name')
+      .eq('org_id', orgId)
+      .single();
+    expect((account as { legal_name: string }).legal_name).toBe('RLS GmbH');
+    const { data: live } = await admin
+      .from('billing_stripe_customers')
+      .select('org_id')
+      .eq('org_id', orgId)
+      .eq('livemode', true);
+    expect(live ?? []).toHaveLength(0);
+  });
+
+  it('keeps one row per mode and one org per Stripe customer', async () => {
+    // a second row for the same mode
+    expect(
+      (await admin.from('billing_stripe_customers').insert({ org_id: orgId, livemode: false }))
+        .error
+    ).not.toBeNull();
+    // the live row is independent of the test row
+    expect(
+      (await admin.from('billing_stripe_customers').insert({ org_id: orgId, livemode: true })).error
+    ).toBeNull();
+    // enabling needs a first month
+    expect(
+      (
+        await admin
+          .from('billing_stripe_customers')
+          .update({ enabled: true })
+          .eq('org_id', orgId)
+          .eq('livemode', true)
+      ).error
+    ).not.toBeNull();
+    // the same Stripe customer cannot belong to a second row
+    expect(
+      (
+        await admin
+          .from('billing_stripe_customers')
+          .update({ stripe_customer_id: customerId })
+          .eq('org_id', orgId)
+          .eq('livemode', true)
+      ).error
+    ).not.toBeNull();
+  });
+
+  it('stores a Stripe event once (webhook idempotency)', async () => {
+    const again = await admin
+      .from('stripe_events')
+      .insert({ event_id: eventId, type: 'customer.updated', livemode: false });
+    expect(again.error?.code).toBe('23505');
+    const { data } = await admin.from('stripe_events').select('state').eq('event_id', eventId);
+    expect(data).toEqual([{ state: 'pending' }]);
+  });
+
+  it('deleting the organization removes its billing rows', async () => {
+    const { data: org } = await admin
+      .from('organizations')
+      .insert({ name: 'Stripe Gone', slug: `stripe-gone-${randomUUID().slice(0, 8)}` })
+      .select('id')
+      .single();
+    const goneId = org!.id as string;
+    await admin.from('billing_accounts').insert({ org_id: goneId });
+    await admin.from('billing_stripe_customers').insert({ org_id: goneId, livemode: false });
+    await admin.from('organizations').delete().eq('id', goneId);
+    const { data: accounts } = await admin
+      .from('billing_accounts')
+      .select('org_id')
+      .eq('org_id', goneId);
+    expect(accounts ?? []).toHaveLength(0);
+    const { data: rows } = await admin
+      .from('billing_stripe_customers')
+      .select('org_id')
+      .eq('org_id', goneId);
+    expect(rows ?? []).toHaveLength(0);
+  });
+});

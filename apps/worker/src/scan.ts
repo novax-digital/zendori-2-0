@@ -43,6 +43,19 @@ import {
   pruneMemberNotifications,
   type MemberNotifyJob,
 } from './notifications/deliver.js';
+import { workerStripe } from './billing/stripe.js';
+import {
+  BILLING_SYNC_QUEUE,
+  BILLING_SYNC_RETRY_LIMIT,
+  isBillingSyncDue,
+  type BillingSyncJob,
+} from './billing/customer-sync.js';
+import {
+  STRIPE_EVENT_QUEUE,
+  STRIPE_EVENT_RETRY_LIMIT,
+  pruneStripeEvents,
+  type StripeEventJob,
+} from './billing/stripe-events.js';
 
 export const PROCESS_MESSAGE_QUEUE = 'ai.process-message';
 export const INDEX_SOURCE_QUEUE = 'kb.index-source';
@@ -60,6 +73,8 @@ const MCP_SYNC_BATCH = 10;
 const STALE_RUN_SWEEP_MS = 60_000;
 const INTEGRATION_EVENT_BATCH = 20;
 const MEMBER_NOTIFY_BATCH = 20;
+const STRIPE_EVENT_BATCH = 20;
+const BILLING_SYNC_BATCH = 20;
 /** Delivered events are pruned once an hour. */
 const EVENT_PRUNE_MS = 60 * 60_000;
 
@@ -129,11 +144,16 @@ export function startScan(boss: PgBoss, logger: Logger): () => void {
       }
       await enqueueDueIntegrationEvents(boss, supabase);
       await enqueueDueMemberNotifications(boss, supabase);
+      // Phase 15: Stripe webhook inbox + requested customer syncs (no-ops
+      // without STRIPE_SECRET_KEY and before migration 0041).
+      await enqueueDueStripeEvents(boss, supabase);
+      await enqueueRequestedBillingSyncs(boss, supabase);
       if (Date.now() - lastEventPrune >= EVENT_PRUNE_MS) {
         lastEventPrune = Date.now();
         await pruneIntegrationEvents(supabase);
         await pruneApiIdempotencyKeys(supabase);
         await pruneMemberNotifications(supabase);
+        await pruneStripeEvents(supabase);
         // Phase 14a: re-read MCP tool lists that are older than a day, so a
         // changed tool is noticed without anyone opening the settings page.
         await requestStaleMcpSyncs(supabase);
@@ -414,6 +434,70 @@ async function enqueueDueMemberNotifications(boss: PgBoss, supabase: SupabaseCli
     await boss.send(MEMBER_NOTIFY_QUEUE, { notificationId: row.id } satisfies MemberNotifyJob, {
       singletonKey: row.id,
       retryLimit: MEMBER_NOTIFY_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue stored Stripe events whose time has come (Phase 15, 0041). Only events
+ * of the mode of the worker's own key — it cannot read the others' objects. The
+ * schedule lives in the row; the job itself never retries.
+ */
+async function enqueueDueStripeEvents(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const stripe = workerStripe();
+  if (!stripe) return;
+  const { data, error } = await supabase
+    .from('stripe_events')
+    .select('event_id')
+    .eq('state', 'pending')
+    .eq('livemode', stripe.livemode)
+    .lte('next_attempt_at', new Date().toISOString())
+    .order('next_attempt_at', { ascending: true })
+    .limit(STRIPE_EVENT_BATCH);
+  if (error) {
+    // stripe_events does not exist until migration 0041 is applied — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  for (const row of (data ?? []) as { event_id: string }[]) {
+    await boss.send(STRIPE_EVENT_QUEUE, { eventId: row.event_id } satisfies StripeEventJob, {
+      singletonKey: row.event_id,
+      retryLimit: STRIPE_EVENT_RETRY_LIMIT,
+    });
+  }
+}
+
+/**
+ * Enqueue organizations whose Stripe customer has to be brought up to date
+ * (the web app set sync_requested_at). The retry schedule lives in the row.
+ */
+async function enqueueRequestedBillingSyncs(boss: PgBoss, supabase: SupabaseClient): Promise<void> {
+  const stripe = workerStripe();
+  if (!stripe) return;
+  const { data, error } = await supabase
+    .from('billing_stripe_customers')
+    .select('org_id, sync_requested_at, sync_next_attempt_at')
+    .eq('livemode', stripe.livemode)
+    .not('sync_requested_at', 'is', null)
+    .order('sync_requested_at', { ascending: true })
+    .limit(BILLING_SYNC_BATCH);
+  if (error) {
+    // billing_stripe_customers does not exist until migration 0041 — stay silent.
+    if (isMissingTable(error as { code?: string })) return;
+    throw error;
+  }
+
+  const nowMs = Date.now();
+  for (const row of (data ?? []) as {
+    org_id: string;
+    sync_requested_at: string | null;
+    sync_next_attempt_at: string | null;
+  }[]) {
+    if (!isBillingSyncDue(row, nowMs)) continue;
+    await boss.send(BILLING_SYNC_QUEUE, { orgId: row.org_id } satisfies BillingSyncJob, {
+      singletonKey: row.org_id,
+      retryLimit: BILLING_SYNC_RETRY_LIMIT,
     });
   }
 }

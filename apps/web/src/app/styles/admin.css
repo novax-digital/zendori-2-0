@@ -7,19 +7,12 @@
   overflow-wrap: anywhere;
 }
 
-/* --- Preise & Pakete: one editable block per price list / package --- */
-.pricing-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: 20px 0;
-  border-top: 1px solid var(--border);
-}
-/* the block's name is edited in place and reads like its heading */
-input.pricing-item-name {
-  width: 18rem;
-  max-width: 100%;
+/* --- Preise & Pakete: group heading inside the price table (KI · Kanäle und Aktionen · Rufnummern) --- */
+tr.pricing-group th {
+  padding-top: var(--space-4);
+  border-bottom: 1px solid var(--border);
   font-weight: 600;
+  color: var(--ink);
 }
 
 /* --- Demo-Anrufe: instruction, company profile and transcript keep their line breaks --- */
@@ -35,8 +28,18 @@ input.pricing-item-name {
   font-size: var(--fs-small);
 }
 
-/* --- Plan zuweisen: the "remove" form sits below the assignment, behind a line --- */
-.plan-remove {
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--border);
+/* --- Konditionen: a group of own values (<details class="disclosure terms-group">).
+   The summary line says what is inside, so a closed group still informs. --- */
+.terms-group > summary .terms-group-note {
+  margin-left: var(--space-2);
+  font-size: var(--fs-small);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.terms-group > .field-help {
+  margin: 0 0 var(--space-3);
+}
+.terms-group > .field {
+  max-width: 20rem;
+  margin-bottom: var(--space-3);
 }

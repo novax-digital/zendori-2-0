@@ -61,6 +61,11 @@ export const workerEnvSchema = z.object({
   DEMO_SMS_SENDER: optionalEnv(z.string().regex(/^(?:off|[A-Za-z0-9 ]{1,11}|\+[1-9]\d{6,14})$/i)),
   /** Sales inbox for public demo leads; absent = no lead mails (admin list only). */
   DEMO_NOTIFY_EMAIL: optionalEnv(z.email()),
+  /**
+   * Stripe (Phase 15): secret or restricted key. Its prefix decides test vs.
+   * live. Absent disables everything Stripe in the worker.
+   */
+  STRIPE_SECRET_KEY: optionalEnv(z.string().min(1)),
   LOG_LEVEL: z.string().optional(),
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

@@ -54,19 +54,21 @@ Faktor-UI (`{mode:'markup'}`) werden beim Laden **gestrippt** (= unbepreist) —
 Anzeige, Abrechnung und Speichern sind damit garantiert konsistent (Live-DB
 enthielt am 2026-07-23 keine solchen Einträge).
 
-**Pakete (`packages`):** bündeln Preisliste + Setup-Gebühr + Grundgebühr
-(monatlich/jährlich) + **je Kanal-Typ** eine Fee und ein Kontingent. Wiederkehrende
-Fee = Grundgebühr + Σ (Kontingent × Kanal-Fee).
+**Pakete (`packages`):** bündeln Preisliste + Setup-Gebühr + Grundgebühr pro Monat +
+**je Kanal-Typ** eine Fee und ein Kontingent. Wiederkehrende Fee = Grundgebühr +
+Σ (Kontingent × Kanal-Fee). Eingetragen werden nur Monatsbeträge; der Jahrespreis
+ergibt sich aus dem Rabatt (siehe „Preise & Pakete bedienen“).
 
-**Zuweisung (`org_subscriptions`):** ein Paket pro Kunde (unique `org_id`), mit
-Laufzeit (monatlich/jährlich), optionaler **Preisliste** (bessere Konditionen)
-und optionalem Setup-Override. Beim Zuweisen werden die Paket-Kontingente in
+**Konditionen eines Kunden (`org_subscriptions`):** ein Paket pro Kunde (unique `org_id`), mit
+Laufzeit (monatlich/jährlich) und — nur wo es abweicht — **eigenen Werten** (0042): Grundgebühr,
+Einrichtung, Rabatt, Anzahl und Gebühr je Kanal, einzelne Stückpreise, optional eine ganze eigene
+**Preisliste**. Beim Speichern werden die Kontingente (Paket plus eigene Anzahl) in
 `org_channel_limits` (0017) geschrieben → bestehende Durchsetzung gilt unverändert.
 
 **Kombinierte Monatsrechnung** (Kunde + Admin): Grundgebühr + Kanal-Fees +
 Verbrauch (mit Preislisten-Preisen); Setup einmalig im Startmonat der
-Subscription. Jährliche Laufzeit wird in der Monatssicht als ÷12 („anteilig")
-gezeigt.
+Subscription. Bei jährlicher Laufzeit trägt jeder Monat ein Zwölftel des
+Jahrespreises, also den Monatsbetrag abzüglich Rabatt („anteilig").
 
 - Ohne aktive Subscription/Preise: reiner Verbrauch zum Selbstkostenpreis.
 - Die Einkaufsraten in `billing.ts` (`VOICE_USD_PER_MINUTE`, …) sind **Annahmen
@@ -87,9 +89,154 @@ gezeigt.
 - `billing_settings.markup_factor`/`usd_to_eur`/`target_margin` (0021/0022)
   bleiben als ungenutzte Spalten stehen (kein Cleanup-Zwang).
 
-Verwaltung im UI: **Admin → Preise & Pakete** (eine Seite: Einkaufspreise,
-Preislisten, Pakete), **Admin → Abrechnung** (Übersicht + je Kunde Rechnung &
-Paket-Zuweisung).
+Verwaltung im UI: **Admin → Preise & Pakete** (Übersicht, je Paket und je Preisliste eine
+Seite), **Admin → Abrechnung** (Übersicht, je Kunde die Rechnung und die Seite „Konditionen“).
+
+## Preise & Pakete bedienen (Migration 0042, Owner-Auftrag 2026-11-25)
+
+Stand: **Stufe 1 (Katalog) und Stufe 2 (Konditionen am Kunden) gebaut und gepusht; Migration 0042
+ist seit 2026-11-26 eingespielt** (vor dem Code, Probelauf mit Rollback, danach alle neun
+Monatsrechnungen unverändert).
+
+Die frühere Seite zeigte alles gleichzeitig aufgeklappt (33 Eingabefelder bei einer Liste und einem
+Paket). Jetzt gilt:
+
+- **Übersicht `/admin/pricing` ohne Eingabefelder.** Pakete als Tabelle (Status, enthaltene
+  Kanäle, fest pro Monat, Preisliste, Kunden). Solange es nur eine Preisliste gibt, stehen ihre
+  Preise mit Einkauf und Marge direkt darunter; ab zwei Listen wird daraus eine Tabelle der Listen.
+  „Einkaufspreise“, „Neues Paket“ und „Weitere Preisliste“ öffnen einen Drawer.
+- **Ein Paket pro Seite** (`/admin/pricing/packages/[id]`): links die Felder, rechts „Das zahlt ein
+  Kunde“ — rechnet beim Tippen mit, mit denselben Funktionen wie die Rechnung
+  (`@zendori/core/billing`). Ein Speichern-Knopf.
+- **Eine Preisliste pro Seite** (`/admin/pricing/lists/[id]`): neun Positionen in drei Gruppen, je
+  Zeile Einkauf, Verkaufspreis und Marge live. Ein leeres Feld sagt, was stattdessen gilt
+  („= Einkaufspreis 0,32 €“, bei Data Actions „wird nicht berechnet“).
+
+**Jahrespreis.** Es gibt keine Jahresfelder mehr. `packages.yearly_discount_percent` (0–100):
+Jahrespreis = 12 × Monat − Rabatt; in der Monatsrechnung eines Jahreskunden steht der Monatsbetrag
+abzüglich Rabatt. Die alten Spalten (`base_fee_yearly_eur`, `channels[].feeYearlyEur`) werden beim
+Speichern mit dem berechneten Wert befüllt, aber nicht mehr gelesen. Vorher standen sie in
+Produktion auf 0, während die Monatsgebühr 15 € war — ein Jahreskunde hätte nichts gezahlt.
+
+**Eigene Werte je Kunde:** `org_subscriptions.base_fee_monthly_eur`, `.yearly_discount_percent`,
+`.channels` (`{kanal: {quota?, feeMonthlyEur?}}`), `.pricing` (eigener Stückpreis je Position).
+Leer = wie im Paket. `setup_fee_eur` und `price_tier_id` funktionierten schon so. **Ein Ort
+entscheidet, was für einen Kunden gilt:** `resolveTerms()` in `packages/core/src/billing.ts`
+(eigener Wert vor Paket), für Stückpreise `effectivePricing()` (eigener Preis vor Preisliste vor
+Einkauf).
+
+**Konditionen am Kunden** (`/admin/billing/[orgId]/terms`, ersetzt den Dialog „Plan zuweisen“ auf
+beiden Kundenseiten):
+
+- Oben Paket und Laufzeit. Darunter drei Gruppen — **Feste Gebühren**, **Kanäle**,
+  **Verbrauchspreise** — zugeklappt, mit einer Zeile, die sagt, was drin ist („wie Paket“ oder
+  „2 eigene Werte“). Offen ist nur, was eigene Werte hat oder was man aufklappt.
+- In jeder Zeile steht links der Wert aus dem Paket (bzw. der Preisliste, mit Einkauf und Marge),
+  rechts das Feld für diesen Kunden. Leer = wie im Paket. „Zurücksetzen“ leert die Zeile.
+- Rechts „Das zahlt dieser Kunde“: rechnet beim Tippen mit, auch beim Wechsel von Paket, Laufzeit
+  oder Preisliste. Bei Jahreslaufzeit zusätzlich der Jahresbetrag.
+- Die Seitenleiste beider Kundenseiten zeigt „Konditionen“: Paket, Laufzeit, fest pro Monat, Zahl
+  der eigenen Werte, Preisliste.
+- Die Auswahl „Preisliste“ erscheint erst ab zwei Listen (oder wenn dem Kunden eine eigene Liste
+  zugewiesen ist).
+- Ein inaktives Paket bleibt bei dem Kunden wählbar, der es hat (vorher fiel es beim Speichern
+  still heraus); neu zuweisen lässt es sich nicht.
+- Menü „⋯“ → „Zuweisung entfernen“ (zweistufig) löscht Paket, Preisliste und alle eigenen Werte;
+  die Kanal-Kontingente bleiben bestehen.
+
+Regeln beim Speichern (`saveTerms`, `apps/web/src/app/admin/billing/actions.ts`):
+
+- Browser und Server lesen die Felder mit derselben Funktion (`readOwnTerms`). `0` ist ein eigener
+  Wert (z. B. Einrichtung erlassen), leer nicht.
+- Gespeichert wird nur, was eine Rechnung erreichen kann (`applicableOwnTerms`): ohne Paket keine
+  festen eigenen Werte; keine Gebühr für eine Kanalart, die weder das Paket noch der Kunde begrenzt.
+- Eine eigene Anzahl kann eine Kanalart begrenzen oder sperren (0), aber nicht „unbegrenzt“ machen,
+  wenn das Paket eine Anzahl nennt — dafür eine hohe Zahl eintragen.
+- Ohne Migration 0042 lassen sich Paket, Laufzeit, Preisliste und Einrichtung speichern; für alle
+  anderen eigenen Werte kommt eine klare Meldung.
+
+**Schutz vor falschen Rechnungen** (wichtig, weil Stripe automatisch abrechnet):
+
+- Beträge laufen durch `readEuro()`: `1.500` wird als nicht eindeutig abgelehnt statt als 1,50 €
+  gespeichert. Felder zeigen Werte mit Komma (`15,00`).
+- Ein Paket, das Kunden nutzen, lässt sich nicht löschen (vorher verloren sie still alle festen
+  Gebühren). Eine Preisliste, die verwendet wird, ebenso.
+- Ein neues Paket startet inaktiv; eine neue Preisliste ist immer eine Kopie, nie leer.
+- Ändert sich die Anzahl der Kanäle im Paket, werden die Kanal-Kontingente aller Kunden des Pakets
+  sofort mitgezogen (vorher zahlte der Kunde mehr, sein Limit blieb alt).
+- Die Spalte heißt „je Kanal pro Monat“, daneben steht das Produkt Anzahl × Gebühr.
+
+**Rollout:** Migration 0042 zuerst, dann der Code (nur zusätzliche Spalten; der laufende Code merkt
+nichts). Der neue Code läuft auch ohne die Spalten: kein Rabatt, keine eigenen Werte. Die Migration
+setzt außerdem die gespeicherten Jahresbeträge auf 12 × Monat und löst eine Preisliste, die beim
+Kunden fest gesetzt war, obwohl er sie ohnehin bekäme. Beides ändert keine Rechnung.
+
+**Geprüft:** Monatsrechnungen aller drei Kunden für drei Monate mit altem und neuem Code
+verglichen — identisch (2026-11-26). Stufe 2: die Seite „Konditionen“ außerhalb des Browsers mit
+produktionsnahen Daten gerendert (35 Prüfungen: Summen, Jahresrechnung, Gruppen, Warnung „unter
+Einkauf“, Fall ohne Paket, inaktives Paket); nur lesend gegen die Produktion: alle drei Kunden
+zeigen „Starter · monatlich · 15,00 €“, ein Speichern ohne Änderung würde kein Kontingent ändern.
+Nicht geprüft: das Aussehen im Browser und das Speichern selbst (kein Login).
+
+### Testanleitung Stufe 1
+
+1. **Admin → Preise & Pakete.** Erwartet: kein Eingabefeld. Tabelle „Pakete“ mit „Starter“, aktiv,
+   15,00 € fest pro Monat, 3 Kunden. Darunter „Verbrauchspreise“ mit Einkauf, Verkauf und Marge.
+2. **Auf „Starter“ klicken.** Erwartet: rechts „Das zahlt ein Kunde“: pro Monat 15,00 €,
+   WhatsApp (1×) 15,00 €, bei Jahreslaufzeit 180,00 €. Rechts unten die drei Kunden.
+3. **Grundgebühr 49 eintippen, nicht speichern.** Erwartet: rechts sofort 64,00 € pro Monat,
+   Jahr 768,00 €. Rabatt 10 eintippen: Jahr 691,20 €.
+4. **`1.500` in die Grundgebühr tippen.** Erwartet: Meldung „Nicht eindeutig …“ unter dem Feld,
+   Speichern wird nicht ausgeführt.
+5. **Bei Telefonie die Anzahl leeren.** Erwartet: Platzhalter „unbegrenzt“, Gebührenfeld gesperrt.
+6. **Seite neu laden (nichts gespeichert), WhatsApp-Anzahl auf 2, speichern.** Achtung: Das
+   ändert sofort die Konditionen aller Kunden dieses Pakets — nur mit Testkunden machen, sonst an
+   der Kopie aus Schritt 8. Erwartet: 30,00 € pro Monat; unter Admin → Nutzer → Organisation steht
+   das WhatsApp-Kontingent auf 2. Danach wieder auf 1 stellen und speichern.
+7. **Menü „⋯“ → Paket löschen.** Erwartet: nur der Hinweis, dass Löschen erst ohne Kunden geht.
+8. **Menü „⋯“ → Kopie anlegen.** Erwartet: neue Seite „Starter (Kopie)“, inaktiv, gleiche Werte.
+   Über das Menü wieder löschen (zweistufig).
+9. **Übersicht → Preise bearbeiten.** Einen Preis unter den Einkauf setzen. Erwartet: sofort
+   „unter Einkauf“ in der Zeile und der Hinweis unten. Feld leeren: „= Einkaufspreis …“.
+10. **Übersicht → Weitere Preisliste**, Name „Partner“. Erwartet: neue Liste mit allen Preisen der
+    Standardliste; die Übersicht zeigt jetzt eine Tabelle der Listen. Liste über das Menü löschen.
+11. **Übersicht → Einkaufspreise.** Erwartet: Drawer mit neun Zeilen, zwei Felder (Rufnummern).
+12. **Einstellungen → Abrechnung eines Kunden.** Erwartet: Beträge wie vor der Umstellung.
+
+### Testanleitung Stufe 2
+
+Am besten mit einem Testkunden: Jede Änderung wirkt sofort, auch auf den laufenden Monat.
+
+1. **Admin → Abrechnung → Kunde.** Erwartet: rechts der Block „Konditionen“ mit Paket „Starter“,
+   Laufzeit „Monatlich“, „Fest pro Monat 15,00 €“, „Eigene Werte: keine“ (bei dem einen Kunden
+   mit eigener Einrichtungsgebühr: 1). Kein Dialog „Plan zuweisen“ mehr.
+2. **„Konditionen bearbeiten“.** Erwartet: eigene Seite. Oben Paket und Laufzeit, darunter drei
+   zugeklappte Gruppen mit „wie Paket“ bzw. „wie Preisliste „Standard““. Rechts „Das zahlt dieser
+   Kunde“: 15,00 €, WhatsApp (1×) 15,00 €, „Genau wie im Paket „Starter“.“
+3. **„Kanäle“ aufklappen, bei WhatsApp Anzahl 2 eintippen, nicht speichern.** Erwartet: rechts
+   sofort 30,00 €, „1 eigener Wert. Im Paket „Starter“ wären es 15,00 € pro Monat.“ In der Zeile
+   erscheint „Zurücksetzen“.
+4. **„Feste Gebühren“ aufklappen, Grundgebühr 49, Rabatt 10, Laufzeit „Jährlich“.** Erwartet:
+   fest pro Monat 71,10 €, im Jahr 853,20 €, Zeile „Grundgebühr (jährlich, anteilig) 44,10 €“.
+5. **`1.500` in die Grundgebühr tippen und speichern.** Erwartet: Meldung „Nicht eindeutig …“ am
+   Feld, es wird nichts gespeichert. Danach wieder 49 eintragen.
+6. **„Verbrauchspreise“ aufklappen, bei Telefonie einen Preis unter dem Einkauf eintragen.**
+   Erwartet: „unter Einkauf“ in der Zeile und der Hinweis unten neben „Speichern“.
+7. **Speichern.** Erwartet: Meldung „Konditionen gespeichert. Die Kanal-Kontingente sind
+   angepasst.“ Die Gruppen mit eigenen Werten bleiben offen. Unter Admin → Nutzer → Organisation
+   steht das WhatsApp-Kontingent auf 2; im Block „Konditionen“ dort und unter Abrechnung stehen
+   71,10 € und die Zahl der eigenen Werte.
+8. **Abrechnung → Kunde, laufender Monat.** Erwartet: die Rechnung zeigt die neuen festen Zeilen
+   und bei Telefonie den eigenen Minutenpreis.
+9. **Preise & Pakete → Starter.** Erwartet: rechts unten steht bei diesem Kunden die Zahl der
+   eigenen Werte, bei den anderen „wie Paket“.
+10. **Zurück in die Konditionen, in jeder geänderten Zeile „Zurücksetzen“, Laufzeit „Monatlich“,
+    speichern.** Erwartet: wieder 15,00 €, „Genau wie im Paket“, Kontingent WhatsApp wieder 1.
+11. **Paket auf „Kein Paket“ stellen, nicht speichern.** Erwartet: Hinweis „Ohne Paket gibt es
+    keine festen Gebühren …“, die Gruppen „Feste Gebühren“ und „Kanäle“ verschwinden. Paket wieder
+    auswählen: die Felder sind wieder da.
+12. **Menü „⋯“.** Erwartet: „Zuweisung entfernen“ mit Hinweis, erst nach einem zweiten Klick
+    wird entfernt. Nur an einem Testkunden ausprobieren.
 
 ## Data Actions (Migration 0040)
 
@@ -121,6 +268,12 @@ Schreibweg, ohne Anwendungscode. `billing_org_rollup` liefert die Summe als Zeil
 
 Kunde: Einstellungen → Abrechnung zeigt die Zeile „Data Actions“ und im Protokoll je Aktion eine
 Zeile „Data Action“ mit der Bezeichnung der Aktion.
+
+## Zahlung und Rechnungen über Stripe (Phase 15)
+
+Zendori rechnet, Stripe kassiert: Die Zahlen auf dieser Seite bleiben die Grundlage. Stripe
+übernimmt nur Zahlungsart, Rechnungsdokument und Einzug — pro Kunde vom Betreiber eingeschaltet.
+Beschreibung, Einrichtung und Testanleitung: [phase-15-stripe.md](phase-15-stripe.md).
 
 ## Sichtbarkeit / DSGVO
 

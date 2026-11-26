@@ -31,7 +31,9 @@ export type RateLimitName =
   | 'api-v1-ip'
   | 'api-v1-key'
   | 'notify-test-user'
-  | 'mcp-sync-user';
+  | 'mcp-sync-user'
+  | 'billing-details-user'
+  | 'billing-setup-user';
 
 let limiters: Record<RateLimitName, Ratelimit> | null | undefined;
 let warnedMissingEnv = false;
@@ -175,6 +177,19 @@ function getLimiters(): Record<RateLimitName, Ratelimit> | null {
       redis,
       limiter: Ratelimit.slidingWindow(12, '10 m'),
       prefix: 'zendori:rl:mcp-sync-user',
+    }),
+    // Stripe billing (Phase 15): saving the billing details makes the worker
+    // call Stripe (customer update + VAT id check)
+    'billing-details-user': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(20, '10 m'),
+      prefix: 'zendori:rl:billing-details-user',
+    }),
+    // "Zahlungsart hinterlegen": every click creates a Stripe Checkout session
+    'billing-setup-user': new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(10, '10 m'),
+      prefix: 'zendori:rl:billing-setup-user',
     }),
   };
   return limiters;

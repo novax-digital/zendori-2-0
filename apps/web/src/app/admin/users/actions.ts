@@ -220,6 +220,6 @@ export async function addMember(formData: FormData): Promise<void> {
 // --- channel quotas per customer (0017) --------------------------------------------
 
 // The manual channel-quota editor was removed with the admin unification
-// (2026-07-27): quotas are derived from the assigned plan in
-// admin/billing/actions.ts assignPackage, and the Organisationen page only
-// displays the effective limits read-only.
+// (2026-07-27): quotas are derived from the customer's terms (package + own
+// values) in admin/billing/actions.ts saveTerms, and the Organisationen page
+// only displays the effective limits read-only.

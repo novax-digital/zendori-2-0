@@ -13,8 +13,10 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
+import { stripeRuntime } from '@/lib/stripe';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../_components/AdminUnavailable';
@@ -34,6 +36,8 @@ export default async function AdminBillingPage({
 
   const months = recentMonths(new Date(), 12);
   const period = parseMonthKey(month, currentMonth(new Date()));
+  // Phase 15: which Stripe mode this deployment runs in (null = not configured)
+  const stripe = stripeRuntime();
 
   const { data: orgData } = await admin
     .from('organizations')
@@ -71,6 +75,18 @@ export default async function AdminBillingPage({
 
       <div className="page-body">
         <DismissibleBanners error={error} notice={notice} />
+
+        {stripe === null ? (
+          <Callout>
+            Stripe ist nicht eingerichtet (STRIPE_SECRET_KEY fehlt). Kunden werden nicht automatisch
+            abgerechnet.
+          </Callout>
+        ) : stripe.livemode ? null : (
+          <Callout tone="warn">
+            Stripe läuft im Testmodus: Zahlungsarten werden nicht belastet. Die Abrechnung über
+            Stripe schaltest du je Kunde auf dessen Seite ein.
+          </Callout>
+        )}
 
         <form method="get" className="toolbar">
           <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>

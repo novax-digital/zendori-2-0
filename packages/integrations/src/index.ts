@@ -14,3 +14,12 @@ export * from './hubspot/account.js';
 export * from './custom-api/client.js';
 // Phase 14a: minimal MCP client (Streamable HTTP) for an org's own MCP server.
 export * from './mcp/client.js';
+// Phase 15: Stripe (customer, payment method, webhook) — collects what Zendori
+// calculates. The secret key only ever travels in the Authorization header.
+export * from './stripe/client.js';
+export * from './stripe/schemas.js';
+export * from './stripe/webhook.js';
+export * from './stripe/customers.js';
+export * from './stripe/customer-store.js';
+export * from './stripe/checkout.js';
+export * from './stripe/events.js';

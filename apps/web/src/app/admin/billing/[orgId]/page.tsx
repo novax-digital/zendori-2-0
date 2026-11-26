@@ -1,6 +1,7 @@
 // Per-customer billing drill-down (platform admin): the combined invoice (usage
-// priced through the org's tier + package fees + setup), package assignment, and
-// the most recent measured transactions. Service-role reads behind requirePlatformAdmin.
+// priced through the org's tier + package fees + setup), the customer's terms in
+// the rail (edited on …/terms), and the most recent measured transactions.
+// Service-role reads behind requirePlatformAdmin.
 import { notFound } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -14,14 +15,21 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
+import { loadBillingAccountState } from '@/lib/billing-account';
 import { href } from '@/lib/href';
+import { stripeRuntime } from '@/lib/stripe';
+import { periodKeyOf, shiftPeriodKey } from '@zendori/core';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Button from '@/components/ui/Button';
 import { EmptyState, Section } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../../_components/AdminUnavailable';
-import PlanDrawer from '../../_components/PlanDrawer';
-import PlanSummary from '../../_components/PlanSummary';
+import TermsSummary from '../../_components/TermsSummary';
+import {
+  StripeBillingDrawer,
+  StripeBillingSummary,
+  type MonthChoice,
+} from '../../_components/StripeBillingPanel';
 
 const STEP_LABELS: Record<string, string> = {
   classify: 'Klassifikation',
@@ -78,11 +86,6 @@ export default async function AdminOrgBillingPage({
   const period = parseMonthKey(month, currentMonth(new Date()));
   const catalog = await loadBillingCatalog(admin);
   const invoice = await getOrgInvoice(admin, orgId, period, catalog);
-  const sub = catalog.subscriptions.get(orgId);
-  const tiers = [...catalog.tiers.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const packages = [...catalog.packages.values()]
-    .filter((p) => p.isActive)
-    .sort((a, b) => a.name.localeCompare(b.name));
 
   const costEur = (usd: number) => Math.round(usd * catalog.ctx.usdToEur * 100) / 100;
 
@@ -117,9 +120,28 @@ export default async function AdminOrgBillingPage({
     .slice(0, 30);
 
   const base = `/admin/billing/${orgId}`;
-  // The assignment form lives in a drawer (?panel=plan); its errors show inside.
-  const planning = panel === 'plan';
   const closeHref = href(base, { month });
+
+  // Stripe billing (Phase 15a): the switch and its drawer (?panel=stripe). The
+  // row belongs to the CURRENT Stripe mode; without a key the block only says so.
+  const runtime = stripeRuntime();
+  const billingAccount = runtime
+    ? await loadBillingAccountState(admin, orgId, runtime.livemode)
+    : null;
+  const stripeEditing =
+    panel === 'stripe' && runtime !== null && billingAccount?.available === true;
+  const monthLabel = (key: string): string => parseMonthKey(key, period).label;
+  const thisMonthKey = periodKeyOf(new Date());
+  const storedFrom = billingAccount?.stripe?.invoiceFrom ?? null;
+  const fromChoices: MonthChoice[] = [
+    shiftPeriodKey(thisMonthKey, -1),
+    thisMonthKey,
+    shiftPeriodKey(thisMonthKey, 1),
+  ]
+    .concat(storedFrom ? [storedFrom] : [])
+    .filter((key, index, all) => all.indexOf(key) === index)
+    .sort()
+    .map((key) => ({ key, label: monthLabel(key) }));
 
   return (
     <div className="page">
@@ -129,15 +151,12 @@ export default async function AdminOrgBillingPage({
           { label: org.name },
         ]}
         title={org.name}
-        subtitle="Rechnung, Plan und letzte Vorgänge dieses Kunden."
+        subtitle="Rechnung, Konditionen und letzte Vorgänge dieses Kunden."
       />
 
       <div className="page-split">
         <div className="page-body">
-          <DismissibleBanners
-            error={planning ? undefined : error}
-            notice={notice}
-          />
+          <DismissibleBanners error={stripeEditing ? undefined : error} notice={notice} />
 
           <form method="get" className="toolbar">
             <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
@@ -241,23 +260,27 @@ export default async function AdminOrgBillingPage({
           </Section>
         </div>
 
-        <aside className="page-rail" aria-label="Plan">
-          <PlanSummary
-            subscription={sub}
-            packageName={sub?.packageId ? catalog.packages.get(sub.packageId)?.name : undefined}
-            tierName={sub?.priceTierId ? catalog.tiers.get(sub.priceTierId)?.name : undefined}
-            changeHref={href(base, { month, panel: 'plan' })}
+        <aside className="page-rail" aria-label="Konditionen und Stripe">
+          <TermsSummary catalog={catalog} orgId={orgId} />
+          <StripeBillingSummary
+            orgId={orgId}
+            livemode={runtime ? runtime.livemode : null}
+            state={billingAccount}
+            fromLabel={storedFrom ? monthLabel(storedFrom) : null}
+            changeHref={href(base, { month, panel: 'stripe' })}
           />
         </aside>
       </div>
 
-      {planning ? (
-        <PlanDrawer
+      {stripeEditing && runtime && billingAccount ? (
+        <StripeBillingDrawer
           orgId={orgId}
           closeHref={closeHref}
-          subscription={sub}
-          packages={packages}
-          tiers={tiers}
+          livemode={runtime.livemode}
+          enabled={billingAccount.stripe?.enabled === true}
+          invoiceFrom={storedFrom ?? thisMonthKey}
+          months={fromChoices}
+          stored={billingAccount.stored}
           error={error}
         />
       ) : null}

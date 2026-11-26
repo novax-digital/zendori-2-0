@@ -2,6 +2,8 @@
 // package fees + consumption — with € amounts only; never our USD cost or the
 // markup. Owner-only. requireActiveOrg verifies membership, so the service-role
 // rollup scoped to that orgId is safe and keeps cost data server-side.
+// Phase 15a adds "Zahlung und Rechnungsdaten" (StripeBillingSection) for orgs
+// the operator bills through Stripe.
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
@@ -14,13 +16,17 @@ import {
   recentMonths,
   resolveOrgTier,
 } from '@/lib/billing';
-import { categoryPriceEur, canViewArea, type BillingCategory } from '@zendori/core';
+import { categoryPriceEur, canViewArea, isAdminRole, type BillingCategory } from '@zendori/core';
+import { loadBillingAccountState } from '@/lib/billing-account';
 import { href } from '@/lib/href';
+import { stripeRuntime } from '@/lib/stripe';
+import DismissibleBanners from '@/components/DismissibleBanners';
 import SettingsFrame from '@/components/SettingsTabs';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { EmptyState, Section, Stat, Stats } from '@/components/ui/Layout';
 import PageHeader from '@/components/ui/PageHeader';
+import StripeBillingSection, { BillingDetailsDrawer } from './StripeBillingSection';
 
 // The per-event log mirrors the SQL rollup's step→category mapping (0021
 // billing_org_rollup) so each row is priced exactly like its invoice line:
@@ -69,10 +75,19 @@ function formatDateTime(iso: string): string {
 export default async function CustomerBillingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; month?: string; vpage?: string }>;
+  searchParams: Promise<{
+    org?: string;
+    month?: string;
+    vpage?: string;
+    panel?: string;
+    payment?: string;
+    was?: string;
+    error?: string;
+    notice?: string;
+  }>;
 }) {
-  const { org, month, vpage } = await searchParams;
-  const { orgId, access } = await requireActiveOrg(org);
+  const { org, month, vpage, panel, payment, was, error, notice } = await searchParams;
+  const { orgId, access, role } = await requireActiveOrg(org);
 
   if (!canViewArea(access, 'billing')) {
     return (
@@ -204,6 +219,23 @@ export default async function CustomerBillingPage({
     href('/settings/billing', { org: orgId, month: period.key, vpage: p });
   const usageTotalEur = usedLines.reduce((sum, line) => sum + line.priceEur, 0);
 
+  // --- Stripe billing (Phase 15a): only once the operator enabled it -----------
+  // Without STRIPE_SECRET_KEY, before migration 0041 or for an org that is not
+  // enabled in the current mode, the page is exactly what it was.
+  const runtime = stripeRuntime();
+  const account = runtime ? await loadBillingAccountState(admin, orgId, runtime.livemode) : null;
+  const stripeBilling = runtime && account?.stripe?.enabled ? { runtime, account } : null;
+  const canEditBilling = isAdminRole(role);
+  const pageHref = (extra: Record<string, string | undefined> = {}) =>
+    href('/settings/billing', { org: orgId, month: month ?? undefined, ...extra });
+  const detailsOpen = stripeBilling !== null && canEditBilling && panel === 'details';
+  // Back from Stripe's payment page: wait for the worker — unless the method on
+  // file already differs from the one before the visit (the worker was faster).
+  const awaitingPayment =
+    payment === 'done' &&
+    typeof was === 'string' &&
+    (stripeBilling?.account.stripe?.paymentMethodId ?? 'none') === was;
+
   return (
     <SettingsFrame access={access} orgId={orgId}>
       <div className="page">
@@ -213,6 +245,20 @@ export default async function CustomerBillingPage({
         />
 
         <div className="page-body">
+          <DismissibleBanners error={detailsOpen ? undefined : error} notice={notice} />
+
+          {stripeBilling ? (
+            <StripeBillingSection
+              orgId={orgId}
+              canEdit={canEditBilling}
+              livemode={stripeBilling.runtime.livemode}
+              state={stripeBilling.account}
+              editHref={pageHref({ panel: 'details' })}
+              doneHref={pageHref()}
+              awaitingPayment={awaitingPayment}
+            />
+          ) : null}
+
           <form method="get" className="toolbar">
             <input type="hidden" name="org" value={orgId} />
             <select name="month" aria-label="Abrechnungsmonat" defaultValue={period.key}>
@@ -343,6 +389,15 @@ export default async function CustomerBillingPage({
           </Section>
         </div>
       </div>
+
+      {detailsOpen && stripeBilling ? (
+        <BillingDetailsDrawer
+          orgId={orgId}
+          closeHref={pageHref()}
+          stored={stripeBilling.account.stored}
+          error={error}
+        />
+      ) : null}
     </SettingsFrame>
   );
 }

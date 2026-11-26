@@ -1,37 +1,34 @@
-// One consolidated pricing page (owner decision 2026-07-23: no FX, no factors —
-// free EUR prices only). Three sections: purchase costs (Einkauf, incl. the two
-// editable number rentals), price lists (free sell price per position; empty =
-// pass-through at cost), and packages (setup + base fee + per-channel fee/quota).
-// Platform-admin only; all reads/writes via the service role.
-import { requirePlatformAdmin } from '@/lib/admin-auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { formatEur, loadBillingCatalog } from '@/lib/billing';
+// Preise & Pakete — the overview (platform admin). It has NO inputs: it shows
+// which packages exist and what they cost, and what is charged per unit. A
+// package and a price list are each edited on their own page; the three small
+// forms (purchase costs, new package, new price list) open as drawers
+// (?panel=costs | package | list). All reads/writes via the service role.
+import Link from 'next/link';
 import {
-  BILLING_CATEGORY_BILLING_LABEL,
-  BILLING_CATEGORY_LABELS,
-  BILLING_CATEGORY_ORDER,
-  BILLING_CATEGORY_PRICE_UNIT,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
-  UNIT_PRICED_CATEGORIES,
-  hasPurchaseCost,
-  packageMonthlyTotalEur,
-  packageYearlyTotalEur,
-  unitCostEur,
-  type BillingCategory,
-  type PricingContext,
-  type SupabaseClient,
-  type UnitPricedCategory,
+  countOwnValues,
+  formatEuroInput,
+  recurringMonthlyTotalEur,
+  resolveTerms,
 } from '@zendori/core';
+import { requirePlatformAdmin } from '@/lib/admin-auth';
 import {
-  createPackage,
-  createPriceList,
-  deletePackage,
-  deletePriceList,
-  updatePackage,
-  updatePriceList,
-  updatePurchaseCosts,
-} from './actions';
+  formatEur,
+  loadBillingCatalog,
+  packageTermsOf,
+  resolveOrgPriceList,
+  type PackageRow,
+} from '@/lib/billing';
+import {
+  belowCostCount,
+  formatUnitEur,
+  loadAvgTokenCosts,
+  pricePositions,
+  unpricedCount,
+  type PricePosition,
+} from '@/lib/billing-costs';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
@@ -39,101 +36,42 @@ import Callout from '@/components/ui/Callout';
 import Drawer from '@/components/ui/Drawer';
 import { Field } from '@/components/ui/Field';
 import { EmptyState, Section } from '@/components/ui/Layout';
-import Menu from '@/components/ui/Menu';
 import PageHeader from '@/components/ui/PageHeader';
 import AdminUnavailable from '../_components/AdminUnavailable';
-
-function fmtUnit(value: number): string {
-  return `${new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value)} €`;
-}
-
-const isUnitPriced = (category: BillingCategory): category is UnitPricedCategory =>
-  (UNIT_PRICED_CATEGORIES as readonly string[]).includes(category);
-
-/** Which ai_runs steps roll up into which token category (mirrors billing_org_rollup). */
-const STEP_CATEGORY: Record<string, 'ai' | 'embeddings' | 'transcription'> = {
-  classify: 'ai',
-  extract: 'ai',
-  draft: 'ai',
-  rerank: 'ai',
-  learn: 'ai',
-  retrieve: 'embeddings',
-  transcribe: 'transcription',
-};
-
-/**
- * Ø purchase cost per Vorgang for the token categories, from recent samples.
- * Mirrors billing_org_rollup's Vorgang definition: ai_runs rows for the mapped
- * steps PLUS index_embeddings usage_events (each event = one Vorgang covering a
- * whole source index — these dominate the embeddings average and must not be
- * omitted, or the unter-Einkauf check would approve loss-making prices).
- * Display-only; a category without data is reported as absent.
- */
-async function loadAvgTokenCosts(
-  admin: SupabaseClient,
-  usdToEur: number
-): Promise<Partial<Record<'ai' | 'embeddings' | 'transcription', number>>> {
-  const [{ data: runsData }, { data: idxData }] = await Promise.all([
-    admin
-      .from('ai_runs')
-      .select('step, cost_usd')
-      .order('created_at', { ascending: false })
-      .limit(1000),
-    admin
-      .from('usage_events')
-      .select('cost_usd')
-      .eq('category', 'index_embeddings')
-      .order('occurred_at', { ascending: false })
-      .limit(500),
-  ]);
-  const sums: Record<string, { total: number; count: number }> = {};
-  for (const row of (runsData ?? []) as { step: string; cost_usd: number | null }[]) {
-    const category = STEP_CATEGORY[row.step];
-    if (!category) continue;
-    const bucket = (sums[category] ??= { total: 0, count: 0 });
-    bucket.total += Number(row.cost_usd) || 0;
-    bucket.count += 1;
-  }
-  for (const row of (idxData ?? []) as { cost_usd: number | null }[]) {
-    const bucket = (sums.embeddings ??= { total: 0, count: 0 });
-    bucket.total += Number(row.cost_usd) || 0;
-    bucket.count += 1;
-  }
-  const out: Partial<Record<'ai' | 'embeddings' | 'transcription', number>> = {};
-  for (const key of ['ai', 'embeddings', 'transcription'] as const) {
-    const bucket = sums[key];
-    if (bucket && bucket.count > 0) out[key] = (bucket.total / bucket.count) * usdToEur;
-  }
-  return out;
-}
-
-function einkaufLabel(
-  category: BillingCategory,
-  ctx: PricingContext,
-  avg: Partial<Record<'ai' | 'embeddings' | 'transcription', number>>
-): string {
-  // e.g. data actions: they run on the customer's own system, nothing is bought in
-  if (!hasPurchaseCost(category)) return 'kein Einkauf';
-  if (isUnitPriced(category)) return fmtUnit(unitCostEur(category, ctx));
-  const value = avg[category as 'ai' | 'embeddings' | 'transcription'];
-  return value !== undefined ? `Ø ${fmtUnit(value)}` : 'noch keine Daten';
-}
-
-function einkaufValue(
-  category: BillingCategory,
-  ctx: PricingContext,
-  avg: Partial<Record<'ai' | 'embeddings' | 'transcription', number>>
-): number | null {
-  if (!hasPurchaseCost(category)) return 0;
-  if (isUnitPriced(category)) return unitCostEur(category, ctx);
-  return avg[category as 'ai' | 'embeddings' | 'transcription'] ?? null;
-}
+import { createPackage, createPriceList, updatePurchaseCosts } from './actions';
 
 const BASE = '/admin/pricing';
 
-/** "€/Monat" → "/Monat": the unit shown behind a price field. */
-const unitSuffix = (category: BillingCategory): string =>
-  BILLING_CATEGORY_PRICE_UNIT[category].replace('€', '').trim();
+/** "Chat-Widget 1 · WhatsApp 2", and what is not limited. */
+function channelSummary(pkg: PackageRow): string {
+  const limited = PACKAGE_CHANNEL_KINDS.filter((kind) => pkg.channels[kind]);
+  if (limited.length === 0) return 'Alle Kanäle unbegrenzt';
+  const parts = limited.map((kind) => {
+    const quota = pkg.channels[kind]?.quota ?? 0;
+    return quota === 0
+      ? `${PACKAGE_CHANNEL_LABELS[kind]} gesperrt`
+      : `${PACKAGE_CHANNEL_LABELS[kind]} ${quota}`;
+  });
+  if (limited.length < PACKAGE_CHANNEL_KINDS.length) parts.push('übrige unbegrenzt');
+  return parts.join(' · ');
+}
+
+/** What the customer is charged for a position, in words. */
+function sellText(position: PricePosition): string {
+  if (position.priceEur !== null) {
+    return `${formatUnitEur(position.priceEur)} ${position.unitWords}`;
+  }
+  return position.hasCost ? 'Einkaufspreis wird weitergegeben' : 'wird nicht berechnet';
+}
+
+function MarginCell({ position }: { position: PricePosition }) {
+  if (position.priceEur === null || position.costEur === null) {
+    return <span className="muted">—</span>;
+  }
+  const margin = position.priceEur - position.costEur;
+  if (margin < 0) return <Badge tone="danger">unter Einkauf</Badge>;
+  return <>+{formatUnitEur(margin)}</>;
+}
 
 export default async function AdminPricingPage({
   searchParams,
@@ -148,415 +86,332 @@ export default async function AdminPricingPage({
 
   const catalog = await loadBillingCatalog(admin);
   const ctx = catalog.ctx;
-  const avgTokenCosts = await loadAvgTokenCosts(admin, ctx.usdToEur);
-  const priceLists = [...catalog.tiers.values()].sort((a, b) => {
+  const avg = await loadAvgTokenCosts(admin, ctx.usdToEur);
+
+  const lists = [...catalog.tiers.values()].sort((a, b) => {
     if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
   const packages = [...catalog.packages.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const subscriptions = [...catalog.subscriptions.values()];
+  const defaultList = catalog.defaultTier;
 
-  // The two create forms live in drawers (?panel=list | package); their errors show inside.
-  const newList = panel === 'list';
-  const newPackage = panel === 'package';
+  const packageRows = packages.map((pkg) => {
+    const customers = subscriptions.filter((sub) => sub.packageId === pkg.id);
+    return {
+      pkg,
+      monthlyEur: recurringMonthlyTotalEur(resolveTerms(packageTermsOf(pkg)), 'monthly'),
+      listName:
+        (pkg.priceTierId ? catalog.tiers.get(pkg.priceTierId)?.name : defaultList?.name) ?? '—',
+      customers: customers.length,
+      withOwnValues: customers.filter((sub) => countOwnValues(sub.own) > 0).length,
+    };
+  });
+
+  const listRows = lists.map((list) => {
+    const positions = pricePositions(list.pricing, ctx, avg);
+    return {
+      list,
+      positions,
+      packages: packages.filter((pkg) => (pkg.priceTierId ?? defaultList?.id) === list.id).length,
+      customers: subscriptions.filter(
+        (sub) => resolveOrgPriceList(catalog, sub.orgId)?.id === list.id
+      ).length,
+    };
+  });
+  const onlyList = listRows.length === 1 ? listRows[0] : undefined;
+
+  // The three small forms live in drawers; their errors show inside.
+  const drawer = panel === 'costs' || panel === 'package' || panel === 'list' ? panel : null;
+  const costPositions = pricePositions({}, ctx, avg);
 
   return (
     <div className="page">
       <PageHeader
         title="Preise & Pakete"
-        subtitle="Einkaufspreise, Preislisten und Pakete an einem Ort."
+        subtitle="Feste Gebühren stehen im Paket, Verbrauchspreise in der Preisliste."
+        actions={
+          <>
+            <Button href={`${BASE}?panel=costs`} scroll={false}>
+              Einkaufspreise
+            </Button>
+            <Button href={`${BASE}?panel=package`} variant="primary" icon="plus" scroll={false}>
+              Neues Paket
+            </Button>
+          </>
+        }
       />
 
       <div className="page-body">
-        <DismissibleBanners
-          error={newList || newPackage ? undefined : error}
-          notice={notice}
-        />
-
-        <Section
-          title="Einkaufspreise"
-          help="Was uns die Anbieter kosten. Die Rufnummern-Mieten trägst du selbst ein, bei den KI-Positionen ist es der Durchschnitt aus dem echten Verbrauch."
-          actions={
-            <Button type="submit" form="purchase-costs" size="sm">
-              Einkaufspreise speichern
-            </Button>
-          }
-        >
-          <form id="purchase-costs" action={updatePurchaseCosts} />
-          <div className="table-wrap">
-            <table className="table--compact">
-              <thead>
-                <tr>
-                  <th>Position</th>
-                  <th>Abrechnung</th>
-                  <th className="right">Einkauf</th>
-                </tr>
-              </thead>
-              <tbody>
-                {BILLING_CATEGORY_ORDER.map((category) => (
-                  <tr key={category}>
-                    <td>{BILLING_CATEGORY_LABELS[category]}</td>
-                    <td className="muted">{BILLING_CATEGORY_BILLING_LABEL[category]}</td>
-                    <td className="right">
-                      <span className="num-cell">
-                        {category === 'numbers_mobile' || category === 'numbers_landline' ? (
-                          <input
-                            form="purchase-costs"
-                            name={
-                              category === 'numbers_mobile'
-                                ? 'numberCostMobileEur'
-                                : 'numberCostLandlineEur'
-                            }
-                            type="text"
-                            inputMode="decimal"
-                            required
-                            aria-label={`Einkauf ${BILLING_CATEGORY_LABELS[category]}`}
-                            className="num-input"
-                            defaultValue={String(
-                              category === 'numbers_mobile'
-                                ? ctx.numberCostMobileEur
-                                : ctx.numberCostLandlineEur
-                            )}
-                          />
-                        ) : (
-                          <span className="muted">{einkaufLabel(category, ctx, avgTokenCosts)}</span>
-                        )}
-                        {hasPurchaseCost(category) ? (
-                          <span className="muted small">{unitSuffix(category)}</span>
-                        ) : null}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="field-help">
-            Data Actions laufen im System des Kunden und haben deshalb keinen Einkaufspreis. Gezählt
-            wird jede Aktion, die ein KI-Agent erfolgreich ausgeführt hat — auch nach Bestätigung
-            durch einen Mitarbeiter und bei importierten MCP-Werkzeugen. Testläufe, fehlgeschlagene
-            Aufrufe und verworfene Aktionen zählen nicht.
-          </p>
-        </Section>
-
-        <Section
-          title="Preislisten"
-          help="Freie €-Preise je Position. Ein leeres Feld gibt den Einkaufspreis weiter; bei Data Actions heißt das: nicht berechnet."
-          actions={
-            <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
-              Neue Preisliste
-            </Button>
-          }
-        >
-          {priceLists.map((list) => {
-            const formId = `list-${list.id}`;
-            return (
-              <div className="pricing-item" key={list.id}>
-                <div className="row row--between">
-                  <div className="row grow">
-                    <input
-                      form={formId}
-                      name="name"
-                      type="text"
-                      required
-                      minLength={2}
-                      maxLength={80}
-                      defaultValue={list.name}
-                      aria-label="Name der Preisliste"
-                      className="pricing-item-name"
-                    />
-                    {list.isDefault ? <Badge tone="success">Standard</Badge> : null}
-                  </div>
-                  <div className="row">
-                    <Button type="submit" form={formId} size="sm">
-                      Speichern
-                    </Button>
-                    {list.isDefault ? null : (
-                      <Menu label={`Aktionen für Preisliste ${list.name}`}>
-                        <form action={deletePriceList}>
-                          <input type="hidden" name="id" value={list.id} />
-                          <button className="menu-item menu-item--danger" type="submit">
-                            <span className="menu-label">Preisliste löschen</span>
-                          </button>
-                        </form>
-                      </Menu>
-                    )}
-                  </div>
-                </div>
-                <form id={formId} action={updatePriceList}>
-                  <input type="hidden" name="id" value={list.id} />
-                  <div className="table-wrap">
-                    <table className="table--compact">
-                      <thead>
-                        <tr>
-                          <th>Position</th>
-                          <th>Abrechnung</th>
-                          <th className="right">Einkauf</th>
-                          <th className="right">Verkaufspreis</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {BILLING_CATEGORY_ORDER.map((category) => {
-                          const rule = list.pricing[category];
-                          const stored = rule?.mode === 'unit' ? rule.unitPriceEur : undefined;
-                          const einkauf = einkaufValue(category, ctx, avgTokenCosts);
-                          const belowCost =
-                            stored !== undefined && einkauf !== null && stored < einkauf;
-                          return (
-                            <tr key={category}>
-                              <td>{BILLING_CATEGORY_LABELS[category]}</td>
-                              <td className="muted">{BILLING_CATEGORY_BILLING_LABEL[category]}</td>
-                              <td className="right muted">
-                                {einkaufLabel(category, ctx, avgTokenCosts)}
-                              </td>
-                              <td className="right">
-                                <span className="num-cell">
-                                  <input
-                                    name={`price_${category}`}
-                                    type="text"
-                                    inputMode="decimal"
-                                    placeholder={
-                                      hasPurchaseCost(category) ? 'Selbstkosten' : 'nicht berechnet'
-                                    }
-                                    defaultValue={stored ?? ''}
-                                    aria-label={`Verkaufspreis ${BILLING_CATEGORY_LABELS[category]}`}
-                                    // a price below our purchase cost is flagged, not blocked
-                                    aria-invalid={belowCost || undefined}
-                                    className="num-input"
-                                  />
-                                  <span className="muted small">{unitSuffix(category)}</span>
-                                </span>
-                                {belowCost ? <div className="field-error">unter Einkauf</div> : null}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </form>
-              </div>
-            );
-          })}
-        </Section>
+        <DismissibleBanners error={drawer ? undefined : error} notice={notice} />
 
         <Section
           title="Pakete"
-          help="Setup-Gebühr, Grundgebühr und je Kanal-Typ Kontingent und Gebühr. Kunden bekommen ihr Paket in der Abrechnung zugewiesen."
-          actions={
-            <Button href={`${BASE}?panel=package`} size="sm" icon="plus" scroll={false}>
-              Neues Paket
-            </Button>
-          }
+          help="Ein Paket legt Grundgebühr, Kanäle und die Preisliste fest. Abweichungen für einzelne Kunden trägst du beim Kunden ein."
         >
-          {packages.length === 0 ? (
+          {packageRows.length === 0 ? (
             <EmptyState
               title="Noch keine Pakete"
-              text="Ein Paket bündelt Grundgebühr, Kanal-Kontingente und eine Preisliste."
+              text="Ein Paket bündelt Grundgebühr, Kanäle und eine Preisliste."
+              action={
+                <Button href={`${BASE}?panel=package`} icon="plus" scroll={false}>
+                  Neues Paket
+                </Button>
+              }
             />
-          ) : null}
-          {packages.map((pkg) => {
-            const formId = `pkg-${pkg.id}`;
-            return (
-              <div className="pricing-item" key={pkg.id}>
-                <div className="row row--between">
-                  <div className="row grow">
-                    <input
-                      form={formId}
-                      name="name"
-                      type="text"
-                      required
-                      minLength={2}
-                      maxLength={80}
-                      defaultValue={pkg.name}
-                      aria-label="Name des Pakets"
-                      className="pricing-item-name"
-                    />
-                    {pkg.isActive ? (
-                      <Badge tone="success" dot>
-                        Aktiv
-                      </Badge>
-                    ) : (
-                      <Badge tone="muted" dot>
-                        Inaktiv
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="row">
-                    <Button type="submit" form={formId} size="sm">
-                      Speichern
-                    </Button>
-                    <Menu label={`Aktionen für Paket ${pkg.name}`}>
-                      <form action={deletePackage}>
-                        <input type="hidden" name="id" value={pkg.id} />
-                        <button className="menu-item menu-item--danger" type="submit">
-                          <span className="menu-label">Paket löschen</span>
-                        </button>
-                      </form>
-                    </Menu>
-                  </div>
-                </div>
-
-                <form id={formId} action={updatePackage} className="stack">
-                  <input type="hidden" name="id" value={pkg.id} />
-                  <div className="field-row">
-                    <Field label="Preisliste" htmlFor={`${formId}-tier`}>
-                      <select
-                        id={`${formId}-tier`}
-                        name="priceTierId"
-                        defaultValue={pkg.priceTierId ?? ''}
-                      >
-                        <option value="">Standard</option>
-                        {priceLists.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Setup-Gebühr in €, einmalig" htmlFor={`${formId}-setup`}>
-                      <input
-                        id={`${formId}-setup`}
-                        name="setupFeeEur"
-                        type="text"
-                        inputMode="decimal"
-                        defaultValue={String(pkg.setupFeeEur)}
-                      />
-                    </Field>
-                    <Field label="Grundgebühr pro Monat in €" htmlFor={`${formId}-month`}>
-                      <input
-                        id={`${formId}-month`}
-                        name="baseFeeMonthlyEur"
-                        type="text"
-                        inputMode="decimal"
-                        defaultValue={String(pkg.baseFeeMonthlyEur)}
-                      />
-                    </Field>
-                    <Field label="Grundgebühr pro Jahr in €" htmlFor={`${formId}-year`}>
-                      <input
-                        id={`${formId}-year`}
-                        name="baseFeeYearlyEur"
-                        type="text"
-                        inputMode="decimal"
-                        defaultValue={String(pkg.baseFeeYearlyEur)}
-                      />
-                    </Field>
-                  </div>
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      name="isActive"
-                      className="switch"
-                      defaultChecked={pkg.isActive}
-                    />
-                    Aktiv, kann Kunden zugewiesen werden
-                  </label>
-
-                  <div className="table-wrap">
-                    <table className="table--compact">
-                      <thead>
-                        <tr>
-                          <th>Kanal-Typ</th>
-                          <th className="right">Kontingent</th>
-                          <th className="right">Gebühr pro Monat in €</th>
-                          <th className="right">Gebühr pro Jahr in €</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {PACKAGE_CHANNEL_KINDS.map((kind) => {
-                          const term = pkg.channels[kind];
-                          const label = PACKAGE_CHANNEL_LABELS[kind];
-                          return (
-                            <tr key={kind}>
-                              <td>{label}</td>
-                              <td className="right">
-                                <input
-                                  name={`quota_${kind}`}
-                                  type="text"
-                                  inputMode="numeric"
-                                  placeholder="0"
-                                  defaultValue={term ? String(term.quota) : ''}
-                                  aria-label={`Kontingent ${label}`}
-                                  className="num-input num-input--sm"
-                                />
-                              </td>
-                              <td className="right">
-                                <input
-                                  name={`feem_${kind}`}
-                                  type="text"
-                                  inputMode="decimal"
-                                  placeholder="0"
-                                  defaultValue={term ? String(term.feeMonthlyEur) : ''}
-                                  aria-label={`Gebühr pro Monat ${label}`}
-                                  className="num-input"
-                                />
-                              </td>
-                              <td className="right">
-                                <input
-                                  name={`feey_${kind}`}
-                                  type="text"
-                                  inputMode="decimal"
-                                  placeholder="0"
-                                  defaultValue={term ? String(term.feeYearlyEur) : ''}
-                                  aria-label={`Gebühr pro Jahr ${label}`}
-                                  className="num-input"
-                                />
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </form>
-                <p className="field-help">
-                  Aktuell gespeichert: <strong>{formatEur(packageMonthlyTotalEur(pkg))} pro Monat</strong>
-                  {' · '}
-                  <strong>{formatEur(packageYearlyTotalEur(pkg))} pro Jahr</strong>, dazu Setup{' '}
-                  {formatEur(pkg.setupFeeEur)}.
-                </p>
-              </div>
-            );
-          })}
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Paket</th>
+                    <th>Status</th>
+                    <th>Enthält</th>
+                    <th className="num">Fest pro Monat</th>
+                    <th>Preisliste</th>
+                    <th>Kunden</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {packageRows.map(({ pkg, monthlyEur, listName, customers, withOwnValues }) => (
+                    <tr key={pkg.id}>
+                      <td>
+                        <Link href={`${BASE}/packages/${pkg.id}`} className="cell-title">
+                          {pkg.name}
+                        </Link>
+                      </td>
+                      <td>
+                        {pkg.isActive ? (
+                          <Badge tone="success" dot>
+                            Aktiv
+                          </Badge>
+                        ) : (
+                          <Badge tone="muted" dot>
+                            Inaktiv
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="muted">{channelSummary(pkg)}</td>
+                      <td className="num">
+                        <span className="strong">{formatEur(monthlyEur)}</span>
+                        {pkg.setupFeeEur > 0 || pkg.yearlyDiscountPercent > 0 ? (
+                          <div className="cell-sub">
+                            {[
+                              pkg.setupFeeEur > 0
+                                ? `Einrichtung ${formatEur(pkg.setupFeeEur)}`
+                                : null,
+                              pkg.yearlyDiscountPercent > 0
+                                ? `Jahr −${formatEuroInput(pkg.yearlyDiscountPercent).replace(/,00$/, '')} %`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="muted">{listName}</td>
+                      <td>
+                        {customers}
+                        {withOwnValues > 0 ? (
+                          <span className="muted"> · {withOwnValues} mit eigenen Werten</span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Section>
+
+        {onlyList ? (
+          <Section
+            title="Verbrauchspreise"
+            help={
+              <>
+                Preisliste <strong>{onlyList.list.name}</strong>. Sie gilt für alle Pakete und
+                Kunden.
+              </>
+            }
+            actions={
+              <>
+                <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
+                  Weitere Preisliste
+                </Button>
+                <Button href={`${BASE}/lists/${onlyList.list.id}`} size="sm">
+                  Preise bearbeiten
+                </Button>
+              </>
+            }
+          >
+            <div className="table-wrap">
+              <table className="table--compact">
+                <thead>
+                  <tr>
+                    <th>Position</th>
+                    <th className="num">Einkauf</th>
+                    <th className="num">Verkauf</th>
+                    <th className="num">Marge</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {onlyList.positions.map((position) => (
+                    <tr key={position.category}>
+                      <td>{position.label}</td>
+                      <td className="num muted">{position.costLabel}</td>
+                      <td className={position.priceEur === null ? 'num muted' : 'num'}>
+                        {sellText(position)}
+                      </td>
+                      <td className="num">
+                        <MarginCell position={position} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        ) : (
+          <Section
+            title="Preislisten"
+            help="Verbrauchspreise je Position. Ein Paket nutzt die Standardliste, wenn du ihm keine andere gibst."
+            actions={
+              <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
+                Weitere Preisliste
+              </Button>
+            }
+          >
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Preisliste</th>
+                    <th>Preise</th>
+                    <th>Hinweise</th>
+                    <th>Verwendet von</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listRows.map(({ list, positions, packages: usedBy, customers }) => {
+                    const below = belowCostCount(positions);
+                    const unpriced = unpricedCount(positions);
+                    return (
+                      <tr key={list.id}>
+                        <td>
+                          <span className="row">
+                            <Link href={`${BASE}/lists/${list.id}`} className="cell-title">
+                              {list.name}
+                            </Link>
+                            {list.isDefault ? <Badge tone="success">Standard</Badge> : null}
+                          </span>
+                        </td>
+                        <td className="muted">
+                          {positions.length - unpriced} von {positions.length} bepreist
+                        </td>
+                        <td>
+                          {below > 0 ? (
+                            <Badge tone="danger">{below} unter Einkauf</Badge>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                        <td className="muted">
+                          {usedBy} {usedBy === 1 ? 'Paket' : 'Pakete'} · {customers}{' '}
+                          {customers === 1 ? 'Kunde' : 'Kunden'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        )}
       </div>
 
-      {newList ? (
+      {drawer === 'costs' ? (
         <Drawer
-          title="Neue Preisliste"
+          title="Einkaufspreise"
           closeHref={BASE}
           footer={
             <>
               <Button href={BASE} scroll={false}>
                 Abbrechen
               </Button>
-              <Button type="submit" form="new-list" variant="primary">
-                Preisliste anlegen
+              <Button type="submit" form="purchase-costs" variant="primary">
+                Speichern
               </Button>
             </>
           }
         >
           {error ? <Callout tone="danger">{error}</Callout> : null}
-          <form id="new-list" action={createPriceList} className="stack">
-            <Field
-              label="Name"
-              htmlFor="new-list-name"
-              help="Die Preise trägst du nach dem Anlegen ein."
-            >
-              <input
-                id="new-list-name"
-                name="name"
-                type="text"
-                required
-                minLength={2}
-                maxLength={80}
-                placeholder="z. B. Partner"
-              />
-            </Field>
+          <p className="muted small">
+            Was uns die Anbieter kosten. Die Rufnummern-Mieten trägst du selbst ein; bei den
+            KI-Positionen ist es der Durchschnitt aus dem echten Verbrauch.
+          </p>
+          <form id="purchase-costs" action={updatePurchaseCosts}>
+            <div className="table-wrap">
+              <table className="table--compact">
+                <thead>
+                  <tr>
+                    <th>Position</th>
+                    <th className="num">Einkauf</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costPositions.map((position) => {
+                    const editable =
+                      position.category === 'numbers_mobile' ||
+                      position.category === 'numbers_landline';
+                    return (
+                      <tr key={position.category}>
+                        <td>
+                          {position.label}
+                          <div className="cell-sub">{position.unitWords}</div>
+                        </td>
+                        <td className="num">
+                          {editable ? (
+                            <span className="num-cell">
+                              <input
+                                name={
+                                  position.category === 'numbers_mobile'
+                                    ? 'numberCostMobileEur'
+                                    : 'numberCostLandlineEur'
+                                }
+                                type="text"
+                                inputMode="decimal"
+                                required
+                                aria-label={`Einkauf ${position.label}`}
+                                className="num-input"
+                                defaultValue={formatEuroInput(
+                                  position.category === 'numbers_mobile'
+                                    ? ctx.numberCostMobileEur
+                                    : ctx.numberCostLandlineEur
+                                )}
+                              />
+                              <span className="muted small">€</span>
+                            </span>
+                          ) : (
+                            <span className="muted">{position.costLabel}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </form>
+          <p className="field-help">
+            Data Actions laufen im System des Kunden und haben deshalb keinen Einkaufspreis. Gezählt
+            wird jede Aktion, die ein KI-Agent erfolgreich ausgeführt hat — auch nach Bestätigung
+            durch einen Mitarbeiter und bei importierten MCP-Werkzeugen. Testläufe, fehlgeschlagene
+            Aufrufe und verworfene Aktionen zählen nicht.
+          </p>
         </Drawer>
       ) : null}
 
-      {newPackage ? (
+      {drawer === 'package' ? (
         <Drawer
           title="Neues Paket"
           closeHref={BASE}
@@ -573,11 +428,7 @@ export default async function AdminPricingPage({
         >
           {error ? <Callout tone="danger">{error}</Callout> : null}
           <form id="new-package" action={createPackage} className="stack">
-            <Field
-              label="Name"
-              htmlFor="new-pkg-name"
-              help="Gebühren und Kontingente trägst du nach dem Anlegen ein."
-            >
+            <Field label="Name" htmlFor="new-pkg-name">
               <input
                 id="new-pkg-name"
                 name="name"
@@ -587,6 +438,65 @@ export default async function AdminPricingPage({
                 maxLength={80}
                 placeholder="z. B. Starter"
               />
+            </Field>
+            <Field
+              label="Kopieren von"
+              htmlFor="new-pkg-copy"
+              help="Übernimmt Gebühren, Kanäle und Preisliste. Das neue Paket ist zuerst inaktiv, bis du es geprüft hast."
+            >
+              <select id="new-pkg-copy" name="copyFrom" defaultValue="">
+                <option value="">— leer anfangen —</option>
+                {packages.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </form>
+        </Drawer>
+      ) : null}
+
+      {drawer === 'list' ? (
+        <Drawer
+          title="Weitere Preisliste"
+          closeHref={BASE}
+          footer={
+            <>
+              <Button href={BASE} scroll={false}>
+                Abbrechen
+              </Button>
+              <Button type="submit" form="new-list" variant="primary">
+                Preisliste anlegen
+              </Button>
+            </>
+          }
+        >
+          {error ? <Callout tone="danger">{error}</Callout> : null}
+          <form id="new-list" action={createPriceList} className="stack">
+            <Field label="Name" htmlFor="new-list-name">
+              <input
+                id="new-list-name"
+                name="name"
+                type="text"
+                required
+                minLength={2}
+                maxLength={80}
+                placeholder="z. B. Partner"
+              />
+            </Field>
+            <Field
+              label="Preise kopieren von"
+              htmlFor="new-list-copy"
+              help="Eine neue Liste beginnt immer mit den Preisen einer bestehenden. So ist nie eine Position versehentlich ohne Preis."
+            >
+              <select id="new-list-copy" name="copyFrom" defaultValue={defaultList?.id ?? ''}>
+                {lists.map((list) => (
+                  <option key={list.id} value={list.id}>
+                    {list.name}
+                  </option>
+                ))}
+              </select>
             </Field>
           </form>
         </Drawer>

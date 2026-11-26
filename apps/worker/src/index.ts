@@ -36,6 +36,9 @@ import { ACTION_RUN_QUEUE, executeQueuedRun } from './actions/execute.js';
 import { INTEGRATION_EVENT_QUEUE, deliverIntegrationEvent } from './actions/events.js';
 import { MCP_SYNC_QUEUE, syncMcpConnection } from './actions/mcp-sync.js';
 import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/deliver.js';
+import { workerStripe } from './billing/stripe.js';
+import { BILLING_SYNC_QUEUE, syncBillingCustomer } from './billing/customer-sync.js';
+import { STRIPE_EVENT_QUEUE, processStripeEvent } from './billing/stripe-events.js';
 import {
   LEARN_DISTILL_QUEUE,
   LEARN_DISTILL_RETRY_LIMIT,
@@ -58,6 +61,8 @@ const actionRunJobSchema = z.object({ runId: z.uuid() });
 const integrationEventJobSchema = z.object({ eventId: z.uuid() });
 const mcpSyncJobSchema = z.object({ connectionId: z.uuid() });
 const memberNotifyJobSchema = z.object({ notificationId: z.uuid() });
+const stripeEventJobSchema = z.object({ eventId: z.string().min(1).max(255) });
+const billingSyncJobSchema = z.object({ orgId: z.uuid() });
 
 /**
  * Ensure the queue exists with the 'stately' policy. createQueue does not change
@@ -346,6 +351,47 @@ async function main(): Promise<void> {
           );
         } catch (err) {
           logger.error({ err: toErrorInfo(err), notificationId }, 'member notification job failed');
+        }
+      }
+    }
+  );
+
+  // --- Stripe (Phase 15, 0041) ---------------------------------------------------
+  // Both jobs lease their row and keep the retry schedule there. Without
+  // STRIPE_SECRET_KEY the scan sends nothing and these handlers stay idle.
+  await ensureQueuePolicy(boss, STRIPE_EVENT_QUEUE);
+  await boss.work(
+    STRIPE_EVENT_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { eventId: string } }[]) => {
+      const stripe = workerStripe();
+      if (!stripe) return;
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { eventId } = stripeEventJobSchema.parse(job.data);
+        try {
+          await processStripeEvent({ supabase, logger, stripe }, eventId);
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err) }, 'stripe event job failed');
+        }
+      }
+    }
+  );
+
+  await ensureQueuePolicy(boss, BILLING_SYNC_QUEUE);
+  await boss.work(
+    BILLING_SYNC_QUEUE,
+    { pollingIntervalSeconds: 1 },
+    async (jobs: { data: { orgId: string } }[]) => {
+      const stripe = workerStripe();
+      if (!stripe) return;
+      const supabase = getServiceClient();
+      for (const job of jobs) {
+        const { orgId } = billingSyncJobSchema.parse(job.data);
+        try {
+          await syncBillingCustomer({ supabase, logger, stripe }, orgId);
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), orgId }, 'billing customer sync job failed');
         }
       }
     }
