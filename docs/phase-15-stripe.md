@@ -32,7 +32,11 @@ Entscheidungen des Owners (2026-11-25):
 4. 19 % USt für Deutschland, Reverse Charge für EU-Firmen mit bestätigter USt-ID. Die Regel liegt
    in Zendori (`packages/core/src/billing-tax.ts`), kein Stripe Tax. Preise sind netto.
 5. Jahreskunden zahlen monatlich ein Zwölftel.
-6. Kunde ohne Zahlungsart: Rechnung per Mail mit Bezahllink, 14 Tage Zahlungsziel (15b).
+6. ~~Kunde ohne Zahlungsart: Rechnung per Mail mit Bezahllink, 14 Tage Zahlungsziel (15b).~~
+   **Geändert am 2026-11-27: Mit eingeschalteter Stripe-Abrechnung ist die Zahlungsart Pflicht**
+   (SEPA-Lastschrift oder Karte). Wen der Betreiber nicht über Stripe abrechnet, rechnet er selbst
+   ab. Was 15b mit einem eingeschalteten Kunden macht, der trotzdem noch keine Zahlungsart hat
+   (Rechnung mit Bezahllink als Notweg oder anhalten), wird bei 15b entschieden.
 7. Kosten für Bildbeschreibungen der Wissensdatenbank werden mit abgerechnet (15b).
 
 ## Was 15a kann
@@ -64,7 +68,7 @@ Einstellungen → Abrechnung erschien einfach. Jetzt gibt es zwei Wege.
 E-Mail informieren“** (beim ersten Mal an). Nach dem Speichern schickt der Worker **eine** E-Mail an
 alle Inhaber und Admins der Organisation: Betreff „Bitte Rechnungsdaten und Zahlungsart für … 
 hinterlegen“ (nennt nur, was fehlt), mit dem Link zu Einstellungen → Abrechnung und dem Hinweis,
-dass ohne Zahlungsart die Rechnung per E-Mail mit Bezahllink kommt.
+dass Rechnungsdaten und Zahlungsart für die Abrechnung erforderlich sind.
 
 - Die Mail geht erst raus, wenn der Abgleich mit Stripe durch ist, und nie an einen Kunden, der
   nicht (mehr) eingeschaltet ist. Sind Rechnungsdaten und Zahlungsart schon da, wird nichts gesendet.
@@ -85,15 +89,17 @@ dass ohne Zahlungsart die Rechnung per E-Mail mit Bezahllink kommt.
 **2. Hinweis in der App.** Inhaber und Admins sehen über jeder Seite ein Banner, solange etwas
 fehlt (`BillingSetupBanner`, Abfrage `GET /api/billing/setup-notice`):
 
-- **Rechnungsdaten fehlen:** „Bitte hinterlege deine Rechnungsdaten“ — bleibt, bis sie da sind.
-- **Nur die Zahlungsart fehlt:** „Bitte hinterlege eine Zahlungsart“ — mit „Später“ für sieben Tage
-  in diesem Browser ausblendbar, weil Zahlen per Bezahllink erlaubt ist.
+- **Rechnungsdaten fehlen:** „Bitte hinterlege deine Rechnungsdaten und eine Zahlungsart“.
+- **Nur die Zahlungsart fehlt:** „Bitte hinterlege eine Zahlungsart“.
+- Beides ist Pflicht, das Banner lässt sich deshalb nicht ausblenden. Es verschwindet, sobald
+  Rechnungsdaten und Zahlungsart da sind. Auf der Abrechnungsseite steht derselbe Hinweis, und im
+  Admin zeigt der Block „Stripe-Abrechnung“ bei fehlender Zahlungsart „Fehlt“.
 - Kein Banner für Mitarbeiter, auf der Abrechnungsseite selbst und im Plattform-Bereich.
 - Die Abfrage gibt keine Abrechnungsdaten heraus, nur was fehlt, und nur an Inhaber und Admins der
   Organisation.
 
-**Nicht enthalten:** Frist, automatische Erinnerung, Sperre. Die Zahlungsart ist weiterhin keine
-Pflicht (Entscheidung 6).
+**Nicht enthalten:** Frist, automatische Erinnerung, Sperre. Die Pflicht wird also angezeigt und
+angemahnt, aber nicht technisch erzwungen.
 
 **Reihenfolge:** Migration 0044 zuerst, dann der Code. Ohne die Spalten zeigt der Dialog den
 Schalter nicht, und es wird keine Mail gesendet; das Banner braucht die Migration nicht. Für die
@@ -112,9 +118,9 @@ neuen Stand.
 3. **Postfach.** Erwartet: eine Mail „Bitte Rechnungsdaten und Zahlungsart für … hinterlegen“ mit
    Knopf „Zur Abrechnung in Zendori“; der Knopf führt auf Einstellungen → Abrechnung.
 4. **Inbox öffnen (als Inhaber).** Erwartet: oben das Banner „Bitte hinterlege deine
-   Rechnungsdaten“ mit „Zur Abrechnung“, ohne „Später“. Die Inbox passt weiter in das Fenster.
+   Rechnungsdaten und eine Zahlungsart“ mit „Zur Abrechnung“. Die Inbox passt weiter in das Fenster.
 5. **Rechnungsdaten speichern, zurück zur Inbox.** Erwartet: Banner „Bitte hinterlege eine
-   Zahlungsart“ mit „Später“. Klick auf „Später“: Banner weg, auch nach Neuladen.
+   Zahlungsart“, ohne Knopf zum Ausblenden. Auf der Abrechnungsseite steht derselbe Hinweis.
 6. **Als Mitarbeiter ohne Admin-Rolle anmelden.** Erwartet: kein Banner.
 7. **Zahlungsart hinterlegen.** Erwartet: kein Banner mehr (auch in einem anderen Browser).
 8. **Admin → „Ändern“.** Erwartet: Der Schalter für die E-Mail ist verschwunden, weil nichts mehr
@@ -297,10 +303,12 @@ Wenn in Schritt 2, 4 oder 5 nichts ankommt: Admin → Kunde → „Abgleich: Feh
 
 ## Offen
 
-- **Lücke beim Ausschalten (nicht behoben):** `customer-sync.ts` und der Scan prüfen `enabled`
-  nicht. Ein offener Abgleich wird nach dem Ausschalten noch abgearbeitet und legt den
-  Stripe-Kunden an oder aktualisiert ihn (nur Kundendaten, kein Geld). Die E-Mail aus „Kunde
-  informieren“ ist davon nicht betroffen: Sie prüft `enabled` selbst.
+- ~~Lücke beim Ausschalten~~ **behoben am 2026-11-27:** Ein offener Abgleich wurde nach dem
+  Ausschalten noch abgearbeitet. Jetzt verwirft das Ausschalten ihn sofort
+  (`cancelBillingSync`), und der Worker synchronisiert einen ausgeschalteten Kunden nie — auch
+  nicht, wenn eine Wiederholung wartet oder während des Laufs ausgeschaltet wird
+  (`syncBillingCustomer`). Was schon bei Stripe liegt, bleibt dort. **Der Fix im Worker gilt erst
+  mit dem neuen Worker-Image.**
 - **15b** (Migration 0046 `billing_invoices` — 0043 bis 0045 sind inzwischen vergeben):
   Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,
   Stripe-Rechnung mit Vollvergleich vor dem Abschluss (Netto, Steuer, Brutto, kein Rabatt, kein

@@ -90,6 +90,8 @@ async function runSync(deps: BillingDeps, row: StripeCustomerRow): Promise<void>
     accountId,
   });
   current = (await loadCustomerRow(supabase, row.org_id, row.livemode)) ?? current;
+  // switched off while this attempt was running: no details leave for Stripe
+  if (!current.enabled) return;
 
   const { data: accountData, error: accountError } = await supabase
     .from('billing_accounts')
@@ -160,12 +162,29 @@ class AccountMismatchError extends Error {
 /**
  * One attempt to work off a requested sync. A no-op when nothing is requested,
  * the attempt is not due yet, or the row belongs to the other mode.
+ *
+ * A customer the operator switched OFF is never synced: a request that is
+ * still open — also one waiting for a retry — is dropped, so nothing about a
+ * customer that is not billed through Stripe is sent there.
  */
 export async function syncBillingCustomer(deps: BillingDeps, orgId: string): Promise<void> {
   const { supabase, stripe, logger } = deps;
   const nowMs = billingNow(deps);
   const row = await loadCustomerRow(supabase, orgId, stripe.livemode);
-  if (!row || !isBillingSyncDue(row, nowMs)) return;
+  if (!row || !row.sync_requested_at) return;
+  if (!row.enabled) {
+    const { error: dropError } = await supabase
+      .from('billing_stripe_customers')
+      .update({ sync_requested_at: null, sync_next_attempt_at: null, sync_attempts: 0 })
+      .eq('org_id', orgId)
+      .eq('livemode', stripe.livemode)
+      .eq('enabled', false)
+      .eq('sync_requested_at', row.sync_requested_at);
+    if (dropError) throw dropError;
+    logger.info({ orgId, livemode: stripe.livemode }, 'billing customer sync dropped: not enabled');
+    return;
+  }
+  if (!isBillingSyncDue(row, nowMs)) return;
   const requestedAt = row.sync_requested_at;
 
   // Lease: an attempt that dies is offered again after the lease.

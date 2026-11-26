@@ -2,11 +2,10 @@
 
 // The banner that asks owners and admins to set up billing once the operator
 // switched their organization to Stripe billing (Phase 15): shown on every app
-// page until billing details and a payment method are on file.
-//
-//   · billing details missing → stays: without them no invoice can be issued;
-//   · only the payment method missing → can be put off ("Später") for a week
-//     in this browser: paying each invoice by link is allowed.
+// page until billing details AND a payment method are on file. Both are
+// required with Stripe billing (owner decision 2026-11-27: a customer who is
+// billed through Stripe pays by SEPA direct debit or card; customers who are
+// not are invoiced by hand and never see this) — so the banner cannot be put off.
 //
 // The shell cannot read the billing tables (service role only); it asks
 // /api/billing/setup-notice, which answers only for owners and admins.
@@ -16,23 +15,10 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import type { BillingSetupNotice } from '@/app/api/billing/setup-notice/route';
 import Callout from '@/components/ui/Callout';
 
-const SNOOZE_MS = 7 * 24 * 60 * 60_000;
-const snoozeKey = (orgId: string): string => `zendori-billing-notice:${orgId}`;
-
-function isSnoozed(orgId: string): boolean {
-  try {
-    const until = Number(localStorage.getItem(snoozeKey(orgId)) ?? '0');
-    return Number.isFinite(until) && until > Date.now();
-  } catch {
-    return false;
-  }
-}
-
 export default function BillingSetupBanner() {
   const pathname = usePathname();
   const org = useSearchParams().get('org') ?? '';
   const [notice, setNotice] = useState<BillingSetupNotice | null>(null);
-  const [snoozed, setSnoozed] = useState(false);
 
   // The billing page says the same thing in place, and the platform area is not
   // about the member's own organization.
@@ -52,9 +38,7 @@ export default function BillingSetupBanner() {
         );
         if (!response.ok) return;
         const body = (await response.json()) as { notice: BillingSetupNotice | null };
-        if (!active) return;
-        setNotice(body.notice);
-        setSnoozed(body.notice ? isSnoozed(body.notice.orgId) : false);
+        if (active) setNotice(body.notice);
       } catch {
         // no banner is better than a broken page
       }
@@ -64,8 +48,7 @@ export default function BillingSetupBanner() {
     };
   }, [org, onBillingPage]);
 
-  const canSnooze = notice?.missing === 'payment';
-  const visible = !hidden && notice !== null && !(canSnooze && snoozed);
+  const visible = !hidden && notice !== null;
 
   // Full-height pages (the inbox) subtract the banner from the window height.
   const box = useRef<HTMLDivElement>(null);
@@ -86,43 +69,27 @@ export default function BillingSetupBanner() {
 
   if (!visible || !notice) return null;
 
-  const snooze = (): void => {
-    try {
-      localStorage.setItem(snoozeKey(notice.orgId), String(Date.now() + SNOOZE_MS));
-    } catch {
-      // private mode: the banner is hidden for this visit only
-    }
-    setSnoozed(true);
-  };
-
   return (
     <div className="app-banner" ref={box}>
       <Callout
         tone="warn"
         title={
           notice.missing === 'details'
-            ? 'Bitte hinterlege deine Rechnungsdaten'
+            ? 'Bitte hinterlege deine Rechnungsdaten und eine Zahlungsart'
             : 'Bitte hinterlege eine Zahlungsart'
         }
         action={
-          <span className="row">
-            {canSnooze ? (
-              <button type="button" className="btn btn--ghost btn--sm" onClick={snooze}>
-                Später
-              </button>
-            ) : null}
-            <Link
-              className="btn btn--sm"
-              href={`/settings/billing?org=${encodeURIComponent(notice.orgId)}`}
-            >
-              Zur Abrechnung
-            </Link>
-          </span>
+          <Link
+            className="btn btn--sm"
+            href={`/settings/billing?org=${encodeURIComponent(notice.orgId)}`}
+          >
+            Zur Abrechnung
+          </Link>
         }
       >
         {notice.missing === 'details'
-          ? 'Die Abrechnung läuft über unseren Zahlungsanbieter Stripe. Ohne Rechnungsdaten können wir keine Rechnung stellen.'
-          : 'Mit SEPA-Lastschrift oder Karte ziehen wir Rechnungen automatisch ein. Ohne Zahlungsart bekommst du sie per E-Mail mit einem Bezahllink.'}
+          ? 'Die Abrechnung läuft über unseren Zahlungsanbieter Stripe. Dafür brauchen wir deine Rechnungsdaten und eine Zahlungsart.'
+          : 'Die Abrechnung läuft über unseren Zahlungsanbieter Stripe. Dafür ist eine Zahlungsart erforderlich: SEPA-Lastschrift oder Karte.'}
         {notice.livemode ? '' : ' Testmodus: Es wird nichts belastet.'}
       </Callout>
     </div>

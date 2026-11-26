@@ -116,7 +116,9 @@ export function StripeBillingSummary({
           )}
         </Property>
         <Property label="Zahlungsart">
-          {stripe?.paymentMethodLabel ?? <span className="muted">Keine</span>}
+          {stripe?.paymentMethodLabel ??
+            // required once Stripe billing is on
+            (enabled ? <Badge tone="warn">Fehlt</Badge> : <span className="muted">Keine</span>)}
         </Property>
         {enabled && mail?.available ? (
           <Property label="E-Mail an Kunden">
@@ -222,7 +224,7 @@ export function StripeBillingDrawer({
         <input type="hidden" name="orgId" value={orgId} />
         <SettingRow
           label="Über Stripe abrechnen"
-          help="Der Kunde sieht dann unter Einstellungen → Abrechnung die Bereiche für Rechnungsdaten und Zahlungsart."
+          help="Der Kunde muss dann unter Einstellungen → Abrechnung Rechnungsdaten und eine Zahlungsart hinterlegen und sieht dazu einen Hinweis auf jeder Seite. Ohne den Schalter rechnest du diesen Kunden selbst ab; beim Ausschalten wird nichts mehr an Stripe gesendet."
           htmlFor="stripe-enabled"
         >
           <input
@@ -252,7 +254,7 @@ export function StripeBillingDrawer({
             help={
               mail.sentAt
                 ? `Zuletzt ${setupMailText(mail)}. Inhaber und Admins bekommen die E-Mail mit dem Link zur Abrechnung noch einmal.`
-                : 'Inhaber und Admins bekommen eine E-Mail mit dem Link zu Einstellungen → Abrechnung und der Bitte, Rechnungsdaten und Zahlungsart zu hinterlegen. Nur bei eingeschalteter Stripe-Abrechnung.'
+                : 'Inhaber und Admins bekommen eine E-Mail mit dem Link zu Einstellungen → Abrechnung. Darin steht, dass Rechnungsdaten und Zahlungsart für die Abrechnung erforderlich sind. Nur bei eingeschalteter Stripe-Abrechnung.'
             }
             htmlFor="stripe-notify"
           >

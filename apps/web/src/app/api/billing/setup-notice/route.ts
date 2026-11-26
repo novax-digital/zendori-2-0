@@ -12,6 +12,8 @@ import { getSessionUser } from '@/lib/supabase/session';
 // everybody else); the answer is "nothing" unless the caller is owner or admin
 // of the organization AND the operator switched it to Stripe billing in the
 // current Stripe mode AND billing details or payment method are still missing.
+// Both are required with Stripe billing; an organization that is not billed
+// through Stripe is invoiced by hand and gets no banner.
 //
 // The billing tables are service-role only, so the shell cannot read them with
 // the member's own session — this route reads them behind the membership check.
@@ -21,7 +23,10 @@ export const dynamic = 'force-dynamic';
 
 export interface BillingSetupNotice {
   orgId: string;
-  /** `details`: billing details are missing (a payment method may be missing too). */
+  /**
+   * `details`: billing details are missing — and, unless `hasPaymentMethod`,
+   * the payment method too. `payment`: only the payment method is missing.
+   */
   missing: 'details' | 'payment';
   livemode: boolean;
 }

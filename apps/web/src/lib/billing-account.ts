@@ -267,6 +267,30 @@ export async function requestBillingSync(
 }
 
 /**
+ * Withdraws a sync that is still open in one Stripe mode — called when the
+ * operator switches Stripe billing OFF, so nothing about this customer is sent
+ * to Stripe afterwards (the worker drops such a request too, should one slip
+ * through). What Stripe already has stays as it is.
+ */
+export async function cancelBillingSync(
+  admin: SupabaseClient,
+  orgId: string,
+  livemode: boolean
+): Promise<{ error: boolean }> {
+  const { error } = await admin
+    .from('billing_stripe_customers')
+    .update({
+      sync_requested_at: null,
+      sync_attempts: 0,
+      sync_next_attempt_at: null,
+      sync_error: null,
+    })
+    .eq('org_id', orgId)
+    .eq('livemode', livemode);
+  return { error: Boolean(error) };
+}
+
+/**
  * Stores the billing details. A changed VAT id invalidates what was known about
  * the old one — the operator's manual confirmation included.
  */

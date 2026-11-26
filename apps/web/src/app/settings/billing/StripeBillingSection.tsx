@@ -88,7 +88,7 @@ export default function StripeBillingSection({
   return (
     <Section
       title="Zahlung und Rechnungsdaten"
-      help="Rechnungen stellen wir monatlich für den Vormonat. Mit hinterlegter Zahlungsart ziehen wir den Betrag automatisch ein."
+      help="Rechnungen stellen wir monatlich für den Vormonat. Den Betrag ziehen wir von der hinterlegten Zahlungsart ein. Rechnungsdaten und Zahlungsart sind dafür erforderlich."
     >
       {livemode ? null : (
         <Callout tone="warn">
@@ -109,6 +109,13 @@ export default function StripeBillingSection({
           {hasStored
             ? 'Deine Rechnungsdaten sind unvollständig. Ohne vollständige Angaben können wir keine Rechnung stellen.'
             : 'Bitte hinterlege deine Rechnungsdaten. Ohne sie können wir keine Rechnung stellen.'}
+        </Callout>
+      ) : null}
+      {/* required with Stripe billing — not while the method just entered is on its way */}
+      {stripe.paymentMethodId === null && !awaitingPayment ? (
+        <Callout tone="warn">
+          Bitte hinterlege eine Zahlungsart (SEPA-Lastschrift oder Karte). Sie ist für die
+          Abrechnung erforderlich.
         </Callout>
       ) : null}
       {foreign && !vatAccepted && !stripe.syncPending ? (
@@ -147,9 +154,7 @@ export default function StripeBillingSection({
         </Property>
         <Property label="Zahlungsart">
           {stripe.paymentMethodLabel ?? (
-            <span className="muted">
-              Keine hinterlegt. Rechnungen kommen dann per E-Mail mit einem Bezahllink.
-            </span>
+            <span className="muted">Noch keine hinterlegt (erforderlich)</span>
           )}
         </Property>
       </PropertyList>

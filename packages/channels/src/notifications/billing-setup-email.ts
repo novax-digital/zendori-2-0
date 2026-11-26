@@ -5,6 +5,10 @@ import { renderZendoriEmail, type ZendoriMailDetail } from '../email/brand-mail.
 // (migration 0044): sent once when the operator switches the organization to
 // Stripe billing, and again when the operator asks for it.
 //
+// With Stripe billing both are REQUIRED (owner decision 2026-11-27): billing
+// details and a payment method (SEPA direct debit or card). Customers who are
+// not billed through Stripe are invoiced by hand and never get this mail.
+//
 // Data minimisation: the mail names the organization and what is still missing
 // and links to the billing page. No amounts, no usage, no message contents.
 
@@ -53,7 +57,7 @@ export function renderBillingSetupEmail(input: BillingSetupEmailInput): {
   const paragraphs = [
     `die Abrechnung von Zendori für <strong>${org}</strong> läuft${from} über unseren Zahlungsanbieter Stripe. Bitte hinterlegen Sie dafür ${ask === 'Zahlungsart' ? 'eine Zahlungsart' : ask === 'Rechnungsdaten' ? 'Ihre Rechnungsdaten' : 'Ihre Rechnungsdaten und eine Zahlungsart'}.`,
     'Als Zahlungsart sind SEPA-Lastschrift und Karte möglich. IBAN oder Kartennummer geben Sie direkt bei Stripe ein; Zendori speichert davon nur die Art und die letzten vier Stellen.',
-    'Ohne hinterlegte Zahlungsart erhalten Sie Ihre Rechnungen per E-Mail mit einem Bezahllink.',
+    'Rechnungsdaten und Zahlungsart sind für die Abrechnung erforderlich. Ihre Rechnungen ziehen wir dann automatisch von der hinterlegten Zahlungsart ein.',
   ];
 
   const details: ZendoriMailDetail[] = [

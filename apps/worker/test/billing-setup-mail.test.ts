@@ -110,7 +110,7 @@ describe('billing setup mail', () => {
     expect(mail.subject).toBe('Bitte Zahlungsart für Muster GmbH hinterlegen');
     expect(mail.text).toContain(`https://app.example.com/settings/billing?org=${ORG}`);
     expect(mail.text).toContain('Dezember 2026');
-    expect(mail.html).toContain('Bezahllink');
+    expect(mail.html).toContain('erforderlich');
 
     expect(w.row().setup_mail_requested_at).toBeNull();
     expect(w.row().setup_mail_sent_at).toBe(new Date(NOW).toISOString());

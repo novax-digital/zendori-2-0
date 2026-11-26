@@ -26,12 +26,14 @@ describe('renderBillingSetupEmail', () => {
     );
   });
 
-  it('links to the billing page and says what happens without a payment method', () => {
+  it('links to the billing page and says that both are required', () => {
     const mail = renderBillingSetupEmail(BASE);
     expect(mail.text).toContain(BASE.openUrl);
     expect(mail.html).toContain('Zur Abrechnung in Zendori');
     expect(mail.text).toContain('ab Dezember 2026');
-    expect(mail.text).toContain('Bezahllink');
+    expect(mail.text).toContain('sind für die Abrechnung erforderlich');
+    // no way around it is offered any more
+    expect(mail.text).not.toContain('Bezahllink');
     expect(mail.text).toContain('fehlen noch');
   });
 

@@ -37,6 +37,7 @@ import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { loadBillingCatalog, packageTermsOf } from '@/lib/billing';
 import {
   billingDetailsFromForm,
+  cancelBillingSync,
   requestBillingSync,
   saveBillingDetailsRow,
   setSetupMailRequest,
@@ -404,7 +405,13 @@ export async function saveStripeBilling(formData: FormData): Promise<void> {
   // the mail request first: the sync job that follows is what sends it
   const notify = enabled && formData.get('notifyCustomer') === 'on';
   const mail = await setSetupMailRequest(admin, orgId, runtime.livemode, notify);
-  if (enabled) await requestBillingSync(admin, orgId);
+  if (enabled) {
+    await requestBillingSync(admin, orgId);
+  } else {
+    // Switched off: a sync that is still open (the billing details saved above
+    // may just have asked for one, or a retry is waiting) must not run any more.
+    await cancelBillingSync(admin, orgId, runtime.livemode);
+  }
 
   const mailNote = !notify
     ? ''

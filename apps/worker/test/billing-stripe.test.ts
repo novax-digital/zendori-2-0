@@ -189,6 +189,57 @@ describe('syncBillingCustomer', () => {
     expect(w.stripe.calls).toHaveLength(0);
   });
 
+  it('never syncs a customer that was switched off — the open request is dropped', async () => {
+    const w = world({ rows: [customerRow({ enabled: false })] });
+    await syncBillingCustomer(w.deps, ORG);
+    // not a single request to Stripe: no customer is created, no details are sent
+    expect(w.stripe.calls).toHaveLength(0);
+    expect(w.stripe.customers.size).toBe(0);
+    expect(w.row().stripe_customer_id).toBeNull();
+    expect(w.row().sync_requested_at).toBeNull();
+    // and it does not come back
+    await syncBillingCustomer(w.deps, ORG);
+    expect(w.stripe.calls).toHaveLength(0);
+  });
+
+  it('drops the request of a switched-off customer even while a retry is waiting', async () => {
+    const w = world({
+      rows: [
+        customerRow({
+          enabled: false,
+          sync_attempts: 2,
+          sync_next_attempt_at: iso(NOW + 30 * 60_000),
+          sync_error: 'stripe:503',
+        }),
+      ],
+    });
+    await syncBillingCustomer(w.deps, ORG);
+    expect(w.stripe.calls).toHaveLength(0);
+    expect(w.row().sync_requested_at).toBeNull();
+    expect(w.row().sync_next_attempt_at).toBeNull();
+    expect(w.row().sync_attempts).toBe(0);
+  });
+
+  it('does not update an existing Stripe customer after the switch-off either', async () => {
+    const w = world({ rows: [customerRow({ enabled: false })] });
+    const id = withCustomer(w);
+    w.db.rows('billing_stripe_customers')[0]!.sync_requested_at = iso(NOW - 5_000);
+    w.db.rows('billing_stripe_customers')[0]!.enabled = false;
+    await syncBillingCustomer(w.deps, ORG);
+    expect(w.stripe.writes()).toHaveLength(0);
+    expect(w.stripe.customers.get(id)!.name).toBeUndefined();
+  });
+
+  it('leaves the row of an enabled customer alone when the other mode is switched off', async () => {
+    const w = world({
+      rows: [customerRow({ enabled: true }), customerRow({ livemode: true, enabled: false })],
+    });
+    await syncBillingCustomer(w.deps, ORG);
+    // the test-mode row (enabled) is synced; the live row is not this worker's business
+    expect(w.row(false).stripe_customer_id).not.toBeNull();
+    expect(w.row(true).sync_requested_at).toBe(iso(NOW - 5_000));
+  });
+
   it('creates the customer even while the details are incomplete', async () => {
     const w = world({ details: { ...DETAILS, city: null } });
     await syncBillingCustomer(w.deps, ORG);
