@@ -15,7 +15,7 @@ Org zuordenbar.** Zwei Sichten — Admin (alle Kunden, Kosten/Preis/Marge) und K
 | Telefonie | xAI Voice + Twilio SIP | **gemessen** (Minuten × Rate) → `usage_events` (`voice_minutes`) |
 | WhatsApp-Nachrichten | Twilio/Meta | **gezählt** aus `messages` × Rate |
 | E-Mail-Versand | Resend | **gezählt** aus `messages` (out) × Rate |
-| Rufnummern (Mobil/Festnetz) | Twilio/xAI Miete | **gezählt** aus `phone_numbers` (status active) je `number_type` × editierbarer Monatskosten (0023) |
+| Rufnummern (Mobil/Festnetz) | Twilio/xAI Miete | **gezählt** aus `phone_numbers` (status active) je `number_type` × editierbarer Monatskosten (0023) — seit 0043 keine Verbrauchsposition mehr, sondern eine monatliche Gebühr des Pakets |
 | Data Actions | System des Kunden (kein Einkauf) | **gezählt** → `usage_events` (`data_action`), ein Eintrag je erfolgreicher Aktion per Trigger auf `action_runs` (0040) |
 
 „Gemessen" = die echten Provider-Kosten (Token/Minuten) sind bekannt und gespeichert.
@@ -75,17 +75,16 @@ Jahrespreises, also den Monatsbetrag abzüglich Rabatt („anteilig").
   (Listenpreise)** — vor der ersten echten Rechnung gegen die Verträge prüfen.
 - Anthropic/OpenAI-Tokenpreise stehen separat in
   [`packages/ai/src/cost.ts`](../packages/ai/src/cost.ts) (gemessen → `ai_runs`).
-- **Rufnummern (0023):** getrennt nach **Mobil** (`number_type='mobile'`) und
-  **Festnetz** (`local` + `national`). Die monatlichen Einkaufskosten je Typ sind
-  admin-editierbar (Admin → Preise & Pakete → Einkaufspreise, in €); Verkaufspreis
-  je Typ über die Preisliste, sonst Selbstkosten. Gezählt werden provisionierte
-  Nummern aus `phone_numbers` (WhatsApp-Nummern zählen hier nicht mit —
-  separat behandelbar).
-- **Bewusste v1-Nuance:** die Verbrauchs-Kategorien „Rufnummern" (monatliche Miete
-  als Durchleitung) und die Paket-Kanal-Fee (z. B. „Telefonie") erscheinen
-  getrennt und werden NICHT gebündelt. Das ist ein legitimes Reseller-Modell
-  (Kanal-/Anschlussgebühr + Nummern-Durchleitung), kann aber auf Wunsch
-  zusammengelegt werden (Nummern-Zeilen unterdrücken, sobald ein Paket aktiv ist).
+- **Rufnummern (0023, seit 0043 im Paket):** getrennt nach **Mobil**
+  (`number_type='mobile'`) und **Festnetz** (`local` + `national`). Die monatlichen
+  Einkaufskosten je Typ sind admin-editierbar (Admin → Preise & Pakete →
+  Einkaufspreise, in €). Der Verkaufspreis je Nummer steht im **Paket**, nicht mehr
+  in der Preisliste — siehe „Paket und Verbrauchspreisliste getrennt“. Gezählt
+  werden aktive Nummern aus `phone_numbers`; eine Nummer, die für Telefonie und
+  WhatsApp genutzt wird, zählt einmal.
+- Die Rufnummern-Gebühr (Miete je Nummer) und die Kanal-Gebühr des Pakets (z. B.
+  „Telefonie“, „WhatsApp“) sind zwei getrennte Zeilen: die eine hängt an der Nummer,
+  die andere am Kanal.
 - `billing_settings.markup_factor`/`usd_to_eur`/`target_margin` (0021/0022)
   bleiben als ungenutzte Spalten stehen (kein Cleanup-Zwang).
 
@@ -108,7 +107,8 @@ Paket). Jetzt gilt:
 - **Ein Paket pro Seite** (`/admin/pricing/packages/[id]`): links die Felder, rechts „Das zahlt ein
   Kunde“ — rechnet beim Tippen mit, mit denselben Funktionen wie die Rechnung
   (`@zendori/core/billing`). Ein Speichern-Knopf.
-- **Eine Preisliste pro Seite** (`/admin/pricing/lists/[id]`): neun Positionen in drei Gruppen, je
+- **Eine Preisliste pro Seite** (`/admin/pricing/lists/[id]`): sieben Positionen in zwei Gruppen
+  (bis 0043 neun in drei — die Rufnummern stehen jetzt im Paket), je
   Zeile Einkauf, Verkaufspreis und Marge live. Ein leeres Feld sagt, was stattdessen gilt
   („= Einkaufspreis 0,32 €“, bei Data Actions „wird nicht berechnet“).
 
@@ -200,7 +200,8 @@ Nicht geprüft: das Aussehen im Browser und das Speichern selbst (kein Login).
    „unter Einkauf“ in der Zeile und der Hinweis unten. Feld leeren: „= Einkaufspreis …“.
 10. **Übersicht → Weitere Preisliste**, Name „Partner“. Erwartet: neue Liste mit allen Preisen der
     Standardliste; die Übersicht zeigt jetzt eine Tabelle der Listen. Liste über das Menü löschen.
-11. **Übersicht → Einkaufspreise.** Erwartet: Drawer mit neun Zeilen, zwei Felder (Rufnummern).
+11. **Übersicht → Einkaufspreise.** Erwartet: Drawer mit neun Zeilen, oben die zwei Felder für
+    Rufnummern.
 12. **Einstellungen → Abrechnung eines Kunden.** Erwartet: Beträge wie vor der Umstellung.
 
 ### Testanleitung Stufe 2
@@ -237,6 +238,94 @@ Am besten mit einem Testkunden: Jede Änderung wirkt sofort, auch auf den laufen
     auswählen: die Felder sind wieder da.
 12. **Menü „⋯“.** Erwartet: „Zuweisung entfernen“ mit Hinweis, erst nach einem zweiten Klick
     wird entfernt. Nur an einem Testkunden ausprobieren.
+
+## Paket und Verbrauchspreisliste getrennt (Migration 0043, Owner-Auftrag 2026-11-26)
+
+Stand: **Migration 0043 ist seit 2026-11-26 eingespielt** (Probelauf mit Rollback, dann echt;
+danach über die API mit dem neuen Code geprüft: neun Monatsrechnungen — drei Kunden, drei Monate —
+auf den Cent gleich). **Der Code ist gebaut, aber noch nicht gepusht**; bis dahin zeigt die
+laufende App alles wie vorher.
+
+Zwei Arten von Preisen, zwei Orte:
+
+| | Wo | Was |
+|---|---|---|
+| **Monatlich** | Paket (`packages`, eigene Werte in `org_subscriptions`) | Grundgebühr, Gebühr je Kanal, **Gebühr je Rufnummer** (Mobil / Festnetz) |
+| **Je Einheit** | Verbrauchspreisliste (`price_tiers`) | KI-Vorgänge, Minuten, Nachrichten, E-Mails, Data Actions |
+
+Die Preisliste heißt in der Oberfläche jetzt **Verbrauchspreisliste** und hat sieben Positionen.
+
+**Rufnummern im Paket.** `packages.numbers` = `{mobile: {feeMonthlyEur}, landline: {feeMonthlyEur}}`,
+eigene Gebühr eines Kunden in `org_subscriptions.numbers` (gleiche Form, leer = wie im Paket).
+Regeln (`numberFeeLines()` in `packages/core/src/billing.ts`):
+
+- Berechnet wird **Gebühr × aktive Nummern** des Kunden (`phone_numbers`, Status aktiv). Wer keine
+  Nummer hat, zahlt nichts. Es gibt kein Kontingent und keine anteilige Berechnung nach Tagen.
+- Ein **leeres Feld** im Paket ist nicht 0 €, sondern gibt unseren Einkaufspreis weiter. Eine
+  eingetragene `0` verschenkt die Nummer. Eine Gebühr unter dem Einkauf wird rot markiert.
+- Der **Rabatt bei Jahreslaufzeit gilt für Rufnummern nicht** (die Miete zahlen wir monatlich; als
+  Listenposition war sie auch nicht rabattiert). „Fest pro Monat“ und der Jahresbetrag enthalten
+  deshalb nur Grundgebühr und Kanäle; die Rufnummern stehen als eigene Zeilen daneben.
+- **Ohne Paket** werden Rufnummern zum Einkaufspreis weitergegeben (vorher: Preis der
+  Standardliste). Die Migration bricht ab, falls davon ein Kunde betroffen wäre.
+- In der Rechnung stehen die Zeilen „Rufnummer Mobil (1×)“ / „Rufnummer Festnetz (2×)“ bei den
+  monatlichen Gebühren, nicht mehr beim Verbrauch. Auf der Kundenseite heißt die Kachel
+  „Monatliche Gebühren“ (vorher „Paketgebühren“).
+
+**Oberfläche.** Paket-Seite: neuer Abschnitt „Rufnummern“ (Einkauf, Gebühr je Nummer, Marge);
+rechts „Je Rufnummer Mobil / Festnetz“. Konditionen am Kunden: vierte Gruppe „Rufnummern“ mit
+eigener Gebühr, Zahl der aktiven Nummern und Monatsbetrag; rechts „Rufnummern pro Monat“.
+Übersicht: Spalte „Je Rufnummer pro Monat“. Einkaufspreise: die zwei Rufnummern-Felder stehen oben.
+
+**Migration 0043** (nur zusätzliche Spalten, rechnungsneutral):
+
+1. `packages.numbers` und `org_subscriptions.numbers` (jsonb, Standard `{}`).
+2. Jedes Paket übernimmt die Rufnummern-Preise seiner Preisliste (ohne eigene: der Standardliste).
+3. Ein Kunde, der bisher einen anderen Preis je Nummer hatte (eigene Liste oder eigener Preis),
+   bekommt ihn als eigenen Wert.
+4. **Beweis am Ende:** Die Migration bricht ab, wenn irgendein Kunde je Nummer etwas anderes zahlen
+   würde als vorher, oder wenn ein Kunde ohne Paket eine aktive Nummer hat.
+
+Die alten Einträge `numbers_mobile` / `numbers_landline` bleiben in `price_tiers.pricing` stehen
+(der bis zum Deploy laufende Code liest sie noch); der neue Code ignoriert sie, und beim nächsten
+Speichern einer Liste verschwinden sie. **Reihenfolge: Migration zuerst, dann der Code.** Der neue
+Code läuft auch ohne die Spalte — dann würde aber jede Rufnummer zum Einkaufspreis berechnet, bis
+die Migration da ist.
+
+**Geprüft:** typecheck, lint, Tests und Build grün (neue Tests in
+`packages/core/test/billing-terms.test.ts`, „phone numbers …“). Die Migration auf einer lokalen
+Kopie der vier Preistabellen aus der Produktion: beide Pakete bekommen Mobil 30,00 € / Festnetz
+10,00 €, kein Kunde einen eigenen Wert, der Beweis-Block läuft durch. Zusätzlich fünf
+Gegenproben (eigene Liste, eigener Preis, Kunde ohne Paket, kein Abo, leere Datenbank): eigene
+Werte entstehen richtig, die zwei Abbrüche greifen und hinterlassen nichts. Nicht geprüft: das
+Aussehen im Browser und das Speichern (kein Login).
+
+**Offen (Entscheidung des Owners):** Die Kanal-Gebühr wird weiter nach dem **Kontingent** berechnet
+(Anzahl × Gebühr), nicht nach den tatsächlich eingerichteten Kanälen. Wer WhatsApp im Paket hat,
+zahlt die Gebühr auch ohne verbundenen Kanal.
+
+### Testanleitung
+
+1. **Admin → Preise & Pakete.** Erwartet: Untertitel „Alles Monatliche steht im Paket …“. In der
+   Tabelle „Pakete“ die Spalte „Je Rufnummer pro Monat“ mit „Mobil 30,00 € · Festnetz 10,00 €“.
+   Unter „Verbrauchspreise“ stehen sieben Positionen, keine Rufnummern.
+2. **Auf „Starter“ klicken.** Erwartet: Abschnitt „Rufnummern“ mit Einkauf 15,00 € / 5,00 €,
+   Gebühr 30,00 / 10,00, Marge +15,00 € / +5,00 €. Rechts „Je Rufnummer Mobil 30,00 € pro Monat“.
+   „Pro Monat“ bleibt 15,00 €.
+3. **Mobil auf 10 setzen, nicht speichern.** Erwartet: „unter Einkauf (-5,00 €)“ und unten der
+   Hinweis. Feld leeren: „= Einkaufspreis“, rechts 15,00 € pro Monat. Seite neu laden.
+4. **Übersicht → Preise bearbeiten.** Erwartet: Titel „Verbrauchspreisliste“, zwei Gruppen
+   (KI, Kanäle und Aktionen), keine Rufnummern.
+5. **Übersicht → Einkaufspreise.** Erwartet: oben die zwei Rufnummern-Felder (15,00 / 5,00).
+6. **Admin → Abrechnung → Kunde mit Mobilnummer.** Erwartet: in der Rechnung die Zeile
+   „Rufnummer Mobil (1×)“ mit Kosten 15,00 € und Preis 30,00 € bei den monatlichen Zeilen; die
+   Summe ist dieselbe wie vor der Umstellung.
+7. **„Konditionen bearbeiten“.** Erwartet: vier Gruppen. „Rufnummern“ aufklappen: Paket 30,00 € /
+   10,00 €, Spalte „Aktiv“ mit der Zahl der Nummern. Rechts „Rufnummern pro Monat 30,00 €“.
+8. **Eigene Gebühr Mobil 25 eintippen, nicht speichern.** Erwartet: „1 eigener Wert“, rechts
+   25,00 €. `1.500` eintippen: „Nicht eindeutig …“. Feld leeren.
+9. **Einstellungen → Abrechnung des Kunden.** Erwartet: Kachel „Monatliche Gebühren“ enthält die
+   Rufnummer; „Gesamt“ wie vorher.
 
 ## Data Actions (Migration 0040)
 

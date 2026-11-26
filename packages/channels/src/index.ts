@@ -12,6 +12,7 @@ export * from './email/send.js';
 export * from './email/brand-mail.js';
 export * from './email/dispatch.js';
 export * from './notifications/member-email.js';
+export * from './notifications/billing-setup-email.js';
 export * from './voice/schemas.js';
 export * from './whatsapp/service-window.js';
 export * from './whatsapp/dispatch.js';

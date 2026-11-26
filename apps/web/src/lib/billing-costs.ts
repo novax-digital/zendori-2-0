@@ -125,7 +125,7 @@ export interface PricePosition {
   priceEur: number | null;
 }
 
-/** The nine positions of a price list, in display order. */
+/** The seven positions of a usage price list, in display order. */
 export function pricePositions(
   pricing: TierPricing,
   ctx: PricingContext,

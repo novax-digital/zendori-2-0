@@ -8,7 +8,8 @@
 .inbox-shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* minus the billing banner above the page, when one is shown (BillingSetupBanner) */
+  height: calc(100vh - var(--app-banner-h, 0px));
   min-height: 0;
   background: var(--surface);
 }

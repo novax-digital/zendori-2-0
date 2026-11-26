@@ -8,6 +8,10 @@
 //
 // Only monthly amounts are entered. The yearly price is 12 × monthly minus the
 // discount, so it can no longer be forgotten.
+//
+// Everything a customer pays per month lives here — base fee, channels and the
+// fee per phone number. What is charged per unit (minutes, messages, KI) is the
+// usage price list the package points to.
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
@@ -18,9 +22,11 @@ import {
   recurringMonthlyTotalEur,
   resolveTerms,
   termsYearlyTotalEur,
+  type NumberKind,
   type PackageChannelKind,
   type PackageTerms,
 } from '@zendori/core/billing';
+import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { Field, SettingRow } from '@/components/ui/Field';
 import { Property, PropertyList, Section } from '@/components/ui/Layout';
@@ -34,6 +40,15 @@ export interface PackageEditorChannel {
   feeMonthlyEur: number;
 }
 
+export interface PackageEditorNumber {
+  kind: NumberKind;
+  label: string;
+  /** null = not priced: our purchase cost is passed on. */
+  feeMonthlyEur: number | null;
+  /** What one number of this kind costs us per month. */
+  costEur: number;
+}
+
 export interface PackageEditorProps {
   id: string;
   name: string;
@@ -44,6 +59,7 @@ export interface PackageEditorProps {
   baseFeeMonthlyEur: number;
   yearlyDiscountPercent: number;
   channels: PackageEditorChannel[];
+  numbers: PackageEditorNumber[];
   lists: { id: string; name: string; isDefault: boolean }[];
   customers: { orgId: string; name: string; ownValues: number }[];
   /** Notice / error banners of the page, rendered above the form fields. */
@@ -58,6 +74,18 @@ function readAmount(text: string): { value: number; error: string | null } {
   if (result.ok) return { value: result.value, error: null };
   if (result.reason === 'empty') return { value: 0, error: null };
   return { value: 0, error: euroInputError(result.reason) };
+}
+
+/** A fee per phone number: empty = not priced (purchase cost is passed on). */
+function readNumberFee(text: string): { value: number | null; error: string | null } {
+  const result = readEuro(text);
+  if (result.ok) {
+    return result.value > 100_000
+      ? { value: null, error: 'Der Betrag ist zu hoch.' }
+      : { value: result.value, error: null };
+  }
+  if (result.reason === 'empty') return { value: null, error: null };
+  return { value: null, error: euroInputError(result.reason) };
 }
 
 /** The number of channels: empty = not limited, otherwise a whole number 0–9999. */
@@ -83,6 +111,14 @@ export default function PackageEditor(props: PackageEditorProps) {
       fee: channel.quota === null ? '' : formatEuroInput(channel.feeMonthlyEur),
     }))
   );
+  const [numberFees, setNumberFees] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      props.numbers.map((number) => [
+        number.kind,
+        number.feeMonthlyEur === null ? '' : formatEuroInput(number.feeMonthlyEur),
+      ])
+    )
+  );
 
   const calc = useMemo(() => {
     const setupFee = readAmount(setup);
@@ -95,7 +131,19 @@ export default function PackageEditor(props: PackageEditorProps) {
       baseFeeMonthlyEur: baseFee.value,
       yearlyDiscountPercent: discountError ? 0 : discountRead.value,
       channels: {},
+      numbers: {},
     };
+    const numberState = props.numbers.map((number) => {
+      const fee = readNumberFee(numberFees[number.kind] ?? '');
+      if (fee.value !== null) terms.numbers[number.kind] = { feeMonthlyEur: fee.value };
+      return {
+        error: fee.error,
+        /** What a customer is charged per number; the purchase cost when the field is empty. */
+        chargedEur: fee.value ?? number.costEur,
+        priced: fee.value !== null,
+        margin: fee.value === null ? null : fee.value - number.costEur,
+      };
+    });
     const channelState = rows.map((row) => {
       const quota = readQuota(row.quota);
       const fee = quota.value === null ? { value: 0, error: null } : readAmount(row.fee);
@@ -113,12 +161,15 @@ export default function PackageEditor(props: PackageEditorProps) {
     const effective = resolveTerms(terms);
     const errors =
       [setupFee.error, baseFee.error, discountError].filter(Boolean).length +
-      channelState.filter((c) => c.quotaError || c.feeError).length;
+      channelState.filter((c) => c.quotaError || c.feeError).length +
+      numberState.filter((n) => n.error).length;
     return {
       setupError: setupFee.error,
       baseError: baseFee.error,
       discountError,
       channelState,
+      numberState,
+      belowCost: numberState.filter((n) => n.margin !== null && n.margin < 0).length,
       lines: recurringFeeLines(effective, 'monthly'),
       monthly: recurringMonthlyTotalEur(effective, 'monthly'),
       yearly: termsYearlyTotalEur(effective),
@@ -126,7 +177,7 @@ export default function PackageEditor(props: PackageEditorProps) {
       discountPercent: terms.yearlyDiscountPercent,
       errors,
     };
-  }, [setup, base, discount, rows]);
+  }, [setup, base, discount, rows, numberFees, props.numbers]);
 
   const listName =
     props.lists.find((list) => (listId === '' ? list.isDefault : list.id === listId))?.name ??
@@ -302,10 +353,74 @@ export default function PackageEditor(props: PackageEditorProps) {
             </Section>
 
             <Section
-              title="Verbrauchspreise"
-              help="Was Minuten, Nachrichten und KI-Vorgänge kosten, steht in der Preisliste."
+              title="Rufnummern"
+              help="Was eine Rufnummer pro Monat kostet. Berechnet wird je aktiver Nummer des Kunden; wer keine Nummer hat, zahlt hier nichts. Ein leeres Feld gibt unseren Einkaufspreis weiter. Der Rabatt bei Jahreslaufzeit gilt für Rufnummern nicht."
             >
-              <Field label="Preisliste" htmlFor="pkg-list">
+              <div className="table-wrap">
+                <table className="table--compact">
+                  <thead>
+                    <tr>
+                      <th>Rufnummer</th>
+                      <th className="num">Einkauf</th>
+                      <th className="num">je Nummer pro Monat</th>
+                      <th className="num">Marge</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {props.numbers.map((number, index) => {
+                      const state = calc.numberState[index];
+                      const below =
+                        state !== undefined && state.margin !== null && state.margin < 0;
+                      return (
+                        <tr key={number.kind}>
+                          <td>{number.label}</td>
+                          <td className="num muted">{eur.format(number.costEur)}</td>
+                          <td className="num">
+                            <span className="num-cell">
+                              <input
+                                name={`number_fee_${number.kind}`}
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="Einkauf"
+                                className="num-input"
+                                aria-label={`Gebühr je Nummer pro Monat ${number.label}`}
+                                value={numberFees[number.kind] ?? ''}
+                                onChange={(event) =>
+                                  setNumberFees((current) => ({
+                                    ...current,
+                                    [number.kind]: event.target.value,
+                                  }))
+                                }
+                                aria-invalid={state?.error || below ? true : undefined}
+                              />
+                              <span className="muted small">€</span>
+                            </span>
+                            {state?.error ? <div className="field-error">{state.error}</div> : null}
+                          </td>
+                          <td className="num">
+                            {!state || state.error ? (
+                              <span className="muted">—</span>
+                            ) : state.margin === null ? (
+                              <span className="muted">= Einkaufspreis</span>
+                            ) : state.margin < 0 ? (
+                              <Badge tone="danger">unter Einkauf ({eur.format(state.margin)})</Badge>
+                            ) : (
+                              <>+{eur.format(state.margin)}</>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+
+            <Section
+              title="Verbrauch"
+              help="Was Minuten, Nachrichten und KI-Vorgänge kosten, steht in der Verbrauchspreisliste."
+            >
+              <Field label="Verbrauchspreisliste" htmlFor="pkg-list">
                 <select
                   id="pkg-list"
                   name="priceTierId"
@@ -342,6 +457,11 @@ export default function PackageEditor(props: PackageEditorProps) {
                 <strong>{eur.format(calc.yearly)}</strong>
               </Property>
               <Property label="Einrichtung, einmalig">{eur.format(calc.setup)}</Property>
+              {props.numbers.map((number, index) => (
+                <Property key={number.kind} label={`Je ${number.label}`}>
+                  {eur.format(calc.numberState[index]?.chargedEur ?? number.costEur)} pro Monat
+                </Property>
+              ))}
               <Property label="Verbrauch">nach „{listName}“</Property>
             </PropertyList>
             <p className="muted small">
@@ -349,7 +469,7 @@ export default function PackageEditor(props: PackageEditorProps) {
               {calc.discountPercent > 0
                 ? ` abzüglich ${formatEuroInput(calc.discountPercent).replace(/,00$/, '')} %`
                 : ', ohne Rabatt'}
-              .
+              . Rufnummern kommen je aktiver Nummer dazu.
             </p>
           </div>
           <div className="rail-section">
@@ -381,7 +501,9 @@ export default function PackageEditor(props: PackageEditorProps) {
         <span className="muted small">
           {calc.errors > 0
             ? `${calc.errors} ${calc.errors === 1 ? 'Eingabe' : 'Eingaben'} bitte prüfen.`
-            : customerCount > 0
+            : calc.belowCost > 0
+              ? `Achtung: ${calc.belowCost} ${calc.belowCost === 1 ? 'Rufnummern-Gebühr liegt' : 'Rufnummern-Gebühren liegen'} unter dem Einkauf.`
+              : customerCount > 0
               ? `Wirkt sofort auf ${customerCount} ${customerCount === 1 ? 'Kunden' : 'Kunden'} — auch auf den laufenden Monat.`
               : 'Noch keinem Kunden zugewiesen.'}
         </span>

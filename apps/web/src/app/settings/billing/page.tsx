@@ -241,7 +241,7 @@ export default async function CustomerBillingPage({
       <div className="page">
         <PageHeader
           title="Abrechnung"
-          subtitle="Deine Monatsrechnung aus Paketgebühren und Verbrauch, alle Beträge netto in Euro."
+          subtitle="Deine Monatsrechnung aus monatlichen Gebühren und Verbrauch, alle Beträge netto in Euro."
         />
 
         <div className="page-body">
@@ -274,7 +274,7 @@ export default async function CustomerBillingPage({
           <Section title={period.label}>
             <Stats>
               <Stat label="Gesamt" value={formatEur(invoice.grandTotalEur)} note="netto" />
-              <Stat label="Paketgebühren" value={formatEur(invoice.recurringTotalEur)} />
+              <Stat label="Monatliche Gebühren" value={formatEur(invoice.recurringTotalEur)} />
               <Stat label="Verbrauch" value={formatEur(usageTotalEur)} />
               <Stat
                 label="Paket"
@@ -337,7 +337,7 @@ export default async function CustomerBillingPage({
 
           <Section
             title="Kosten-Log"
-            help={`Die letzten ${LOG_TOTAL} Einzelvorgänge dieses Monats mit ihrem Preis laut deiner Preisliste. WhatsApp-Nachrichten, E-Mails und Rufnummern werden monatlich gezählt und erscheinen nur in den Rechnungspositionen.`}
+            help={`Die letzten ${LOG_TOTAL} Einzelvorgänge dieses Monats mit ihrem Preis laut deiner Verbrauchspreisliste. WhatsApp-Nachrichten und E-Mails werden monatlich gezählt und erscheinen nur in den Rechnungspositionen. Rufnummern sind eine monatliche Gebühr.`}
           >
             {pageRows.length === 0 ? (
               <EmptyState title="Keine Einzelvorgänge in diesem Monat" />

@@ -1,16 +1,21 @@
 // Preise & Pakete — the overview (platform admin). It has NO inputs: it shows
-// which packages exist and what they cost, and what is charged per unit. A
-// package and a price list are each edited on their own page; the three small
+// which packages exist and what they cost per month (base fee, channels, phone
+// numbers), and what is charged per unit (the usage price lists). A package
+// and a usage price list are each edited on their own page; the three small
 // forms (purchase costs, new package, new price list) open as drawers
 // (?panel=costs | package | list). All reads/writes via the service role.
 import Link from 'next/link';
 import {
+  NUMBER_KINDS,
+  NUMBER_KIND_LABELS,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   countOwnValues,
   formatEuroInput,
+  numberCostEur,
   recurringMonthlyTotalEur,
   resolveTerms,
+  type PricingContext,
 } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import {
@@ -54,6 +59,17 @@ function channelSummary(pkg: PackageRow): string {
   });
   if (limited.length < PACKAGE_CHANNEL_KINDS.length) parts.push('übrige unbegrenzt');
   return parts.join(' · ');
+}
+
+/** "Mobil 30,00 € · Festnetz 10,00 €" — what one phone number costs per month. */
+function numberSummary(pkg: PackageRow, ctx: PricingContext): string {
+  return NUMBER_KINDS.map((kind) => {
+    const fee = pkg.numbers[kind]?.feeMonthlyEur;
+    const name = NUMBER_KIND_LABELS[kind].replace('Rufnummer ', '');
+    return fee === undefined
+      ? `${name} ${formatEur(numberCostEur(kind, ctx))} (Einkauf)`
+      : `${name} ${formatEur(fee)}`;
+  }).join(' · ');
 }
 
 /** What the customer is charged for a position, in words. */
@@ -129,7 +145,7 @@ export default async function AdminPricingPage({
     <div className="page">
       <PageHeader
         title="Preise & Pakete"
-        subtitle="Feste Gebühren stehen im Paket, Verbrauchspreise in der Preisliste."
+        subtitle="Alles Monatliche steht im Paket, Preise je Einheit in der Verbrauchspreisliste."
         actions={
           <>
             <Button href={`${BASE}?panel=costs`} scroll={false}>
@@ -147,12 +163,12 @@ export default async function AdminPricingPage({
 
         <Section
           title="Pakete"
-          help="Ein Paket legt Grundgebühr, Kanäle und die Preisliste fest. Abweichungen für einzelne Kunden trägst du beim Kunden ein."
+          help="Ein Paket legt fest, was pro Monat anfällt: Grundgebühr, Kanäle und Rufnummern. Dazu gehört eine Verbrauchspreisliste. Abweichungen für einzelne Kunden trägst du beim Kunden ein."
         >
           {packageRows.length === 0 ? (
             <EmptyState
               title="Noch keine Pakete"
-              text="Ein Paket bündelt Grundgebühr, Kanäle und eine Preisliste."
+              text="Ein Paket bündelt Grundgebühr, Kanäle, Rufnummern und eine Verbrauchspreisliste."
               action={
                 <Button href={`${BASE}?panel=package`} icon="plus" scroll={false}>
                   Neues Paket
@@ -168,7 +184,8 @@ export default async function AdminPricingPage({
                     <th>Status</th>
                     <th>Enthält</th>
                     <th className="num">Fest pro Monat</th>
-                    <th>Preisliste</th>
+                    <th>Je Rufnummer pro Monat</th>
+                    <th>Verbrauchspreise</th>
                     <th>Kunden</th>
                   </tr>
                 </thead>
@@ -209,6 +226,7 @@ export default async function AdminPricingPage({
                           </div>
                         ) : null}
                       </td>
+                      <td className="muted">{numberSummary(pkg, ctx)}</td>
                       <td className="muted">{listName}</td>
                       <td>
                         {customers}
@@ -229,14 +247,14 @@ export default async function AdminPricingPage({
             title="Verbrauchspreise"
             help={
               <>
-                Preisliste <strong>{onlyList.list.name}</strong>. Sie gilt für alle Pakete und
-                Kunden.
+                Verbrauchspreisliste <strong>{onlyList.list.name}</strong>. Sie gilt für alle Pakete
+                und Kunden.
               </>
             }
             actions={
               <>
                 <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
-                  Weitere Preisliste
+                  Weitere Liste
                 </Button>
                 <Button href={`${BASE}/lists/${onlyList.list.id}`} size="sm">
                   Preise bearbeiten
@@ -273,11 +291,11 @@ export default async function AdminPricingPage({
           </Section>
         ) : (
           <Section
-            title="Preislisten"
-            help="Verbrauchspreise je Position. Ein Paket nutzt die Standardliste, wenn du ihm keine andere gibst."
+            title="Verbrauchspreislisten"
+            help="Preise je Einheit: Minuten, Nachrichten, KI-Vorgänge. Ein Paket nutzt die Standardliste, wenn du ihm keine andere gibst."
             actions={
               <Button href={`${BASE}?panel=list`} size="sm" icon="plus" scroll={false}>
-                Weitere Preisliste
+                Weitere Liste
               </Button>
             }
           >
@@ -285,7 +303,7 @@ export default async function AdminPricingPage({
               <table>
                 <thead>
                   <tr>
-                    <th>Preisliste</th>
+                    <th>Liste</th>
                     <th>Preise</th>
                     <th>Hinweise</th>
                     <th>Verwendet von</th>
@@ -359,45 +377,39 @@ export default async function AdminPricingPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {costPositions.map((position) => {
-                    const editable =
-                      position.category === 'numbers_mobile' ||
-                      position.category === 'numbers_landline';
-                    return (
-                      <tr key={position.category}>
-                        <td>
-                          {position.label}
-                          <div className="cell-sub">{position.unitWords}</div>
-                        </td>
-                        <td className="num">
-                          {editable ? (
-                            <span className="num-cell">
-                              <input
-                                name={
-                                  position.category === 'numbers_mobile'
-                                    ? 'numberCostMobileEur'
-                                    : 'numberCostLandlineEur'
-                                }
-                                type="text"
-                                inputMode="decimal"
-                                required
-                                aria-label={`Einkauf ${position.label}`}
-                                className="num-input"
-                                defaultValue={formatEuroInput(
-                                  position.category === 'numbers_mobile'
-                                    ? ctx.numberCostMobileEur
-                                    : ctx.numberCostLandlineEur
-                                )}
-                              />
-                              <span className="muted small">€</span>
-                            </span>
-                          ) : (
-                            <span className="muted">{position.costLabel}</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {NUMBER_KINDS.map((kind) => (
+                    <tr key={kind}>
+                      <td>
+                        {NUMBER_KIND_LABELS[kind]}
+                        <div className="cell-sub">je Nummer und Monat</div>
+                      </td>
+                      <td className="num">
+                        <span className="num-cell">
+                          <input
+                            name={kind === 'mobile' ? 'numberCostMobileEur' : 'numberCostLandlineEur'}
+                            type="text"
+                            inputMode="decimal"
+                            required
+                            aria-label={`Einkauf ${NUMBER_KIND_LABELS[kind]}`}
+                            className="num-input"
+                            defaultValue={formatEuroInput(numberCostEur(kind, ctx))}
+                          />
+                          <span className="muted small">€</span>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {costPositions.map((position) => (
+                    <tr key={position.category}>
+                      <td>
+                        {position.label}
+                        <div className="cell-sub">{position.unitWords}</div>
+                      </td>
+                      <td className="num">
+                        <span className="muted">{position.costLabel}</span>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -442,7 +454,7 @@ export default async function AdminPricingPage({
             <Field
               label="Kopieren von"
               htmlFor="new-pkg-copy"
-              help="Übernimmt Gebühren, Kanäle und Preisliste. Das neue Paket ist zuerst inaktiv, bis du es geprüft hast."
+              help="Übernimmt Gebühren, Kanäle, Rufnummern und Verbrauchspreisliste. Das neue Paket ist zuerst inaktiv, bis du es geprüft hast."
             >
               <select id="new-pkg-copy" name="copyFrom" defaultValue="">
                 <option value="">— leer anfangen —</option>
@@ -459,7 +471,7 @@ export default async function AdminPricingPage({
 
       {drawer === 'list' ? (
         <Drawer
-          title="Weitere Preisliste"
+          title="Weitere Verbrauchspreisliste"
           closeHref={BASE}
           footer={
             <>
@@ -467,7 +479,7 @@ export default async function AdminPricingPage({
                 Abbrechen
               </Button>
               <Button type="submit" form="new-list" variant="primary">
-                Preisliste anlegen
+                Liste anlegen
               </Button>
             </>
           }

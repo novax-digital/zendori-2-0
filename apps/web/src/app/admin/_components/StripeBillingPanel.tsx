@@ -4,9 +4,11 @@
 // customer with test keys never bills it for real after the switch to live keys.
 import { HOME_COUNTRY, isVatIdAccepted, type BillingAccountRow } from '@zendori/core';
 import {
+  setupMailErrorLabel,
   stripeDashboardCustomerUrl,
   vatIdCheckOf,
   type BillingAccountState,
+  type SetupMailState,
 } from '@/lib/billing-account';
 import BillingDetailsFields from '@/components/billing/BillingDetailsFields';
 import Badge from '@/components/ui/Badge';
@@ -23,10 +25,24 @@ export interface MonthChoice {
   label: string;
 }
 
+const dateFormat = new Intl.DateTimeFormat('de-DE', {
+  dateStyle: 'medium',
+  timeZone: 'Europe/Berlin',
+});
+
+/** "gesendet am 26.11.2026", "wird gesendet …", or why nothing went out. */
+function setupMailText(mail: SetupMailState): string {
+  if (mail.pending) return 'wird gesendet …';
+  if (mail.error) return `nicht gesendet: ${setupMailErrorLabel(mail.error)}`;
+  if (mail.sentAt) return `gesendet am ${dateFormat.format(new Date(mail.sentAt))}`;
+  return 'noch nicht gesendet';
+}
+
 export function StripeBillingSummary({
   orgId,
   livemode,
   state,
+  mail,
   fromLabel,
   changeHref,
 }: {
@@ -34,6 +50,8 @@ export function StripeBillingSummary({
   /** null = Stripe is not configured (no STRIPE_SECRET_KEY). */
   livemode: boolean | null;
   state: BillingAccountState | null;
+  /** The mail that asks the customer to set up billing (0044); null = not available. */
+  mail: SetupMailState | null;
   /** Label of the first billing month, if set. */
   fromLabel: string | null;
   /** The page with ?panel=stripe. */
@@ -100,6 +118,15 @@ export function StripeBillingSummary({
         <Property label="Zahlungsart">
           {stripe?.paymentMethodLabel ?? <span className="muted">Keine</span>}
         </Property>
+        {enabled && mail?.available ? (
+          <Property label="E-Mail an Kunden">
+            {mail.error && !mail.pending ? (
+              <span className="muted">{setupMailText(mail)}</span>
+            ) : (
+              setupMailText(mail)
+            )}
+          </Property>
+        ) : null}
         {stripe?.syncPending ? <Property label="Abgleich">läuft …</Property> : null}
         {stripe?.syncError ? (
           <Property label="Abgleich">
@@ -148,6 +175,8 @@ export function StripeBillingDrawer({
   invoiceFrom,
   months,
   stored,
+  mail,
+  setupComplete,
   error,
 }: {
   orgId: string;
@@ -155,6 +184,10 @@ export function StripeBillingDrawer({
   closeHref: string;
   livemode: boolean;
   enabled: boolean;
+  /** The mail that asks the customer to set up billing (0044); null = not available. */
+  mail: SetupMailState | null;
+  /** Billing details and payment method are both on file: there is nothing to ask for. */
+  setupComplete: boolean;
   /** Stored first month (YYYY-MM) or the suggested default. */
   invoiceFrom: string;
   /** Selectable first months; contains `invoiceFrom`. */
@@ -213,6 +246,26 @@ export function StripeBillingDrawer({
             ))}
           </select>
         </Field>
+        {mail?.available && !setupComplete ? (
+          <SettingRow
+            label={mail.sentAt ? 'Kunden erneut per E-Mail erinnern' : 'Kunden per E-Mail informieren'}
+            help={
+              mail.sentAt
+                ? `Zuletzt ${setupMailText(mail)}. Inhaber und Admins bekommen die E-Mail mit dem Link zur Abrechnung noch einmal.`
+                : 'Inhaber und Admins bekommen eine E-Mail mit dem Link zu Einstellungen → Abrechnung und der Bitte, Rechnungsdaten und Zahlungsart zu hinterlegen. Nur bei eingeschalteter Stripe-Abrechnung.'
+            }
+            htmlFor="stripe-notify"
+          >
+            <input
+              id="stripe-notify"
+              name="notifyCustomer"
+              type="checkbox"
+              className="switch"
+              // on for the first mail (also one that is still waiting), off once it went out
+              defaultChecked={mail.pending || (mail.sentAt === null && mail.error === null)}
+            />
+          </SettingRow>
+        ) : null}
         <h3>Rechnungsdaten</h3>
         <p className="muted small">
           Optional: Du kannst die Angaben für den Kunden eintragen. Leer lassen, wenn der Kunde sie

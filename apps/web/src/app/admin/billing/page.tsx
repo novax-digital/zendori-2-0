@@ -50,7 +50,8 @@ export default async function AdminBillingPage({
   const rows = await Promise.all(
     orgs.map(async (org) => {
       const invoice = await getOrgInvoice(admin, org.id, period, catalog);
-      const costEur = Math.round(invoice.usage.totalCostUsd * catalog.ctx.usdToEur * 100) / 100;
+      // usage + phone numbers
+      const costEur = invoice.totalCostEur;
       return {
         org,
         priceEur: invoice.grandTotalEur,

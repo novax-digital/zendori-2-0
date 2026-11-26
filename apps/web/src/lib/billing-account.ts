@@ -1,6 +1,7 @@
 import 'server-only';
 import {
   billingDetailsToRow,
+  isMissingColumnError,
   isMissingRelationError,
   isPaymentMethodType,
   isPeriodKey,
@@ -159,6 +160,88 @@ export function billingDetailsFromForm(formData: FormData): Record<string, strin
     vatId: text('vatId'),
     billingEmail: text('billingEmail'),
   };
+}
+
+// --- the e-mail that asks the customer to set up billing (migration 0044) -------
+
+export interface SetupMailState {
+  /** false = migration 0044 is not applied yet (or the row could not be read). */
+  available: boolean;
+  /** A mail is waiting for the worker. */
+  pending: boolean;
+  sentAt: string | null;
+  /** Why the last request sent nothing; null = no problem. */
+  error: string | null;
+}
+
+const NO_SETUP_MAIL: SetupMailState = {
+  available: false,
+  pending: false,
+  sentAt: null,
+  error: null,
+};
+
+/** What the worker stores as the reason, in words for the operator. */
+const SETUP_MAIL_ERROR_LABELS: Record<string, string> = {
+  disabled: 'die Stripe-Abrechnung war ausgeschaltet',
+  sync_failed: 'der Abgleich mit Stripe ist fehlgeschlagen',
+  no_recipient: 'kein Inhaber oder Admin mit E-Mail-Adresse',
+  not_configured: 'im Worker fehlt der Absender (RESEND_FROM)',
+  send_failed: 'der Versand ist fehlgeschlagen',
+};
+
+export function setupMailErrorLabel(code: string): string {
+  return SETUP_MAIL_ERROR_LABELS[code] ?? code;
+}
+
+/** The setup mail of one org in one Stripe mode. Separate from the state above so a missing 0044 changes nothing else. */
+export async function loadSetupMailState(
+  admin: SupabaseClient,
+  orgId: string,
+  livemode: boolean
+): Promise<SetupMailState> {
+  const { data, error } = await admin
+    .from('billing_stripe_customers')
+    .select('setup_mail_requested_at, setup_mail_sent_at, setup_mail_error')
+    .eq('org_id', orgId)
+    .eq('livemode', livemode)
+    .maybeSingle();
+  if (error) return NO_SETUP_MAIL;
+  const row = data as {
+    setup_mail_requested_at: string | null;
+    setup_mail_sent_at: string | null;
+    setup_mail_error: string | null;
+  } | null;
+  return {
+    available: true,
+    pending: (row?.setup_mail_requested_at ?? null) !== null,
+    sentAt: row?.setup_mail_sent_at ?? null,
+    error: row?.setup_mail_error ?? null,
+  };
+}
+
+/**
+ * Sets or withdraws the request for the setup mail in one Stripe mode. The
+ * worker sends it after the next sync (requestBillingSync), to owners and
+ * admins, and only while billing details or payment method are missing.
+ */
+export async function setSetupMailRequest(
+  admin: SupabaseClient,
+  orgId: string,
+  livemode: boolean,
+  requested: boolean
+): Promise<{ error: boolean; unavailable: boolean }> {
+  const { error } = await admin
+    .from('billing_stripe_customers')
+    .update(
+      requested
+        ? { setup_mail_requested_at: new Date().toISOString(), setup_mail_error: null }
+        : { setup_mail_requested_at: null }
+    )
+    .eq('org_id', orgId)
+    .eq('livemode', livemode);
+  if (error && isMissingColumnError(error)) return { error: false, unavailable: true };
+  return { error: Boolean(error), unavailable: false };
 }
 
 /**

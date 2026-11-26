@@ -1,7 +1,8 @@
 'use client';
 
-// One price list on its own page (Preise & Pakete → Preisliste): nine positions
-// in three groups. Next to every sell price stands what the position costs us,
+// One usage price list on its own page (Preise & Pakete → Verbrauchspreisliste):
+// seven positions in two groups — only what is charged per unit. Monthly fees
+// (base fee, channels, phone numbers) belong to the package. Next to every sell price stands what the position costs us,
 // and the margin is calculated while typing — a price below purchase cost is
 // visible before it is saved. An empty field is not "nothing": it says what
 // will be charged instead (the purchase cost, or nothing for data actions).
@@ -98,7 +99,7 @@ export default function PriceListEditor(props: PriceListEditorProps) {
       <div className="page-split">
         <div className="page-body">
           {props.banners}
-          <Section title="Preisliste">
+          <Section title="Verbrauchspreisliste">
             <div className="form-narrow">
               <Field label="Name" htmlFor="list-name">
                 <input
@@ -116,7 +117,7 @@ export default function PriceListEditor(props: PriceListEditorProps) {
 
           <Section
             title="Verkaufspreise"
-            help="Ein Preis je Einheit, netto. Ein leeres Feld gibt unseren Einkaufspreis weiter."
+            help="Ein Preis je Einheit, netto. Ein leeres Feld gibt unseren Einkaufspreis weiter. Monatliche Gebühren wie Grundgebühr, Kanäle und Rufnummern stehen im Paket."
           >
             <div className="table-wrap">
               <table className="table--compact">
@@ -224,7 +225,7 @@ export default function PriceListEditor(props: PriceListEditorProps) {
             {props.isDefault ? (
               <p className="muted small">
                 Das ist die Standardliste: Sie gilt für jedes Paket und jeden Kunden ohne eigene
-                Preisliste.
+                Verbrauchspreisliste.
               </p>
             ) : null}
             <p className="muted small">

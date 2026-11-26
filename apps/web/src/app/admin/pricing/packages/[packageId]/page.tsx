@@ -1,10 +1,17 @@
-// One package (platform admin): fixed fees, channels and the price list on the
-// left, what a customer pays — calculated live — on the right. The form itself
+// One package (platform admin): fixed fees, channels, the fee per phone number
+// and the usage price list on the left, what a customer pays — calculated live — on the right. The form itself
 // is the client component PackageEditor; this page loads the data and owns the
 // page head with the rare actions (copy, delete).
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
-import { PACKAGE_CHANNEL_KINDS, PACKAGE_CHANNEL_LABELS, countOwnValues } from '@zendori/core';
+import {
+  NUMBER_KINDS,
+  NUMBER_KIND_LABELS,
+  PACKAGE_CHANNEL_KINDS,
+  PACKAGE_CHANNEL_LABELS,
+  countOwnValues,
+  numberCostEur,
+} from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { loadBillingCatalog } from '@/lib/billing';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -67,6 +74,12 @@ export default async function AdminPackagePage({
       feeMonthlyEur: term?.feeMonthlyEur ?? 0,
     };
   });
+  const numbers = NUMBER_KINDS.map((kind) => ({
+    kind,
+    label: NUMBER_KIND_LABELS[kind],
+    feeMonthlyEur: pkg.numbers[kind]?.feeMonthlyEur ?? null,
+    costEur: numberCostEur(kind, catalog.ctx),
+  }));
   const lists = [...catalog.tiers.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((list) => ({ id: list.id, name: list.name, isDefault: list.isDefault }));
@@ -123,6 +136,7 @@ export default async function AdminPackagePage({
           pkg.baseFeeMonthlyEur,
           pkg.yearlyDiscountPercent,
           channels,
+          numbers,
         ])}
         id={pkg.id}
         name={pkg.name}
@@ -132,6 +146,7 @@ export default async function AdminPackagePage({
         baseFeeMonthlyEur={pkg.baseFeeMonthlyEur}
         yearlyDiscountPercent={pkg.yearlyDiscountPercent}
         channels={channels}
+        numbers={numbers}
         lists={lists}
         customers={customers}
         banners={<DismissibleBanners error={error} notice={notice} />}

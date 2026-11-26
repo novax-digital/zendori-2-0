@@ -1,4 +1,4 @@
-// One price list (platform admin): a sell price per position with our purchase
+// One usage price list (platform admin): a sell price per position with our purchase
 // cost and the live margin next to it. The form is the client component
 // PriceListEditor; this page loads the data and owns the page head with the
 // rare actions (copy, delete).
@@ -66,7 +66,7 @@ export default async function AdminPriceListPage({
         title={list.name}
         badges={list.isDefault ? <Badge tone="success">Standard</Badge> : null}
         actions={
-          <Menu label={`Aktionen für Preisliste ${list.name}`}>
+          <Menu label={`Aktionen für Verbrauchspreisliste ${list.name}`}>
             <form action={createPriceList}>
               <input type="hidden" name="name" value={`${list.name} (Kopie)`.slice(0, 80)} />
               <input type="hidden" name="copyFrom" value={list.id} />
@@ -85,7 +85,7 @@ export default async function AdminPriceListPage({
               ) : (
                 <ConfirmDeleteButton
                   inMenu
-                  label="Preisliste löschen"
+                  label="Verbrauchspreisliste löschen"
                   confirmLabel="Endgültig löschen"
                 />
               )}

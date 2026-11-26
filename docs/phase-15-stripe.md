@@ -1,14 +1,20 @@
 # Phase 15 — Stripe: Zahlungsart, Rechnung, Einzug
 
 Owner-Auftrag 2026-11-25. Stand: **Teilphase 15a gebaut und gepusht (`9ed734d`); Migration 0041 ist
-seit 2026-11-26 eingespielt** (nach dem Deploy, Probelauf mit Rollback). Stripe selbst ist noch
-aus: Es sind keine Schlüssel gesetzt, der Webhook antwortet mit 503. Teilphase 15b (Monatsabschluss
-und Rechnungen) ist noch nicht gebaut. Es entsteht in 15a keine einzige Rechnung und es wird nichts
-eingezogen.
+seit 2026-11-26 eingespielt** (nach dem Deploy, Probelauf mit Rollback). **Seit 2026-11-26 abends
+läuft Stripe im Live-Modus:** Live-Schlüssel und Webhook-Secret stehen in Vercel (Production), der
+Worker läuft auf `9ed734d` mit demselben Schlüssel, der Webhook-Endpunkt ist im Live-Modus
+angelegt (ohne Signatur antwortet `/api/hooks/stripe` mit 400). Noch ist kein Kunde eingeschaltet.
+Teilphase 15b (Monatsabschluss und Rechnungen) ist noch nicht gebaut. Es entsteht in 15a keine
+einzige Rechnung und es wird nichts eingezogen.
 
 Die Aufrufe an Stripe sind gegen ein nachgebautes Stripe getestet und gegen die Stripe-Doku
 (API-Version `2026-11-18.endive`) geschrieben. **Gegen das echte Stripe ist noch nichts gelaufen** —
-das ist der erste Schritt der Testanleitung unten.
+der Testmodus wurde übersprungen; die Testanleitung unten zuerst mit der eigenen Organisation
+durchspielen.
+
+**Nachtrag 2026-11-26 — Kunde informieren (Migration 0044 eingespielt am 2026-11-26; Code gebaut,
+noch nicht gepusht):** E-Mail beim Einschalten und Hinweis in der App, siehe „Kunde informieren“.
 
 ## Grundsatz
 
@@ -48,6 +54,71 @@ der Betreiber den Schalter gesetzt hat:
   Angaben, aber keine Schaltflächen.
 
 Ohne den Schalter ist die Seite für den Kunden unverändert.
+
+## Kunde informieren (Migration 0044, Owner-Auftrag 2026-11-26)
+
+Bis hierhin erfuhr ein Kunde nichts davon, dass er über Stripe abgerechnet wird: Der Bereich unter
+Einstellungen → Abrechnung erschien einfach. Jetzt gibt es zwei Wege.
+
+**1. E-Mail beim Einschalten.** Im Dialog „Stripe-Abrechnung“ steht der Schalter **„Kunden per
+E-Mail informieren“** (beim ersten Mal an). Nach dem Speichern schickt der Worker **eine** E-Mail an
+alle Inhaber und Admins der Organisation: Betreff „Bitte Rechnungsdaten und Zahlungsart für … 
+hinterlegen“ (nennt nur, was fehlt), mit dem Link zu Einstellungen → Abrechnung und dem Hinweis,
+dass ohne Zahlungsart die Rechnung per E-Mail mit Bezahllink kommt.
+
+- Die Mail geht erst raus, wenn der Abgleich mit Stripe durch ist, und nie an einen Kunden, der
+  nicht (mehr) eingeschaltet ist. Sind Rechnungsdaten und Zahlungsart schon da, wird nichts gesendet.
+- Jede Person bekommt ihre eigene Mail (niemand sieht die Adressen der anderen). Mitarbeiter ohne
+  Admin-Rolle und die Rechnungs-E-Mail-Adresse bekommen nichts.
+- Im Testmodus steht „[Testmodus]“ im Betreff und ein Hinweis in der Mail.
+- Rechts im Block „Stripe-Abrechnung“ steht **„E-Mail an Kunden“**: „wird gesendet …“, „gesendet am
+  …“ oder „nicht gesendet: …“ mit dem Grund (Abgleich fehlgeschlagen, kein Empfänger, Absender
+  fehlt, Versand fehlgeschlagen). Es gibt keinen automatischen zweiten Versuch.
+- **Erinnern:** Dialog erneut öffnen, „Kunden erneut per E-Mail erinnern“ einschalten, speichern.
+- Technik: `billing_stripe_customers.setup_mail_requested_at / _sent_at / _error` (je Modus);
+  `apps/worker/src/billing/setup-mail.ts`, Vorlage
+  `packages/channels/src/notifications/billing-setup-email.ts`. Der Worker nimmt die Anforderung
+  aus der Zeile, **bevor** er sendet — ein abgebrochener Lauf kann eine Mail verlieren, aber nie
+  doppelt senden. Der Worker braucht `RESEND_FROM` und `APP_URL` (hat er schon für die
+  Mitarbeiter-Benachrichtigungen). Die Mail enthält keine Beträge und keine Nachrichteninhalte.
+
+**2. Hinweis in der App.** Inhaber und Admins sehen über jeder Seite ein Banner, solange etwas
+fehlt (`BillingSetupBanner`, Abfrage `GET /api/billing/setup-notice`):
+
+- **Rechnungsdaten fehlen:** „Bitte hinterlege deine Rechnungsdaten“ — bleibt, bis sie da sind.
+- **Nur die Zahlungsart fehlt:** „Bitte hinterlege eine Zahlungsart“ — mit „Später“ für sieben Tage
+  in diesem Browser ausblendbar, weil Zahlen per Bezahllink erlaubt ist.
+- Kein Banner für Mitarbeiter, auf der Abrechnungsseite selbst und im Plattform-Bereich.
+- Die Abfrage gibt keine Abrechnungsdaten heraus, nur was fehlt, und nur an Inhaber und Admins der
+  Organisation.
+
+**Nicht enthalten:** Frist, automatische Erinnerung, Sperre. Die Zahlungsart ist weiterhin keine
+Pflicht (Entscheidung 6).
+
+**Reihenfolge:** Migration 0044 zuerst, dann der Code. Ohne die Spalten zeigt der Dialog den
+Schalter nicht, und es wird keine Mail gesendet; das Banner braucht die Migration nicht. Für die
+Mail muss auch der **Worker** auf dem neuen Stand laufen.
+
+### Testanleitung „Kunde informieren“
+
+Mit der eigenen Organisation. Voraussetzung: Migration 0044 eingespielt, Web und Worker auf dem
+neuen Stand.
+
+1. **Admin → Abrechnung → eigene Organisation → „Einrichten“.** Erwartet: Schalter „Kunden per
+   E-Mail informieren“, eingeschaltet. „Über Stripe abrechnen“ an, Monat wählen, speichern.
+   Erwartet: Meldung „Stripe-Abrechnung aktiv. Inhaber und Admins bekommen gleich eine E-Mail.“
+2. **Rechts im Block „Stripe-Abrechnung“.** Erwartet: „E-Mail an Kunden: wird gesendet …“, nach
+   wenigen Sekunden und Neuladen „gesendet am …“.
+3. **Postfach.** Erwartet: eine Mail „Bitte Rechnungsdaten und Zahlungsart für … hinterlegen“ mit
+   Knopf „Zur Abrechnung in Zendori“; der Knopf führt auf Einstellungen → Abrechnung.
+4. **Inbox öffnen (als Inhaber).** Erwartet: oben das Banner „Bitte hinterlege deine
+   Rechnungsdaten“ mit „Zur Abrechnung“, ohne „Später“. Die Inbox passt weiter in das Fenster.
+5. **Rechnungsdaten speichern, zurück zur Inbox.** Erwartet: Banner „Bitte hinterlege eine
+   Zahlungsart“ mit „Später“. Klick auf „Später“: Banner weg, auch nach Neuladen.
+6. **Als Mitarbeiter ohne Admin-Rolle anmelden.** Erwartet: kein Banner.
+7. **Zahlungsart hinterlegen.** Erwartet: kein Banner mehr (auch in einem anderen Browser).
+8. **Admin → „Ändern“.** Erwartet: Der Schalter für die E-Mail ist verschwunden, weil nichts mehr
+   fehlt.
 
 ## Test- und Live-Modus
 
@@ -169,7 +240,9 @@ Ohne `STRIPE_SECRET_KEY` verhält sich alles wie vor Phase 15.
 1. App deployen (Web und Worker vertragen die fehlenden Tabellen: Funktion aus). **Erledigt
    2026-11-26** (Web auf Vercel; Worker-Image `9ed734ddea48fcb764df018ed2cd041d997397b7` gebaut).
 2. Migration 0041 einspielen (Plan + Diff, Freigabe). **Erledigt 2026-11-26.**
-3. Variablen in Vercel und im Worker setzen, Worker neu starten. **Offen (Owner).**
+3. Variablen in Vercel und im Worker setzen, Worker neu starten. **Erledigt 2026-11-26** — direkt
+   mit Live-Schlüsseln, der Testmodus wurde übersprungen. Der Live-Schlüssel stand dabei im Chat
+   und in der Shell-Historie des VPS: **in Stripe rollen und in Vercel + Worker tauschen.**
 
 ## Manuelle Testanleitung 15a (Stripe-Testmodus)
 
@@ -217,10 +290,19 @@ Wenn in Schritt 2, 4 oder 5 nichts ankommt: Admin → Kunde → „Abgleich: Feh
   gelöschter Kunde, anderes Konto, anderer Modus, Ereignis doppelt / in falscher Reihenfolge /
   für fremde Kunden.
 - `packages/core/test/rls.test.ts` — „RLS: Stripe billing (0041)“ (läuft nur mit Test-Supabase).
+- `apps/worker/test/billing-setup-mail.test.ts` — E-Mail „Kunde informieren“: Empfänger, einmal je
+  Anforderung, wartet auf den Abgleich, nie für ausgeschaltete Kunden, Gründe, Testmodus.
+- `packages/channels/test/billing-setup-email.test.ts` — Vorlage: Betreff nach dem, was fehlt, Link,
+  Testmodus, Escaping.
 
 ## Offen
 
-- **15b:** Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,
+- **Lücke beim Ausschalten (nicht behoben):** `customer-sync.ts` und der Scan prüfen `enabled`
+  nicht. Ein offener Abgleich wird nach dem Ausschalten noch abgearbeitet und legt den
+  Stripe-Kunden an oder aktualisiert ihn (nur Kundendaten, kein Geld). Die E-Mail aus „Kunde
+  informieren“ ist davon nicht betroffen: Sie prüft `enabled` selbst.
+- **15b** (Migration 0045 `billing_invoices` — 0043 und 0044 sind inzwischen vergeben):
+  Monatsabschluss kurz nach Monatsanfang (UTC), eingefrorene Rechnung in Cent,
   Stripe-Rechnung mit Vollvergleich vor dem Abschluss (Netto, Steuer, Brutto, kein Rabatt, kein
   Guthaben), Rechnungsmail mit PDF, Zahlstatus und Rückbuchung, Warnmails an den Betreiber,
   täglicher Abgleich offener Rechnungen. Dazu wandert die Rechenlogik aus

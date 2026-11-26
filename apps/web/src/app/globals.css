@@ -554,6 +554,17 @@ a:focus-visible {
   flex-direction: column;
 }
 
+/* A message above every app page (BillingSetupBanner). The component writes its
+   height to --app-banner-h so full-height pages keep fitting the window. */
+.app-banner {
+  flex: none;
+  padding: 16px 32px 0;
+}
+.app-banner .callout-action {
+  margin: 0;
+  align-self: center;
+}
+
 /* ============================================================================
    Pages outside the app chrome that ask for one thing (AuthCard):
    sign in, create the organisation, set a password, pick an organisation
@@ -1830,7 +1841,7 @@ input.num-input--sm {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--app-banner-h, 0px));
 }
 .page-body {
   padding: 24px 32px 48px;
@@ -1962,7 +1973,7 @@ input.num-input--sm {
 .with-subnav {
   flex: 1;
   display: flex;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--app-banner-h, 0px));
 }
 .with-subnav-content {
   flex: 1;

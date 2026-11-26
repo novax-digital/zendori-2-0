@@ -38,6 +38,7 @@ import { MCP_SYNC_QUEUE, syncMcpConnection } from './actions/mcp-sync.js';
 import { MEMBER_NOTIFY_QUEUE, deliverMemberNotification } from './notifications/deliver.js';
 import { workerStripe } from './billing/stripe.js';
 import { BILLING_SYNC_QUEUE, syncBillingCustomer } from './billing/customer-sync.js';
+import { sendBillingSetupMail } from './billing/setup-mail.js';
 import { STRIPE_EVENT_QUEUE, processStripeEvent } from './billing/stripe-events.js';
 import {
   LEARN_DISTILL_QUEUE,
@@ -392,6 +393,22 @@ async function main(): Promise<void> {
           await syncBillingCustomer({ supabase, logger, stripe }, orgId);
         } catch (err) {
           logger.error({ err: toErrorInfo(err), orgId }, 'billing customer sync job failed');
+        }
+        // 0044: the mail that asks the customer to set up billing — only once
+        // the sync above is through (a pending retry ends up here again)
+        try {
+          await sendBillingSetupMail(
+            {
+              supabase,
+              logger,
+              stripe,
+              from: process.env.RESEND_FROM,
+              appUrl: process.env.APP_URL,
+            },
+            orgId
+          );
+        } catch (err) {
+          logger.error({ err: toErrorInfo(err), orgId }, 'billing setup mail job failed');
         }
       }
     }

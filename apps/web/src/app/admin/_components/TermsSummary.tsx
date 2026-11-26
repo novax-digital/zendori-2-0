@@ -46,7 +46,7 @@ export default function TermsSummary({
             </Property>
           ) : null}
           <Property label="Eigene Werte">{ownValues === 0 ? 'keine' : ownValues}</Property>
-          <Property label="Preisliste">
+          <Property label="Verbrauchspreise">
             {list ? list.name : 'Einkaufspreise'}
             {sub.priceTierId ? ' (eigene)' : ''}
           </Property>

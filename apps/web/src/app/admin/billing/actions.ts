@@ -6,6 +6,8 @@ import { z } from 'zod';
 import {
   BILLING_CATEGORY_LABELS,
   BILLING_CATEGORY_ORDER,
+  NUMBER_KINDS,
+  NUMBER_KIND_LABELS,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   applicableOwnTerms,
@@ -15,6 +17,7 @@ import {
   isMissingColumnError,
   isMissingRelationError,
   isPeriodKey,
+  numberFeesSchema,
   parseBillingAccountRow,
   periodKeyOf,
   priceTierPricingSchema,
@@ -24,6 +27,7 @@ import {
   subscriptionOwnChannelsSchema,
   type BillingAccountRow,
   type BillingCategory,
+  type NumberKind,
   type OwnTermsText,
   type PackageChannelKind,
   type PackageTerms,
@@ -35,6 +39,7 @@ import {
   billingDetailsFromForm,
   requestBillingSync,
   saveBillingDetailsRow,
+  setSetupMailRequest,
 } from '@/lib/billing-account';
 import { syncChannelLimits } from '@/lib/billing-terms';
 import { stripeRuntime } from '@/lib/stripe';
@@ -87,6 +92,7 @@ function ownFieldLabel(field: string): string {
   if (group === 'fee' && key) {
     return `${PACKAGE_CHANNEL_LABELS[key as PackageChannelKind] ?? key} (je Kanal)`;
   }
+  if (group === 'number' && key) return NUMBER_KIND_LABELS[key as NumberKind] ?? key;
   if (group === 'price' && key) return BILLING_CATEGORY_LABELS[key as BillingCategory] ?? key;
   return field;
 }
@@ -136,7 +142,9 @@ export async function saveTerms(formData: FormData): Promise<void> {
     priceTierId: textField(formData.get('priceTierId')),
     interval: textField(formData.get('interval')),
   });
-  if (!parsed.success) return fail('Ungültige Angaben zu Paket, Laufzeit oder Preisliste.');
+  if (!parsed.success) {
+    return fail('Ungültige Angaben zu Paket, Laufzeit oder Verbrauchspreisliste.');
+  }
   const { orgId, packageId, priceTierId, interval } = parsed.data;
 
   const channelText: OwnTermsText['channels'] = {};
@@ -145,6 +153,10 @@ export async function saveTerms(formData: FormData): Promise<void> {
       quota: textField(formData.get(`own_quota_${kind}`)),
       feeMonthlyEur: textField(formData.get(`own_fee_${kind}`)),
     };
+  }
+  const numberText: OwnTermsText['numbers'] = {};
+  for (const kind of NUMBER_KINDS) {
+    numberText[kind] = textField(formData.get(`own_number_${kind}`));
   }
   const priceText: OwnTermsText['pricing'] = {};
   for (const category of BILLING_CATEGORY_ORDER) {
@@ -155,6 +167,7 @@ export async function saveTerms(formData: FormData): Promise<void> {
     baseFeeMonthlyEur: textField(formData.get('own_base')),
     yearlyDiscountPercent: textField(formData.get('own_discount')),
     channels: channelText,
+    numbers: numberText,
     pricing: priceText,
   });
   const firstError = Object.entries(read.errors)[0];
@@ -175,14 +188,17 @@ export async function saveTerms(formData: FormData): Promise<void> {
     packageTerms = packageTermsOf(pkg);
   }
   if (priceTierId !== '' && !catalog.tiers.has(priceTierId)) {
-    fail('Die Preisliste wurde nicht gefunden.');
+    fail('Die Verbrauchspreisliste wurde nicht gefunden.');
   }
 
   // only what can reach an invoice is stored (no fixed own values without a package)
   const own = applicableOwnTerms(read.own, packageTerms);
   const ownChannels = subscriptionOwnChannelsSchema.safeParse(own.channels);
   const ownPricing = priceTierPricingSchema.safeParse(own.pricing);
-  if (!ownChannels.success || !ownPricing.success) return fail('Ungültige eigene Werte.');
+  const ownNumbers = numberFeesSchema.safeParse(own.numbers);
+  if (!ownChannels.success || !ownPricing.success || !ownNumbers.success) {
+    return fail('Ungültige eigene Werte.');
+  }
 
   const patch = {
     package_id: packageId === '' ? null : packageId,
@@ -198,7 +214,18 @@ export async function saveTerms(formData: FormData): Promise<void> {
     channels: ownChannels.data,
     pricing: ownPricing.data,
   };
-  let written = await writeSubscription(admin, orgId, { ...patch, ...ownColumns });
+  let written = await writeSubscription(admin, orgId, {
+    ...patch,
+    ...ownColumns,
+    numbers: ownNumbers.data,
+  });
+  if (written.error && isMissingColumnError(written.error)) {
+    // 0043 not applied yet: everything but an own fee per phone number can be saved
+    if (Object.keys(own.numbers).length > 0) {
+      fail('Eigene Gebühren je Rufnummer sind noch nicht verfügbar (Migration 0043 ausstehend).');
+    }
+    written = await writeSubscription(admin, orgId, { ...patch, ...ownColumns });
+  }
   if (written.error && isMissingColumnError(written.error)) {
     // 0042 not applied yet: package, interval, list and setup fee can be saved
     const needsMigration =
@@ -303,7 +330,9 @@ function allowedInvoiceFrom(now: Date, stored: string | null): string[] {
  * Switches Stripe billing on or off for a customer IN THE CURRENT STRIPE MODE
  * (test / live — one row per mode, migration 0041), sets the first month and
  * optionally stores the billing details on the customer's behalf. Enabling asks
- * the worker to create and update the Stripe customer.
+ * the worker to create and update the Stripe customer. With "Kunden per E-Mail
+ * informieren" the worker then mails the owners and admins (0044); without it a
+ * request that is still open is withdrawn.
  */
 export async function saveStripeBilling(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
@@ -372,13 +401,24 @@ export async function saveStripeBilling(formData: FormData): Promise<void> {
   if (upsertError) {
     redirect(stripeReturnUrl(orgId, { error: 'Die Einstellung konnte nicht gespeichert werden.' }));
   }
+  // the mail request first: the sync job that follows is what sends it
+  const notify = enabled && formData.get('notifyCustomer') === 'on';
+  const mail = await setSetupMailRequest(admin, orgId, runtime.livemode, notify);
   if (enabled) await requestBillingSync(admin, orgId);
+
+  const mailNote = !notify
+    ? ''
+    : mail.unavailable
+      ? ' Die E-Mail an den Kunden ist noch nicht verfügbar (Migration 0044 ausstehend).'
+      : mail.error
+        ? ' Die E-Mail an den Kunden konnte nicht vorgemerkt werden.'
+        : ' Inhaber und Admins bekommen gleich eine E-Mail.';
 
   revalidatePath(`/admin/billing/${orgId}`);
   redirect(
     stripeReturnUrl(orgId, {
       notice: enabled
-        ? `Stripe-Abrechnung aktiv${runtime.livemode ? '' : ' (Testmodus)'}.`
+        ? `Stripe-Abrechnung aktiv${runtime.livemode ? '' : ' (Testmodus)'}.${mailNote}`
         : 'Stripe-Abrechnung ausgeschaltet.',
     })
   );

@@ -10,6 +10,8 @@ import {
   effectivePricing,
   euroInputError,
   formatEuroInput,
+  numberFeeLines,
+  numberFeesSchema,
   ownTermsToText,
   packageChannelsForStorage,
   packageChannelsSchema,
@@ -26,6 +28,7 @@ import {
   yearlyFromMonthlyEur,
   type OwnTermsText,
   type PackageTerms,
+  type PricingContext,
   type SubscriptionOwnTerms,
 } from '../src/billing.js';
 
@@ -45,7 +48,12 @@ const STARTER: PackageTerms = {
     voice: { quota: 1, feeMonthlyEur: 0 },
     chat: { quota: 1, feeMonthlyEur: 0 },
   },
+  // as moved from the standard list by migration 0043
+  numbers: { mobile: { feeMonthlyEur: 30 }, landline: { feeMonthlyEur: 10 } },
 };
+
+/** Purchase cost per number as configured in production. */
+const CTX: PricingContext = { usdToEur: 0.92, numberCostMobileEur: 15, numberCostLandlineEur: 5 };
 
 const own = (overrides: Partial<SubscriptionOwnTerms>): SubscriptionOwnTerms => ({
   ...NO_OWN_TERMS,
@@ -284,6 +292,105 @@ describe('recurringFeeLines', () => {
   });
 });
 
+describe('phone numbers (monthly fee of the package, migration 0043)', () => {
+  it('charges fee × active numbers — a customer without a number pays nothing', () => {
+    const terms = resolveTerms(STARTER);
+    expect(numberFeeLines(terms, { mobile: 0, landline: 0 }, CTX)).toEqual([]);
+    expect(numberFeeLines(terms, { mobile: 1, landline: 0 }, CTX)).toEqual([
+      { key: 'number:mobile', label: 'Rufnummer Mobil (1×)', amountEur: 30 },
+    ]);
+    expect(numberFeeLines(terms, { mobile: 1, landline: 3 }, CTX)).toEqual([
+      { key: 'number:mobile', label: 'Rufnummer Mobil (1×)', amountEur: 30 },
+      { key: 'number:landline', label: 'Rufnummer Festnetz (3×)', amountEur: 30 },
+    ]);
+  });
+
+  it("a customer's own fee wins over the package, per kind", () => {
+    const terms = resolveTerms(STARTER, own({ numbers: { landline: { feeMonthlyEur: 7.5 } } }));
+    expect(terms.numbers).toEqual([
+      { kind: 'mobile', label: 'Rufnummer Mobil', feeMonthlyEur: 30, feeSource: 'package' },
+      { kind: 'landline', label: 'Rufnummer Festnetz', feeMonthlyEur: 7.5, feeSource: 'customer' },
+    ]);
+    expect(numberFeeLines(terms, { mobile: 1, landline: 2 }, CTX).map((l) => l.amountEur)).toEqual([
+      30, 15,
+    ]);
+  });
+
+  it('passes the purchase cost on where the package does not price a kind', () => {
+    const terms = resolveTerms({ ...STARTER, numbers: { mobile: { feeMonthlyEur: 30 } } });
+    expect(terms.numbers[1]).toMatchObject({ kind: 'landline', feeMonthlyEur: null });
+    expect(numberFeeLines(terms, { mobile: 0, landline: 2 }, CTX)).toEqual([
+      { key: 'number:landline', label: 'Rufnummer Festnetz (2×)', amountEur: 10 },
+    ]);
+  });
+
+  it('without a package numbers are passed on at purchase cost', () => {
+    expect(numberFeeLines(null, { mobile: 1, landline: 1 }, CTX).map((l) => l.amountEur)).toEqual([
+      15, 5,
+    ]);
+  });
+
+  it('an explicit 0 € gives the number away; such a line is left out', () => {
+    const terms = resolveTerms(STARTER, own({ numbers: { mobile: { feeMonthlyEur: 0 } } }));
+    expect(numberFeeLines(terms, { mobile: 2, landline: 0 }, CTX)).toEqual([]);
+  });
+
+  it('is not part of the fixed monthly sum and gets no yearly discount', () => {
+    const discounted: PackageTerms = { ...STARTER, yearlyDiscountPercent: 10 };
+    const terms = resolveTerms(discounted);
+    // the fixed sum is base + channels only …
+    expect(recurringMonthlyTotalEur(terms, 'monthly')).toBe(15);
+    expect(recurringMonthlyTotalEur(terms, 'yearly')).toBe(13.5);
+    expect(recurringFeeLines(terms, 'yearly').map((l) => l.key)).toEqual(['channel:whatsapp']);
+    // … and a number costs the same on either term
+    expect(numberFeeLines(terms, { mobile: 1, landline: 0 }, CTX)[0]?.amountEur).toBe(30);
+  });
+
+  it('counts, reads and writes an own fee like every other own value', () => {
+    const read = readOwnTerms({
+      setupFeeEur: '',
+      baseFeeMonthlyEur: '',
+      yearlyDiscountPercent: '',
+      channels: {},
+      numbers: { mobile: '25', landline: '' },
+      pricing: {},
+    });
+    expect(read.errors).toEqual({});
+    expect(read.own.numbers).toEqual({ mobile: { feeMonthlyEur: 25 } });
+    expect(countOwnValues(read.own)).toBe(1);
+    expect(ownTermsToText(read.own).numbers).toEqual({ mobile: '25,00', landline: '' });
+
+    const bad = readOwnTerms({
+      setupFeeEur: '',
+      baseFeeMonthlyEur: '',
+      yearlyDiscountPercent: '',
+      channels: {},
+      numbers: { mobile: '1.500' },
+      pricing: {},
+    });
+    expect(bad.errors['number:mobile']).toBe(euroInputError('ambiguous'));
+    expect(bad.own.numbers).toEqual({});
+  });
+
+  it('is dropped without a package — numbers then cost the purchase price', () => {
+    const kept = applicableOwnTerms(own({ numbers: { mobile: { feeMonthlyEur: 25 } } }), STARTER);
+    expect(kept.numbers).toEqual({ mobile: { feeMonthlyEur: 25 } });
+    const dropped = applicableOwnTerms(own({ numbers: { mobile: { feeMonthlyEur: 25 } } }), null);
+    expect(dropped.numbers).toEqual({});
+  });
+
+  it('the stored shape drops junk per kind instead of failing', () => {
+    expect(
+      numberFeesSchema.parse({
+        mobile: { feeMonthlyEur: 30 },
+        landline: { feeMonthlyEur: -1 },
+        fax: { feeMonthlyEur: 1 },
+      })
+    ).toEqual({ mobile: { feeMonthlyEur: 30 } });
+    expect(numberFeesSchema.parse({})).toEqual({});
+  });
+});
+
 describe('channelLimitPlan', () => {
   it('turns the terms into limits: a number, or no limit at all', () => {
     const terms = resolveTerms(
@@ -365,7 +472,6 @@ describe('price positions for the editors', () => {
   it('says the unit in words', () => {
     expect(priceUnitWords('voice')).toBe('je Minute');
     expect(priceUnitWords('ai')).toBe('je Vorgang');
-    expect(priceUnitWords('numbers_mobile')).toBe('je Nummer und Monat');
     expect(priceUnitWords('data_actions')).toBe('je Aktion');
   });
 });
@@ -376,6 +482,7 @@ describe("a customer's own values, as typed (Konditionen)", () => {
     baseFeeMonthlyEur: '',
     yearlyDiscountPercent: '',
     channels: {},
+    numbers: {},
     pricing: {},
   };
 
@@ -465,6 +572,7 @@ describe("a customer's own values, as typed (Konditionen)", () => {
       baseFeeMonthlyEur: 49,
       yearlyDiscountPercent: 12.5,
       channels: { whatsapp: { quota: 2 }, chat: { feeMonthlyEur: 4.5 }, voice: { quota: 0 } },
+      numbers: { landline: { feeMonthlyEur: 7.5 } },
       pricing: {
         voice: { mode: 'unit', unitPriceEur: 0.39 },
         ai: { mode: 'unit', unitPriceEur: 0.0125 },
@@ -491,6 +599,7 @@ describe("a customer's own values, as typed (Konditionen)", () => {
       baseFeeMonthlyEur: 49,
       yearlyDiscountPercent: 10,
       channels: { whatsapp: { quota: 2, feeMonthlyEur: 10 } },
+      numbers: { mobile: { feeMonthlyEur: 25 } },
       pricing: { voice: { mode: 'unit', unitPriceEur: 0.39 } },
     };
     expect(applicableOwnTerms(own, null)).toEqual({

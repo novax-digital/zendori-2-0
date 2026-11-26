@@ -6,11 +6,15 @@ import {
   DEFAULT_NUMBER_COST_MOBILE_EUR,
   DEFAULT_USD_TO_EUR,
   NO_OWN_TERMS,
+  NUMBER_KINDS,
   PACKAGE_CHANNEL_KINDS,
   categoryPriceEur,
   effectivePricing,
   emailCostUsd,
   isMissingColumnError,
+  numberCostEur,
+  numberFeeLines,
+  numberFeesSchema,
   packageChannelsSchema,
   priceTierPricingSchema,
   recurringFeeLines,
@@ -20,6 +24,8 @@ import {
   type BillingCategory,
   type BillingInterval,
   type EffectiveTerms,
+  type NumberCounts,
+  type NumberFees,
   type PackageChannels,
   type PackageTerms,
   type PricingContext,
@@ -30,11 +36,11 @@ import {
 
 // Billing rollup + invoicing (migrations 0021/0022). Runs only in guarded
 // service-role server code (admin: platform_admins; customer: verified org
-// membership). Combines usage (billing_org_rollup) priced through the org's tier
-// with the recurring package fees. Returns €-amounts + quantities; our raw USD
+// membership). Combines usage (billing_org_rollup) priced through the org's
+// usage price list with the monthly fees of the package — base fee, channels
+// and, since 0043, the phone numbers. Returns €-amounts + quantities; our raw
 // cost and the margin never reach the customer client.
 
-const MS_PER_DAY = 86_400_000;
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 const CATEGORY_ORDER: BillingCategory[] = [
@@ -44,8 +50,6 @@ const CATEGORY_ORDER: BillingCategory[] = [
   'voice',
   'whatsapp',
   'email',
-  'numbers_mobile',
-  'numbers_landline',
   'data_actions',
 ];
 
@@ -68,6 +72,11 @@ export interface BillingBreakdown {
   lines: BillingLineItem[];
   totalCostUsd: number;
   totalPriceEur: number;
+  /**
+   * Active phone numbers per kind (phone_numbers, status active). Not a usage
+   * line: they are charged per month through the package (getOrgInvoice).
+   */
+  numberCounts: NumberCounts;
 }
 
 type RollupRow = { category: string; quantity: number | string; cost_usd: number | string };
@@ -85,8 +94,6 @@ export async function getOrgBilling(
   ctx: PricingContext,
   tier: TierPricing | null
 ): Promise<BillingBreakdown> {
-  const periodDays = Math.max(0, (Date.parse(toIso) - Date.parse(fromIso)) / MS_PER_DAY);
-
   const raw = new Map<string, { quantity: number; costUsd: number }>();
   const { data, error } = await admin.rpc('billing_org_rollup', {
     p_org_id: orgId,
@@ -106,13 +113,6 @@ export async function getOrgBilling(
 
   const wa = get('whatsapp_count');
   const em = get('email_count');
-  const mob = get('numbers_mobile_count');
-  const land = get('numbers_landline_count');
-  // Number costs are configured in EUR (billing_settings); represent them as a
-  // synthetic costUsd (÷ usd_to_eur) so the shared cost/price math stays uniform.
-  const monthsFraction = periodDays / 30;
-  const numberCostUsd = (count: number, monthlyEur: number): number =>
-    ctx.usdToEur > 0 ? (count * monthlyEur * monthsFraction) / ctx.usdToEur : 0;
   const byCategory: Record<BillingCategory, { quantity: number; costUsd: number }> = {
     ai: get('ai'),
     embeddings: get('embeddings'),
@@ -120,14 +120,6 @@ export async function getOrgBilling(
     voice: get('voice'),
     whatsapp: { quantity: wa.quantity, costUsd: whatsappCostUsd(wa.quantity) },
     email: { quantity: em.quantity, costUsd: emailCostUsd(em.quantity) },
-    numbers_mobile: {
-      quantity: mob.quantity,
-      costUsd: numberCostUsd(mob.quantity, ctx.numberCostMobileEur),
-    },
-    numbers_landline: {
-      quantity: land.quantity,
-      costUsd: numberCostUsd(land.quantity, ctx.numberCostLandlineEur),
-    },
     // counted in the usage ledger by a trigger on action_runs (0040); no purchase
     // cost — the row is absent before the migration and then simply 0
     data_actions: { quantity: get('data_actions').quantity, costUsd: 0 },
@@ -148,7 +140,12 @@ export async function getOrgBilling(
   const totalCostUsd = lines.reduce((sum, line) => sum + line.costUsd, 0);
   const totalPriceEur = round2(lines.reduce((sum, line) => sum + line.priceEur, 0));
 
-  return { orgId, fromIso, toIso, lines, totalCostUsd, totalPriceEur };
+  const numberCounts: NumberCounts = {
+    mobile: get('numbers_mobile_count').quantity,
+    landline: get('numbers_landline_count').quantity,
+  };
+
+  return { orgId, fromIso, toIso, lines, totalCostUsd, totalPriceEur, numberCounts };
 }
 
 // --- pricing catalog (tiers, packages, subscriptions) ------------------------
@@ -171,6 +168,8 @@ export interface PackageRow {
   /** Discount on a yearly term in percent (0042; 0 before the migration). */
   yearlyDiscountPercent: number;
   channels: PackageChannels;
+  /** Fee per phone number and month (0043; empty before the migration). */
+  numbers: NumberFees;
   isActive: boolean;
 }
 
@@ -245,9 +244,11 @@ function parsePackage(row: {
   base_fee_yearly_eur: number | string;
   yearly_discount_percent?: number | string | null;
   channels: unknown;
+  numbers?: unknown;
   is_active: boolean;
 }): PackageRow {
   const channels = packageChannelsSchema.safeParse(row.channels ?? {});
+  const numbers = numberFeesSchema.safeParse(row.numbers ?? {});
   return {
     id: row.id,
     name: row.name,
@@ -257,8 +258,26 @@ function parsePackage(row: {
     baseFeeYearlyEur: Number(row.base_fee_yearly_eur) || 0,
     yearlyDiscountPercent: Number(row.yearly_discount_percent) || 0,
     channels: channels.success ? (channels.data as PackageChannels) : {},
+    numbers: numbers.success ? numbers.data : {},
     isActive: row.is_active,
   };
+}
+
+/**
+ * Selects with the newest columns first and falls back column set by column
+ * set while a column is missing — a deploy ahead of a migration then reads
+ * exactly what the database already has.
+ */
+async function selectTolerant(
+  run: (columns: string) => PromiseLike<{ data: unknown; error: unknown }>,
+  columnSets: string[]
+): Promise<unknown[]> {
+  for (const columns of columnSets) {
+    const { data, error } = await run(columns);
+    if (error && isMissingColumnError(error)) continue;
+    return Array.isArray(data) ? data : [];
+  }
+  return [];
 }
 
 /** Load tiers, packages and subscriptions once (all skew-tolerant → empty pre-0022). */
@@ -281,31 +300,33 @@ export async function loadBillingCatalog(admin: SupabaseClient): Promise<Billing
     if (tier.isDefault) catalog.defaultTier = tier;
   }
 
-  // The 0042 columns (yearly discount, a customer's own values) may not exist
-  // yet: a missing column falls back to the columns that always existed, so a
-  // deploy ahead of the migration bills exactly as before.
-  let { data: pkgData, error: pkgError } = await admin
-    .from('packages')
-    .select(`${PACKAGE_COLUMNS}, yearly_discount_percent`);
-  if (pkgError && isMissingColumnError(pkgError)) {
-    ({ data: pkgData, error: pkgError } = await admin.from('packages').select(PACKAGE_COLUMNS));
-  }
-  for (const row of (pkgData ?? []) as unknown as Parameters<typeof parsePackage>[0][]) {
+  // The 0043 column (fee per phone number) and the 0042 columns (yearly
+  // discount, a customer's own values) may not exist yet: a missing column
+  // falls back to the columns the database has. Before 0043 no package prices
+  // a number, so numbers are passed on at purchase cost until it is applied.
+  const pkgData = await selectTolerant(
+    (columns) => admin.from('packages').select(columns),
+    [
+      `${PACKAGE_COLUMNS}, yearly_discount_percent, numbers`,
+      `${PACKAGE_COLUMNS}, yearly_discount_percent`,
+      PACKAGE_COLUMNS,
+    ]
+  );
+  for (const row of pkgData as Parameters<typeof parsePackage>[0][]) {
     const pkg = parsePackage(row);
     catalog.packages.set(pkg.id, pkg);
   }
 
-  let { data: subData, error: subError } = await admin
-    .from('org_subscriptions')
-    .select(
-      `${SUBSCRIPTION_COLUMNS}, base_fee_monthly_eur, yearly_discount_percent, channels, pricing`
-    );
-  if (subError && isMissingColumnError(subError)) {
-    ({ data: subData, error: subError } = await admin
-      .from('org_subscriptions')
-      .select(SUBSCRIPTION_COLUMNS));
-  }
-  for (const row of (subData ?? []) as unknown as SubscriptionDbRow[]) {
+  const OWN_0042 = 'base_fee_monthly_eur, yearly_discount_percent, channels, pricing';
+  const subData = await selectTolerant(
+    (columns) => admin.from('org_subscriptions').select(columns),
+    [
+      `${SUBSCRIPTION_COLUMNS}, ${OWN_0042}, numbers`,
+      `${SUBSCRIPTION_COLUMNS}, ${OWN_0042}`,
+      SUBSCRIPTION_COLUMNS,
+    ]
+  );
+  for (const row of subData as SubscriptionDbRow[]) {
     const setupFeeEur = row.setup_fee_eur === null ? null : Number(row.setup_fee_eur);
     catalog.subscriptions.set(row.org_id, {
       orgId: row.org_id,
@@ -337,6 +358,7 @@ interface SubscriptionDbRow {
   yearly_discount_percent?: number | string | null;
   channels?: unknown;
   pricing?: unknown;
+  numbers?: unknown;
 }
 
 /** null/absent → null; a stored number (0 included) stays a number. */
@@ -346,16 +368,18 @@ const ownNumber = (value: number | string | null | undefined): number | null => 
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
-/** A customer's own values out of the subscription row (0042 columns optional). */
+/** A customer's own values out of the subscription row (0042/0043 columns optional). */
 function parseOwnTerms(row: SubscriptionDbRow, setupFeeEur: number | null): SubscriptionOwnTerms {
   const channels = subscriptionOwnChannelsSchema.safeParse(row.channels ?? {});
   const pricing = priceTierPricingSchema.safeParse(row.pricing ?? {});
+  const numbers = numberFeesSchema.safeParse(row.numbers ?? {});
   return {
     ...NO_OWN_TERMS,
     setupFeeEur,
     baseFeeMonthlyEur: ownNumber(row.base_fee_monthly_eur),
     yearlyDiscountPercent: ownNumber(row.yearly_discount_percent),
     channels: channels.success ? channels.data : {},
+    numbers: numbers.success ? numbers.data : {},
     pricing: pricing.success ? (pricing.data as TierPricing) : {},
   };
 }
@@ -391,6 +415,7 @@ export function packageTermsOf(pkg: PackageRow): PackageTerms {
     baseFeeMonthlyEur: pkg.baseFeeMonthlyEur,
     yearlyDiscountPercent: pkg.yearlyDiscountPercent,
     channels,
+    numbers: pkg.numbers,
   };
 }
 
@@ -405,18 +430,23 @@ export function resolveOrgTerms(catalog: BillingCatalog, orgId: string): Effecti
 // --- combined invoice --------------------------------------------------------
 
 export interface RecurringLine {
-  /** `base`, `channel:<kind>` or `setup`. */
+  /** `base`, `channel:<kind>`, `number:<kind>` or `setup`. */
   key: string;
   label: string;
   amountEur: number;
+  /** What the line costs us (phone numbers only) — admin-only, never shown to the customer. */
+  costEur?: number;
 }
 
 export interface OrgInvoice {
   usage: BillingBreakdown;
+  /** Monthly lines: base fee, channels, phone numbers, plus the one-time setup. */
   recurring: RecurringLine[];
   recurringTotalEur: number;
   setupEur: number;
   grandTotalEur: number;
+  /** Our cost of the whole invoice in EUR (usage + phone numbers) — admin-only. */
+  totalCostEur: number;
   packageName: string | null;
   interval: BillingInterval | null;
 }
@@ -427,7 +457,11 @@ function isSetupMonth(startedAtIso: string, fromIso: string, toIso: string): boo
   return Number.isFinite(start) && start >= Date.parse(fromIso) && start < Date.parse(toIso);
 }
 
-/** Full invoice for one org + month: usage (tier-priced) + recurring + setup. */
+/**
+ * Full invoice for one org + month: usage (priced through the usage price
+ * list) + monthly fees + setup. Phone numbers are a monthly fee of the package,
+ * charged per active number; without a package they are passed on at cost.
+ */
 export async function getOrgInvoice(
   admin: SupabaseClient,
   orgId: string,
@@ -441,6 +475,7 @@ export async function getOrgInvoice(
   const pkg = sub?.packageId ? catalog.packages.get(sub.packageId) : undefined;
 
   let recurring: RecurringLine[] = [];
+  let terms: EffectiveTerms | null = null;
   let setupEur = 0;
   let packageName: string | null = null;
   let interval: BillingInterval | null = null;
@@ -450,16 +485,26 @@ export async function getOrgInvoice(
     packageName = pkg.name;
     // package + the customer's own values; on a yearly term each month carries
     // the monthly price minus the discount (core: recurringFeeLines)
-    const terms = resolveTerms(packageTermsOf(pkg), sub.own);
+    terms = resolveTerms(packageTermsOf(pkg), sub.own);
     recurring = recurringFeeLines(terms, sub.interval);
     if (isSetupMonth(sub.startedAt, period.fromIso, period.toIso)) {
       setupEur = round2(terms.setupFeeEur);
-      if (setupEur > 0) {
-        recurring.push({ key: 'setup', label: 'Einrichtung (einmalig)', amountEur: setupEur });
-      }
     }
   }
 
+  const numberLines = numberFeeLines(terms, usage.numberCounts, catalog.ctx);
+  let numbersCostEur = 0;
+  for (const kind of NUMBER_KINDS) {
+    const costEur = round2(usage.numberCounts[kind] * numberCostEur(kind, catalog.ctx));
+    numbersCostEur += costEur;
+    const line = numberLines.find((candidate) => candidate.key === `number:${kind}`);
+    if (line) recurring.push({ ...line, costEur });
+  }
+  if (setupEur > 0) {
+    recurring.push({ key: 'setup', label: 'Einrichtung (einmalig)', amountEur: setupEur });
+  }
+
+  const totalCostEur = round2(usage.totalCostUsd * catalog.ctx.usdToEur + numbersCostEur);
   const recurringTotalEur = round2(recurring.reduce((sum, line) => sum + line.amountEur, 0));
   const grandTotalEur = round2(usage.totalPriceEur + recurringTotalEur);
 
@@ -469,6 +514,7 @@ export async function getOrgInvoice(
     recurringTotalEur,
     setupEur,
     grandTotalEur,
+    totalCostEur,
     packageName,
     interval,
   };

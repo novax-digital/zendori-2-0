@@ -9,7 +9,11 @@ import { z } from 'zod';
 // billed by counted quantity (voice minutes, WhatsApp/e-mail messages, number
 // rental) plus the FX + markup used to turn our USD cost into a customer €.
 
-/** Cost categories shown in the billing breakdown. */
+/**
+ * Usage positions: what is counted and charged per unit (the "Verbrauchspreisliste").
+ * Everything that is paid per month — base fee, channels, phone numbers — is
+ * part of the package instead (see NUMBER_KINDS below).
+ */
 export type BillingCategory =
   | 'ai' // Anthropic classify/extract/rerank/learn/draft (from ai_runs)
   | 'embeddings' // OpenAI retrieval + KB-index embeddings
@@ -17,8 +21,6 @@ export type BillingCategory =
   | 'voice' // live phone minutes (xAI audio + Twilio SIP)
   | 'whatsapp' // WhatsApp messages (Twilio/Meta)
   | 'email' // outbound e-mail (Resend)
-  | 'numbers_mobile' // monthly rental, mobile numbers
-  | 'numbers_landline' // monthly rental, landline numbers (local + national)
   | 'data_actions'; // successful agent calls of an org's own system (Phase 13/14a)
 
 /** German labels for the customer/admin UI. */
@@ -29,8 +31,6 @@ export const BILLING_CATEGORY_LABELS: Record<BillingCategory, string> = {
   voice: 'Telefonie',
   whatsapp: 'WhatsApp-Nachrichten',
   email: 'E-Mail-Versand',
-  numbers_mobile: 'Rufnummern (Mobil)',
-  numbers_landline: 'Rufnummern (Festnetz)',
   data_actions: 'Data Actions',
 };
 
@@ -42,8 +42,6 @@ export const BILLING_CATEGORY_UNIT: Record<BillingCategory, string> = {
   voice: 'Minuten',
   whatsapp: 'Nachrichten',
   email: 'E-Mails',
-  numbers_mobile: 'Nummern',
-  numbers_landline: 'Nummern',
   data_actions: 'Aktionen',
 };
 
@@ -129,7 +127,7 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 export const DEFAULT_NUMBER_COST_MOBILE_EUR = 3.0;
 export const DEFAULT_NUMBER_COST_LANDLINE_EUR = 1.5;
 
-/** Display order of the price-list positions. */
+/** Display order of the positions of a usage price list. */
 export const BILLING_CATEGORY_ORDER: BillingCategory[] = [
   'ai',
   'embeddings',
@@ -137,8 +135,6 @@ export const BILLING_CATEGORY_ORDER: BillingCategory[] = [
   'voice',
   'whatsapp',
   'email',
-  'numbers_mobile',
-  'numbers_landline',
   'data_actions',
 ];
 
@@ -166,8 +162,6 @@ export const BILLING_CATEGORY_BILLING_LABEL: Record<BillingCategory, string> = {
   voice: 'transaktionell',
   whatsapp: 'transaktionell',
   email: 'transaktionell',
-  numbers_mobile: 'monatlich',
-  numbers_landline: 'monatlich',
   data_actions: 'transaktionell',
 };
 
@@ -179,23 +173,15 @@ export const BILLING_CATEGORY_PRICE_UNIT: Record<BillingCategory, string> = {
   voice: '€/Minute',
   whatsapp: '€/Nachricht',
   email: '€/E-Mail',
-  numbers_mobile: '€/Nummer/Monat',
-  numbers_landline: '€/Nummer/Monat',
   data_actions: '€/Aktion',
 };
 
-/** Categories with a fixed per-unit purchase cost (rate card / configured). */
-export const UNIT_PRICED_CATEGORIES = [
-  'voice',
-  'whatsapp',
-  'email',
-  'numbers_mobile',
-  'numbers_landline',
-] as const;
+/** Categories with a fixed per-unit purchase cost (rate card). */
+export const UNIT_PRICED_CATEGORIES = ['voice', 'whatsapp', 'email'] as const;
 export type UnitPricedCategory = (typeof UNIT_PRICED_CATEGORIES)[number];
 
-/** USD cost per unit for the rate-card unit categories (voice/whatsapp/email). */
-const STATIC_UNIT_COST_USD: Record<'voice' | 'whatsapp' | 'email', number> = {
+/** USD cost per unit for the rate-card unit categories. */
+const STATIC_UNIT_COST_USD: Record<UnitPricedCategory, number> = {
   voice: VOICE_USD_PER_MINUTE,
   whatsapp: WHATSAPP_USD_PER_MESSAGE,
   email: EMAIL_USD_PER_MESSAGE,
@@ -217,7 +203,12 @@ export const categoryPricingRuleSchema = z.object({
 export type CategoryPricingRule = z.infer<typeof categoryPricingRuleSchema>;
 
 const ruleOptional = categoryPricingRuleSchema.optional().catch(undefined);
-/** A price list's positions. Absent position ⇒ pass-through at cost. */
+/**
+ * A usage price list's positions. Absent position ⇒ pass-through at cost.
+ * Lists stored before migration 0043 may still carry `numbers_mobile` /
+ * `numbers_landline`; those keys are dropped here (the fee per phone number
+ * moved into the package) and disappear from the row with its next save.
+ */
 export const priceTierPricingSchema = z
   .object({
     ai: ruleOptional,
@@ -226,8 +217,6 @@ export const priceTierPricingSchema = z
     voice: ruleOptional,
     whatsapp: ruleOptional,
     email: ruleOptional,
-    numbers_mobile: ruleOptional,
-    numbers_landline: ruleOptional,
     data_actions: ruleOptional,
   })
   .partial();
@@ -249,10 +238,41 @@ export const DEFAULT_PRICING_CONTEXT: PricingContext = {
 
 /** Our purchase cost per unit in EUR for a unit-priced category. */
 export function unitCostEur(category: UnitPricedCategory, ctx: PricingContext): number {
-  if (category === 'numbers_mobile') return ctx.numberCostMobileEur;
-  if (category === 'numbers_landline') return ctx.numberCostLandlineEur;
   return STATIC_UNIT_COST_USD[category] * ctx.usdToEur;
 }
+
+// --- phone numbers (monthly, part of the package — migration 0043) -------------
+
+/** Phone-number kinds with their own monthly fee (`national` counts as landline). */
+export const NUMBER_KINDS = ['mobile', 'landline'] as const;
+export type NumberKind = (typeof NUMBER_KINDS)[number];
+export const NUMBER_KIND_LABELS: Record<NumberKind, string> = {
+  mobile: 'Rufnummer Mobil',
+  landline: 'Rufnummer Festnetz',
+};
+
+/** What one phone number of this kind costs US per month (EUR, billing_settings). */
+export function numberCostEur(kind: NumberKind, ctx: PricingContext): number {
+  return kind === 'mobile' ? ctx.numberCostMobileEur : ctx.numberCostLandlineEur;
+}
+
+/** Fee per phone number and month. */
+export const numberFeeSchema = z.object({
+  feeMonthlyEur: z.number().min(0).max(100_000),
+});
+const numberFeeOptional = numberFeeSchema.optional().catch(undefined);
+/**
+ * Fee per number kind — the shape of `packages.numbers` (the standard) and of
+ * `org_subscriptions.numbers` (a customer's own fee). An absent kind means: in
+ * the package "our purchase cost is passed on", at the customer "as in the package".
+ */
+export const numberFeesSchema = z
+  .object({ mobile: numberFeeOptional, landline: numberFeeOptional })
+  .partial();
+export type NumberFees = Partial<Record<NumberKind, { feeMonthlyEur: number }>>;
+
+/** How many active phone numbers a customer has, per kind. */
+export type NumberCounts = Record<NumberKind, number>;
 
 /**
  * Customer price (EUR) for one billing line.
@@ -435,6 +455,8 @@ export interface SubscriptionOwnTerms {
   baseFeeMonthlyEur: number | null;
   yearlyDiscountPercent: number | null;
   channels: SubscriptionOwnChannels;
+  /** Own fee per phone number and month; wins over the package (0043). */
+  numbers: NumberFees;
   /** Own unit price per position; wins over the price list. */
   pricing: TierPricing;
 }
@@ -444,6 +466,7 @@ export const NO_OWN_TERMS: SubscriptionOwnTerms = {
   baseFeeMonthlyEur: null,
   yearlyDiscountPercent: null,
   channels: {},
+  numbers: {},
   pricing: {},
 };
 
@@ -457,6 +480,9 @@ export function countOwnValues(own: SubscriptionOwnTerms): number {
     const term = own.channels[kind];
     if (term?.quota !== undefined) count += 1;
     if (term?.feeMonthlyEur !== undefined) count += 1;
+  }
+  for (const kind of NUMBER_KINDS) {
+    if (own.numbers[kind]) count += 1;
   }
   for (const category of BILLING_CATEGORY_ORDER) {
     if (own.pricing[category]) count += 1;
@@ -472,10 +498,15 @@ export interface OwnTermsText {
   baseFeeMonthlyEur: string;
   yearlyDiscountPercent: string;
   channels: Partial<Record<PackageChannelKind, { quota: string; feeMonthlyEur: string }>>;
+  /** Own fee per phone number and month, per number kind. */
+  numbers: Partial<Record<NumberKind, string>>;
   pricing: Partial<Record<BillingCategory, string>>;
 }
 
-/** Field of the form: `setup`, `base`, `discount`, `quota:<kind>`, `fee:<kind>`, `price:<category>`. */
+/**
+ * Field of the form: `setup`, `base`, `discount`, `quota:<kind>`, `fee:<kind>`,
+ * `number:<kind>`, `price:<category>`.
+ */
 export type OwnTermsField = string;
 
 export interface OwnTermsRead {
@@ -542,6 +573,12 @@ export function readOwnTerms(text: OwnTermsText): OwnTermsRead {
     if (term.quota !== undefined || term.feeMonthlyEur !== undefined) channels[kind] = term;
   }
 
+  const numbers: NumberFees = {};
+  for (const kind of NUMBER_KINDS) {
+    const fee = amount(`number:${kind}`, text.numbers[kind] ?? '', MAX_UNIT_PRICE_EUR);
+    if (fee !== null) numbers[kind] = { feeMonthlyEur: fee };
+  }
+
   const pricing: TierPricing = {};
   for (const category of BILLING_CATEGORY_ORDER) {
     const price = amount(`price:${category}`, text.pricing[category] ?? '', MAX_UNIT_PRICE_EUR);
@@ -549,7 +586,7 @@ export function readOwnTerms(text: OwnTermsText): OwnTermsRead {
   }
 
   return {
-    own: { setupFeeEur, baseFeeMonthlyEur, yearlyDiscountPercent, channels, pricing },
+    own: { setupFeeEur, baseFeeMonthlyEur, yearlyDiscountPercent, channels, numbers, pricing },
     errors,
   };
 }
@@ -557,8 +594,9 @@ export function readOwnTerms(text: OwnTermsText): OwnTermsRead {
 /**
  * Removes own values that cannot have an effect, so nothing is stored (and
  * counted as "eigener Wert") that never reaches an invoice:
- *   · without a package there are no fixed fees and no channel terms — only
- *     the own unit prices stay;
+ *   · without a package there are no fixed fees, no channel terms and no fee
+ *     per phone number (numbers are then passed on at purchase cost) — only the
+ *     own unit prices stay;
  *   · a fee for a channel kind that is not limited (neither by the package nor
  *     by an own number) is never charged.
  */
@@ -592,6 +630,10 @@ export function ownTermsToText(own: SubscriptionOwnTerms): OwnTermsText {
       feeMonthlyEur: text(term?.feeMonthlyEur),
     };
   }
+  const numbers: OwnTermsText['numbers'] = {};
+  for (const kind of NUMBER_KINDS) {
+    numbers[kind] = text(own.numbers[kind]?.feeMonthlyEur);
+  }
   const pricing: OwnTermsText['pricing'] = {};
   for (const category of BILLING_CATEGORY_ORDER) {
     pricing[category] = text(own.pricing[category]?.unitPriceEur);
@@ -605,6 +647,7 @@ export function ownTermsToText(own: SubscriptionOwnTerms): OwnTermsText {
         ? ''
         : formatEuroInput(own.yearlyDiscountPercent).replace(/,00$/, ''),
     channels,
+    numbers,
     pricing,
   };
 }
@@ -617,6 +660,8 @@ export interface PackageTerms {
   baseFeeMonthlyEur: number;
   yearlyDiscountPercent: number;
   channels: Partial<Record<PackageChannelKind, { quota: number; feeMonthlyEur: number }>>;
+  /** Fee per phone number and month; an absent kind = our purchase cost is passed on. */
+  numbers: NumberFees;
 }
 
 export type TermSource = 'package' | 'customer';
@@ -632,6 +677,14 @@ export interface EffectiveChannel {
   feeSource: TermSource;
 }
 
+export interface EffectiveNumber {
+  kind: NumberKind;
+  label: string;
+  /** Fee per number and month. null = not priced: our purchase cost is passed on. */
+  feeMonthlyEur: number | null;
+  feeSource: TermSource;
+}
+
 export interface EffectiveTerms {
   setupFeeEur: number;
   setupSource: TermSource;
@@ -641,6 +694,8 @@ export interface EffectiveTerms {
   discountSource: TermSource;
   /** All five channel kinds, in display order. */
   channels: EffectiveChannel[];
+  /** Both number kinds, in display order. */
+  numbers: EffectiveNumber[];
 }
 
 /**
@@ -672,11 +727,20 @@ export function resolveTerms(
     yearlyDiscountPercent: own.yearlyDiscountPercent ?? pkg.yearlyDiscountPercent,
     discountSource: own.yearlyDiscountPercent !== null ? 'customer' : 'package',
     channels,
+    numbers: NUMBER_KINDS.map((kind): EffectiveNumber => {
+      const deviation = own.numbers[kind];
+      return {
+        kind,
+        label: NUMBER_KIND_LABELS[kind],
+        feeMonthlyEur: deviation?.feeMonthlyEur ?? pkg.numbers[kind]?.feeMonthlyEur ?? null,
+        feeSource: deviation ? 'customer' : 'package',
+      };
+    }),
   };
 }
 
 export interface FeeLine {
-  /** Stable id: `base` or `channel:<kind>`. */
+  /** Stable id: `base`, `channel:<kind>` or `number:<kind>`. */
   key: string;
   label: string;
   amountEur: number;
@@ -706,6 +770,37 @@ export function recurringFeeLines(terms: EffectiveTerms, interval: BillingInterv
     lines.push({
       key: `channel:${channel.kind}`,
       label: `${channel.label} (${channel.quota}×)`,
+      amountEur: amount,
+    });
+  }
+  return lines;
+}
+
+/**
+ * The lines for a customer's phone numbers in ONE month: active numbers × fee
+ * per number. Only numbers that exist are charged, so a customer without a
+ * number pays nothing here. Without a package (`terms` null) and for a kind the
+ * package does not price, our purchase cost is passed on — a number is never
+ * given away below what it costs us by accident.
+ *
+ * The yearly discount does not apply: a number is a monthly rental we pay
+ * ourselves, and it was not discounted while it stood on the price list.
+ */
+export function numberFeeLines(
+  terms: EffectiveTerms | null,
+  counts: NumberCounts,
+  ctx: PricingContext
+): FeeLine[] {
+  const lines: FeeLine[] = [];
+  for (const kind of NUMBER_KINDS) {
+    const count = Math.max(0, Math.floor(counts[kind] ?? 0));
+    if (count === 0) continue;
+    const fee = terms?.numbers.find((number) => number.kind === kind)?.feeMonthlyEur ?? null;
+    const amount = round2(count * (fee ?? numberCostEur(kind, ctx)));
+    if (amount <= 0) continue;
+    lines.push({
+      key: `number:${kind}`,
+      label: `${NUMBER_KIND_LABELS[kind]} (${count}×)`,
       amountEur: amount,
     });
   }
@@ -767,7 +862,7 @@ export function packageChannelsForStorage(
 // --- price positions, grouped for the editors -----------------------------------
 
 export const BILLING_CATEGORY_GROUPS: {
-  key: 'ai' | 'usage' | 'numbers';
+  key: 'ai' | 'usage';
   label: string;
   categories: BillingCategory[];
 }[] = [
@@ -777,7 +872,6 @@ export const BILLING_CATEGORY_GROUPS: {
     label: 'Kanäle und Aktionen',
     categories: ['voice', 'whatsapp', 'email', 'data_actions'],
   },
-  { key: 'numbers', label: 'Rufnummern', categories: ['numbers_mobile', 'numbers_landline'] },
 ];
 
 /** "€/Minute" → "je Minute": the unit behind a price, in words. */

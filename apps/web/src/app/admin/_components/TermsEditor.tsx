@@ -2,17 +2,20 @@
 
 // What applies to ONE customer (Abrechnung → Kunde → Konditionen): the package,
 // the term and — only where it differs — the customer's own values. Left of
-// every field stands the value from the package (or the price list), the field
-// itself is "für diesen Kunden"; empty = as in the package.
+// every field stands the value from the package (or the usage price list), the
+// field itself is "für diesen Kunden"; empty = as in the package.
 //
-// Three groups, closed unless they hold own values, so the page never shows 30
-// fields at once. The rail calculates what this customer pays while typing,
+// Four groups, closed unless they hold own values, so the page never shows 30
+// fields at once. The first three are monthly (fees, channels, phone numbers)
+// and come from the package; the last is the usage price list. The rail calculates what this customer pays while typing,
 // with the functions the invoice uses (@zendori/core/billing — the package
 // index is not importable here, it pulls node:crypto into the browser bundle).
 // The text is read by readOwnTerms, the same function the server action uses.
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   BILLING_CATEGORY_GROUPS,
+  NUMBER_KINDS,
+  NUMBER_KIND_LABELS,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   applicableOwnTerms,
@@ -26,6 +29,8 @@ import {
   termsYearlyTotalEur,
   type BillingCategory,
   type BillingInterval,
+  type NumberCounts,
+  type NumberKind,
   type OwnTermsText,
   type PackageChannelKind,
   type PackageTerms,
@@ -78,11 +83,15 @@ export interface TermsEditorProps {
   packages: TermsEditorPackage[];
   lists: TermsEditorList[];
   positions: TermsEditorPosition[];
+  /** What one phone number costs us per month, per kind. */
+  numberCosts: Record<NumberKind, number>;
+  /** The customer's active phone numbers, per kind. */
+  numberCounts: NumberCounts;
   /** Notice / error banners of the page, rendered above the form fields. */
   banners?: ReactNode;
 }
 
-type GroupKey = 'fees' | 'channels' | 'usage';
+type GroupKey = 'fees' | 'channels' | 'numbers' | 'usage';
 
 const eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
 const unit = new Intl.NumberFormat('de-DE', {
@@ -108,6 +117,7 @@ export default function TermsEditor(props: TermsEditorProps) {
       props.own.baseFeeMonthlyEur !== null ||
       props.own.yearlyDiscountPercent !== null,
     channels: Object.keys(props.own.channels).length > 0,
+    numbers: Object.keys(props.own.numbers).length > 0,
     usage: Object.keys(props.own.pricing).length > 0 || props.priceTierId !== null,
   }));
 
@@ -125,7 +135,9 @@ export default function TermsEditor(props: TermsEditorProps) {
       channels[kind] = feeOff[kind] ? { quota: row.quota, feeMonthlyEur: '' } : row;
     }
     const read = readOwnTerms(
-      pkg ? { ...text, channels } : { ...NO_FIXED_TEXT, channels: {}, pricing: text.pricing }
+      pkg
+        ? { ...text, channels }
+        : { ...NO_FIXED_TEXT, channels: {}, numbers: {}, pricing: text.pricing }
     );
     const own = applicableOwnTerms(read.own, pkg?.terms ?? null);
 
@@ -149,9 +161,37 @@ export default function TermsEditor(props: TermsEditorProps) {
         return [position.category, { listPrice, ownPrice, sellPrice, margin }] as const;
       })
     );
-    const belowCost = [...priceRows.values()].filter(
-      (row) => row.ownPrice !== null && row.margin !== null && row.margin < 0
-    ).length;
+    // Phone numbers: fee per number from the package, the customer's own fee on
+    // top; without either our purchase cost is passed on. Charged per ACTIVE number.
+    const numberRows = new Map(
+      NUMBER_KINDS.map((kind) => {
+        const costEur = props.numberCosts[kind];
+        const packageFee = pkg?.terms.numbers[kind]?.feeMonthlyEur ?? null;
+        const ownFee = own.numbers[kind]?.feeMonthlyEur ?? null;
+        const chargedEur = ownFee ?? packageFee ?? costEur;
+        const count = props.numberCounts[kind];
+        return [
+          kind,
+          {
+            costEur,
+            packageFee,
+            ownFee,
+            chargedEur,
+            margin: chargedEur - costEur,
+            count,
+            monthly: Math.round(count * chargedEur * 100) / 100,
+          },
+        ] as const;
+      })
+    );
+    const numbersMonthly =
+      Math.round([...numberRows.values()].reduce((sum, row) => sum + row.monthly, 0) * 100) / 100;
+
+    const belowCost =
+      [...priceRows.values()].filter(
+        (row) => row.ownPrice !== null && row.margin !== null && row.margin < 0
+      ).length +
+      [...numberRows.values()].filter((row) => row.ownFee !== null && row.margin < 0).length;
 
     const fixedCount =
       (own.setupFeeEur !== null ? 1 : 0) +
@@ -164,10 +204,17 @@ export default function TermsEditor(props: TermsEditorProps) {
       );
     }, 0);
     const priceCount = Object.keys(own.pricing).length;
+    const numberCount = Object.keys(own.numbers).length;
 
-    const errorGroups: Record<GroupKey, boolean> = { fees: false, channels: false, usage: false };
+    const errorGroups: Record<GroupKey, boolean> = {
+      fees: false,
+      channels: false,
+      numbers: false,
+      usage: false,
+    };
     for (const field of Object.keys(read.errors)) {
       if (field.startsWith('price:')) errorGroups.usage = true;
+      else if (field.startsWith('number:')) errorGroups.numbers = true;
       else if (field.startsWith('quota:') || field.startsWith('fee:')) errorGroups.channels = true;
       else errorGroups.fees = true;
     }
@@ -188,13 +235,26 @@ export default function TermsEditor(props: TermsEditorProps) {
       list,
       packageList,
       priceRows,
+      numberRows,
+      numbersMonthly,
       belowCost,
       fixedCount,
       channelCount,
+      numberCount,
       priceCount,
       ownCount: countOwnValues(own),
     };
-  }, [packageId, interval, listId, text, props.packages, props.lists, props.positions]);
+  }, [
+    packageId,
+    interval,
+    listId,
+    text,
+    props.packages,
+    props.lists,
+    props.positions,
+    props.numberCosts,
+    props.numberCounts,
+  ]);
 
   const setFixed = (patch: Partial<typeof NO_FIXED_TEXT>): void =>
     setText((current) => ({ ...current, ...patch }));
@@ -209,6 +269,8 @@ export default function TermsEditor(props: TermsEditorProps) {
         [kind]: { quota: '', feeMonthlyEur: '', ...current.channels[kind], ...patch },
       },
     }));
+  const setNumberFee = (kind: NumberKind, value: string): void =>
+    setText((current) => ({ ...current, numbers: { ...current.numbers, [kind]: value } }));
   const setPrice = (category: BillingCategory, value: string): void =>
     setText((current) => ({ ...current, pricing: { ...current.pricing, [category]: value } }));
   const toggle = (group: GroupKey, value: boolean): void =>
@@ -221,6 +283,7 @@ export default function TermsEditor(props: TermsEditorProps) {
     setOpen((current) => ({
       fees: current.fees || calc.errorGroups.fees,
       channels: current.channels || calc.errorGroups.channels,
+      numbers: current.numbers || calc.errorGroups.numbers,
       usage: current.usage || calc.errorGroups.usage,
     }));
   };
@@ -233,7 +296,7 @@ export default function TermsEditor(props: TermsEditorProps) {
   );
 
   const usageSummary = [
-    listId !== '' && calc.list ? `eigene Preisliste „${calc.list.name}“` : null,
+    listId !== '' && calc.list ? `eigene Liste „${calc.list.name}“` : null,
     calc.priceCount > 0
       ? `${calc.priceCount} ${calc.priceCount === 1 ? 'eigener Preis' : 'eigene Preise'}`
       : null,
@@ -537,11 +600,97 @@ export default function TermsEditor(props: TermsEditorProps) {
                       </table>
                     </div>
                   </details>
+
+                  <details
+                    className="disclosure terms-group"
+                    open={open.numbers}
+                    onToggle={(event) => toggle('numbers', event.currentTarget.open)}
+                  >
+                    <summary>
+                      Rufnummern
+                      <span className="terms-group-note">
+                        {calc.numberCount > 0 ? ownValuesText(calc.numberCount) : 'wie Paket'}
+                      </span>
+                    </summary>
+                    <p className="field-help">
+                      Berechnet wird je aktiver Nummer und Monat, ohne Rabatt bei Jahreslaufzeit.
+                      Ohne Gebühr im Paket wird unser Einkaufspreis weitergegeben.
+                    </p>
+                    <div className="table-wrap">
+                      <table className="table--compact">
+                        <thead>
+                          <tr>
+                            <th>Rufnummer</th>
+                            <th className="num">Einkauf</th>
+                            <th className="num">{packageLabel}</th>
+                            <th className="num">Für diesen Kunden</th>
+                            <th className="num">Aktiv</th>
+                            <th className="num">= pro Monat</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {NUMBER_KINDS.map((kind) => {
+                            const row = calc.numberRows.get(kind);
+                            if (!row) return null;
+                            const error = calc.errors[`number:${kind}`];
+                            const below = row.ownFee !== null && row.margin < 0;
+                            const value = text.numbers[kind] ?? '';
+                            return (
+                              <tr key={kind}>
+                                <td>{NUMBER_KIND_LABELS[kind]}</td>
+                                <td className="num muted">{eur.format(row.costEur)}</td>
+                                <td className="num muted">
+                                  {row.packageFee !== null
+                                    ? eur.format(row.packageFee)
+                                    : '= Einkauf'}
+                                </td>
+                                <td className="num">
+                                  <span className="num-cell">
+                                    <input
+                                      name={`own_number_${kind}`}
+                                      type="text"
+                                      inputMode="decimal"
+                                      placeholder="wie Paket"
+                                      className="num-input"
+                                      aria-label={`Eigene Gebühr je Nummer pro Monat ${NUMBER_KIND_LABELS[kind]}`}
+                                      value={value}
+                                      onChange={(event) => setNumberFee(kind, event.target.value)}
+                                      aria-invalid={error || below ? true : undefined}
+                                    />
+                                    <span className="muted small">€</span>
+                                  </span>
+                                  {error ? <div className="field-error">{error}</div> : null}
+                                  {below ? (
+                                    <div className="field-error">Unter dem Einkauf.</div>
+                                  ) : null}
+                                </td>
+                                <td className="num muted">{row.count}</td>
+                                <td className="num muted">{eur.format(row.monthly)}</td>
+                                <td>
+                                  {value !== '' ? (
+                                    <button
+                                      type="button"
+                                      className="link-button small"
+                                      onClick={() => setNumberFee(kind, '')}
+                                    >
+                                      Zurücksetzen
+                                    </button>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
                 </>
               ) : (
                 <p className="muted">
-                  Ohne Paket gibt es keine festen Gebühren und keine Kanal-Vorgaben. Berechnet wird
-                  nur der Verbrauch. Eigene Gebühren und Kanal-Werte werden beim Speichern entfernt.
+                  Ohne Paket gibt es keine festen Gebühren und keine Kanal-Vorgaben. Berechnet
+                  werden nur der Verbrauch und die Rufnummern zum Einkaufspreis. Eigene Gebühren und
+                  Kanal-Werte werden beim Speichern entfernt.
                 </p>
               )}
 
@@ -556,13 +705,13 @@ export default function TermsEditor(props: TermsEditorProps) {
                     {usageSummary.length > 0
                       ? usageSummary.join(' · ')
                       : calc.list
-                        ? `wie Preisliste „${calc.list.name}“`
+                        ? `wie Liste „${calc.list.name}“`
                         : 'zum Einkaufspreis'}
                   </span>
                 </summary>
                 {showListChoice ? (
                   <Field
-                    label="Preisliste"
+                    label="Verbrauchspreisliste"
                     htmlFor="terms-list"
                     help="Eine ganze Liste für diesen Kunden. Für einzelne Preise genügt das Feld in der Tabelle."
                   >
@@ -591,7 +740,7 @@ export default function TermsEditor(props: TermsEditorProps) {
                         <th>Position</th>
                         <th className="num">Einkauf</th>
                         <th className="num">
-                          {calc.list ? `Liste „${calc.list.name}“` : 'Preisliste'}
+                          {calc.list ? `Liste „${calc.list.name}“` : 'Liste'}
                         </th>
                         <th className="num">Für diesen Kunden</th>
                         <th className="num">Marge</th>
@@ -685,6 +834,25 @@ export default function TermsEditor(props: TermsEditorProps) {
                   <Property label="Einrichtung, einmalig">
                     {eur.format(effective.setupFeeEur)}
                   </Property>
+                  <Property label="Rufnummern pro Monat">
+                    {calc.numbersMonthly > 0 ? (
+                      <>
+                        {eur.format(calc.numbersMonthly)}
+                        <div className="cell-sub">
+                          {NUMBER_KINDS.filter((kind) => (calc.numberRows.get(kind)?.count ?? 0) > 0)
+                            .map((kind) => {
+                              const row = calc.numberRows.get(kind);
+                              return row
+                                ? `${row.count} × ${NUMBER_KIND_LABELS[kind].replace('Rufnummer ', '')} ${eur.format(row.chargedEur)}`
+                                : '';
+                            })
+                            .join(' · ')}
+                        </div>
+                      </>
+                    ) : (
+                      'keine aktive Nummer'
+                    )}
+                  </Property>
                   <Property label="Verbrauch">
                     {calc.list ? `nach „${calc.list.name}“` : 'zum Einkaufspreis'}
                     {calc.priceCount > 0
@@ -706,6 +874,9 @@ export default function TermsEditor(props: TermsEditorProps) {
                 {calc.list ? ` nach „${calc.list.name}“` : ' zum Einkaufspreis'}
                 {calc.priceCount > 0
                   ? `, mit ${calc.priceCount} ${calc.priceCount === 1 ? 'eigenem Preis' : 'eigenen Preisen'}`
+                  : ''}
+                {calc.numbersMonthly > 0
+                  ? `, dazu Rufnummern zum Einkaufspreis (${eur.format(calc.numbersMonthly)} pro Monat)`
                   : ''}
                 .
               </p>

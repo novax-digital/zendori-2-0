@@ -5,7 +5,7 @@
 // the one rare action (remove the assignment).
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
-import { NO_OWN_TERMS, type BillingCategory } from '@zendori/core';
+import { NO_OWN_TERMS, numberCostEur, type BillingCategory } from '@zendori/core';
 import { requirePlatformAdmin } from '@/lib/admin-auth';
 import { loadBillingCatalog, packageTermsOf } from '@/lib/billing';
 import { loadAvgTokenCosts, pricePositions } from '@/lib/billing-costs';
@@ -82,6 +82,23 @@ export default async function AdminOrgTermsPage({
     costLabel: position.costLabel,
   }));
 
+  // phone numbers: what a number costs us, and how many this customer has active
+  const numberCosts = {
+    mobile: numberCostEur('mobile', catalog.ctx),
+    landline: numberCostEur('landline', catalog.ctx),
+  };
+  const { data: numberData } = await admin
+    .from('phone_numbers')
+    .select('number_type')
+    .eq('org_id', orgId)
+    .eq('status', 'active');
+  const numberCounts = { mobile: 0, landline: 0 };
+  for (const row of (numberData ?? []) as { number_type: string }[]) {
+    // same split as billing_org_rollup: 'local' and 'national' are landline
+    if (row.number_type === 'mobile') numberCounts.mobile += 1;
+    else numberCounts.landline += 1;
+  }
+
   const customerHref = `/admin/billing/${org.id}`;
 
   return (
@@ -100,7 +117,8 @@ export default async function AdminOrgTermsPage({
               <form action={removeSubscription}>
                 <input type="hidden" name="orgId" value={org.id} />
                 <p className="menu-note">
-                  Entfernt Paket, Preisliste und alle eigenen Werte. Die Kanal-Kontingente bleiben
+                  Entfernt Paket, Verbrauchspreisliste und alle eigenen Werte. Die
+                  Kanal-Kontingente bleiben
                   bestehen.
                 </p>
                 <ConfirmDeleteButton
@@ -124,6 +142,8 @@ export default async function AdminOrgTermsPage({
         packages={packages}
         lists={lists}
         positions={positions}
+        numberCosts={numberCosts}
+        numberCounts={numberCounts}
         banners={<DismissibleBanners error={error} notice={notice} />}
       />
     </div>

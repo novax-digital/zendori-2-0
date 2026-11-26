@@ -7,11 +7,14 @@ import {
   BILLING_CATEGORY_LABELS,
   BILLING_CATEGORY_ORDER,
   NO_OWN_TERMS,
+  NUMBER_KINDS,
+  NUMBER_KIND_LABELS,
   PACKAGE_CHANNEL_KINDS,
   PACKAGE_CHANNEL_LABELS,
   channelLimitPlan,
   euroInputError,
   isMissingColumnError,
+  numberFeesSchema,
   packageChannelsForStorage,
   packageChannelsSchema,
   priceTierPricingSchema,
@@ -84,13 +87,13 @@ export async function updatePurchaseCosts(formData: FormData): Promise<void> {
 
   const mobile = amount(
     textField(formData.get('numberCostMobileEur')),
-    'Rufnummern (Mobil)',
+    NUMBER_KIND_LABELS.mobile,
     100_000
   );
   if ('error' in mobile) redirect(pricingUrl({ error: mobile.error }, 'costs'));
   const landline = amount(
     textField(formData.get('numberCostLandlineEur')),
-    'Rufnummern (Festnetz)',
+    NUMBER_KIND_LABELS.landline,
     100_000
   );
   if ('error' in landline) redirect(pricingUrl({ error: landline.error }, 'costs'));
@@ -115,7 +118,7 @@ export async function updatePurchaseCosts(formData: FormData): Promise<void> {
   redirect(pricingUrl({ notice: 'Einkaufspreise gespeichert.' }));
 }
 
-// --- price lists (Preislisten) ----------------------------------------------
+// --- usage price lists (Verbrauchspreislisten) --------------------------------
 
 /**
  * A new price list always starts as a copy (of the chosen list, else of the
@@ -147,13 +150,13 @@ export async function createPriceList(formData: FormData): Promise<void> {
     .select('id')
     .single();
   if (error || !created) {
-    redirect(pricingUrl({ error: 'Preisliste konnte nicht angelegt werden.' }, 'list'));
+    redirect(pricingUrl({ error: 'Verbrauchspreisliste konnte nicht angelegt werden.' }, 'list'));
   }
 
   revalidatePath('/admin/pricing');
   redirect(
     listUrl((created as { id: string }).id, {
-      notice: `Preisliste „${name}“ angelegt. Die Preise sind eine Kopie — passe sie hier an.`,
+      notice: `Verbrauchspreisliste „${name}“ angelegt. Die Preise sind eine Kopie — passe sie hier an.`,
     })
   );
 }
@@ -163,7 +166,9 @@ export async function updatePriceList(formData: FormData): Promise<void> {
   const { userId } = await requirePlatformAdmin();
 
   const parsedId = idSchema.safeParse(textField(formData.get('id')));
-  if (!parsedId.success) redirect(pricingUrl({ error: 'Preisliste wurde nicht gefunden.' }));
+  if (!parsedId.success) {
+    redirect(pricingUrl({ error: 'Verbrauchspreisliste wurde nicht gefunden.' }));
+  }
   const id = parsedId.data;
 
   const name = textField(formData.get('name'));
@@ -192,11 +197,13 @@ export async function updatePriceList(formData: FormData): Promise<void> {
       updated_by: userId,
     })
     .eq('id', id);
-  if (error) redirect(listUrl(id, { error: 'Preisliste konnte nicht gespeichert werden.' }));
+  if (error) {
+    redirect(listUrl(id, { error: 'Verbrauchspreisliste konnte nicht gespeichert werden.' }));
+  }
 
   revalidatePath('/admin/pricing');
   revalidatePath(`/admin/pricing/lists/${id}`);
-  redirect(listUrl(id, { notice: 'Preisliste gespeichert.' }));
+  redirect(listUrl(id, { notice: 'Verbrauchspreisliste gespeichert.' }));
 }
 
 /**
@@ -207,7 +214,9 @@ export async function deletePriceList(formData: FormData): Promise<void> {
   await requirePlatformAdmin();
 
   const parsedId = idSchema.safeParse(textField(formData.get('id')));
-  if (!parsedId.success) redirect(pricingUrl({ error: 'Preisliste wurde nicht gefunden.' }));
+  if (!parsedId.success) {
+    redirect(pricingUrl({ error: 'Verbrauchspreisliste wurde nicht gefunden.' }));
+  }
   const id = parsedId.data;
 
   const admin = createSupabaseAdminClient();
@@ -222,22 +231,24 @@ export async function deletePriceList(formData: FormData): Promise<void> {
       .eq('price_tier_id', id),
   ]);
   if ((tier as { is_default?: boolean } | null)?.is_default) {
-    redirect(listUrl(id, { error: 'Die Standard-Preisliste kann nicht gelöscht werden.' }));
+    redirect(listUrl(id, { error: 'Die Standardliste kann nicht gelöscht werden.' }));
   }
   if ((packageCount ?? 0) > 0 || (customerCount ?? 0) > 0) {
     redirect(
       listUrl(id, {
         error:
-          'Diese Preisliste wird noch von Paketen oder Kunden verwendet. Weise ihnen zuerst eine andere zu.',
+          'Diese Verbrauchspreisliste wird noch von Paketen oder Kunden verwendet. Weise ihnen zuerst eine andere zu.',
       })
     );
   }
 
   const { error } = await admin.from('price_tiers').delete().eq('id', id);
-  if (error) redirect(listUrl(id, { error: 'Preisliste konnte nicht gelöscht werden.' }));
+  if (error) {
+    redirect(listUrl(id, { error: 'Verbrauchspreisliste konnte nicht gelöscht werden.' }));
+  }
 
   revalidatePath('/admin/pricing');
-  redirect(pricingUrl({ notice: 'Preisliste gelöscht.' }));
+  redirect(pricingUrl({ notice: 'Verbrauchspreisliste gelöscht.' }));
 }
 
 // --- packages ----------------------------------------------------------------
@@ -262,18 +273,22 @@ export async function createPackage(formData: FormData): Promise<void> {
 
   let copied: Record<string, unknown> = {};
   if (copyFrom.data !== '') {
-    // yearly_discount_percent is 0042 — before the migration the copy goes without it
-    let { data: source, error: sourceError } = await admin
-      .from('packages')
-      .select(`${PACKAGE_COPY_COLUMNS}, yearly_discount_percent`)
-      .eq('id', copyFrom.data)
-      .maybeSingle();
-    if (sourceError && isMissingColumnError(sourceError)) {
+    // numbers is 0043, yearly_discount_percent 0042 — before a migration the
+    // copy goes without the column it adds
+    const columnSets = [
+      `${PACKAGE_COPY_COLUMNS}, yearly_discount_percent, numbers`,
+      `${PACKAGE_COPY_COLUMNS}, yearly_discount_percent`,
+      PACKAGE_COPY_COLUMNS,
+    ];
+    let source: unknown = null;
+    let sourceError: unknown = null;
+    for (const columns of columnSets) {
       ({ data: source, error: sourceError } = await admin
         .from('packages')
-        .select(PACKAGE_COPY_COLUMNS)
+        .select(columns)
         .eq('id', copyFrom.data)
         .maybeSingle());
+      if (!(sourceError && isMissingColumnError(sourceError))) break;
     }
     if (sourceError || !source) {
       redirect(pricingUrl({ error: 'Die Vorlage wurde nicht gefunden.' }, 'package'));
@@ -355,7 +370,7 @@ export async function updatePackage(formData: FormData): Promise<void> {
   const name = textField(formData.get('name'));
   if (!validName(name)) fail(NAME_ERROR);
   const priceTierId = optionalIdSchema.safeParse(textField(formData.get('priceTierId')));
-  if (!priceTierId.success) fail('Die Preisliste wurde nicht gefunden.');
+  if (!priceTierId.success) fail('Die Verbrauchspreisliste wurde nicht gefunden.');
 
   // An empty fee field means 0 €; an empty quota means "not limited".
   const money = (field: string, label: string): number => {
@@ -378,7 +393,19 @@ export async function updatePackage(formData: FormData): Promise<void> {
     baseFeeMonthlyEur,
     yearlyDiscountPercent,
     channels: {},
+    numbers: {},
   };
+  // Fee per phone number: an empty field is NOT 0 € — it passes our purchase
+  // cost on, so a number is never given away by leaving a field blank.
+  for (const kind of NUMBER_KINDS) {
+    const raw = textField(formData.get(`number_fee_${kind}`));
+    if (raw === '') continue;
+    const value = amount(raw, NUMBER_KIND_LABELS[kind], 100_000);
+    if ('error' in value) fail(value.error);
+    else terms.numbers[kind] = { feeMonthlyEur: value.value };
+  }
+  const numbers = numberFeesSchema.safeParse(terms.numbers);
+  if (!numbers.success) fail('Ungültige Angaben zu den Rufnummern.');
   for (const kind of PACKAGE_CHANNEL_KINDS) {
     const label = PACKAGE_CHANNEL_LABELS[kind];
     const quotaRaw = textField(formData.get(`quota_${kind}`));
@@ -412,8 +439,18 @@ export async function updatePackage(formData: FormData): Promise<void> {
   };
   let { error } = await admin
     .from('packages')
-    .update({ ...patch, yearly_discount_percent: yearlyDiscountPercent })
+    .update({ ...patch, yearly_discount_percent: yearlyDiscountPercent, numbers: numbers.data })
     .eq('id', id);
+  if (error && isMissingColumnError(error)) {
+    // 0043 not applied yet: everything but the fee per phone number can be saved
+    if (Object.keys(terms.numbers).length > 0) {
+      fail('Gebühren je Rufnummer sind noch nicht verfügbar (Migration 0043 ausstehend).');
+    }
+    ({ error } = await admin
+      .from('packages')
+      .update({ ...patch, yearly_discount_percent: yearlyDiscountPercent })
+      .eq('id', id));
+  }
   if (error && isMissingColumnError(error)) {
     // 0042 not applied yet: everything but the discount can be saved
     if (yearlyDiscountPercent !== 0) {

@@ -13,6 +13,7 @@ import {
   categoryPriceEur,
   emailCostUsd,
   hasPurchaseCost,
+  numberCostEur,
   numberRentalCostUsd,
   packageChannelsSchema,
   packageMonthlyTotalEur,
@@ -100,8 +101,23 @@ describe('categoryPriceEur (price-list pricing)', () => {
 
   it('unit cost card: static categories via fx, numbers from the EUR context', () => {
     expect(unitCostEur('voice', CTX)).toBeCloseTo(VOICE_USD_PER_MINUTE * 1, 10);
-    expect(unitCostEur('numbers_mobile', CTX)).toBe(4);
-    expect(unitCostEur('numbers_landline', CTX)).toBe(2);
+    expect(numberCostEur('mobile', CTX)).toBe(4);
+    expect(numberCostEur('landline', CTX)).toBe(2);
+  });
+
+  it('a usage price list holds no monthly position: old number keys are dropped', () => {
+    // rows saved before 0043 still carry the keys; the fee per number is in the package now
+    const parsed = priceTierPricingSchema.parse({
+      voice: { mode: 'unit', unitPriceEur: 0.5 },
+      numbers_mobile: { mode: 'unit', unitPriceEur: 30 },
+      numbers_landline: { mode: 'unit', unitPriceEur: 10 },
+    });
+    expect(parsed).toEqual({ voice: { mode: 'unit', unitPriceEur: 0.5 } });
+    expect(BILLING_CATEGORY_ORDER).not.toContain('numbers_mobile');
+    expect(BILLING_CATEGORY_ORDER).toHaveLength(7);
+    for (const category of BILLING_CATEGORY_ORDER) {
+      expect(BILLING_CATEGORY_BILLING_LABEL[category]).toBe('transaktionell');
+    }
   });
 });
 

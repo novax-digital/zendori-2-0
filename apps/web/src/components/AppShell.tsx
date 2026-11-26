@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { signOut } from '@/app/actions';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
+import BillingSetupBanner from './billing/BillingSetupBanner';
 import ThemeToggle from './ThemeToggle';
 import Icon, { type IconName } from './ui/Icon';
 import { useDismiss } from './ui/useDismiss';
@@ -520,7 +521,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <Suspense fallback={<aside className="app-sidebar" />}>
         <Sidebar />
       </Suspense>
-      <main className="app-main">{children}</main>
+      <main className="app-main">
+        {/* asks owners and admins to set up billing once Stripe billing is on */}
+        <Suspense fallback={null}>
+          <BillingSetupBanner />
+        </Suspense>
+        {children}
+      </main>
     </div>
   );
 }

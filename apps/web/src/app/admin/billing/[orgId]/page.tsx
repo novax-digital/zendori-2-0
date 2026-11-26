@@ -15,7 +15,7 @@ import {
   parseMonthKey,
   recentMonths,
 } from '@/lib/billing';
-import { loadBillingAccountState } from '@/lib/billing-account';
+import { loadBillingAccountState, loadSetupMailState } from '@/lib/billing-account';
 import { href } from '@/lib/href';
 import { stripeRuntime } from '@/lib/stripe';
 import { periodKeyOf, shiftPeriodKey } from '@zendori/core';
@@ -128,6 +128,10 @@ export default async function AdminOrgBillingPage({
   const billingAccount = runtime
     ? await loadBillingAccountState(admin, orgId, runtime.livemode)
     : null;
+  const setupMail =
+    runtime && billingAccount?.available
+      ? await loadSetupMailState(admin, orgId, runtime.livemode)
+      : null;
   const stripeEditing =
     panel === 'stripe' && runtime !== null && billingAccount?.available === true;
   const monthLabel = (key: string): string => parseMonthKey(key, period).label;
@@ -178,7 +182,7 @@ export default async function AdminOrgBillingPage({
                   {invoice.interval === 'yearly' ? 'jährliche' : 'monatliche'} Laufzeit.
                 </>
               ) : (
-                'Kein Paket zugewiesen, nur der Verbrauch wird berechnet.'
+                'Kein Paket zugewiesen: Berechnet werden nur der Verbrauch und Rufnummern zum Einkaufspreis.'
               )
             }
           >
@@ -197,7 +201,9 @@ export default async function AdminOrgBillingPage({
                     <tr key={`rec-${i}`}>
                       <td>{line.label}</td>
                       <td />
-                      <td className="right muted">—</td>
+                      <td className="right muted">
+                        {line.costEur === undefined ? '—' : formatEur(line.costEur)}
+                      </td>
                       <td className="right strong">{formatEur(line.amountEur)}</td>
                     </tr>
                   ))}
@@ -214,7 +220,7 @@ export default async function AdminOrgBillingPage({
                   <tr className="table-sum">
                     <th scope="row">Summe</th>
                     <td />
-                    <td className="right">{formatEur(costEur(invoice.usage.totalCostUsd))}</td>
+                    <td className="right">{formatEur(invoice.totalCostEur)}</td>
                     <td className="right">{formatEur(invoice.grandTotalEur)}</td>
                   </tr>
                 </tfoot>
@@ -266,6 +272,7 @@ export default async function AdminOrgBillingPage({
             orgId={orgId}
             livemode={runtime ? runtime.livemode : null}
             state={billingAccount}
+            mail={setupMail}
             fromLabel={storedFrom ? monthLabel(storedFrom) : null}
             changeHref={href(base, { month, panel: 'stripe' })}
           />
@@ -281,6 +288,10 @@ export default async function AdminOrgBillingPage({
           invoiceFrom={storedFrom ?? thisMonthKey}
           months={fromChoices}
           stored={billingAccount.stored}
+          mail={setupMail}
+          setupComplete={
+            billingAccount.details !== null && billingAccount.stripe?.paymentMethodId != null
+          }
           error={error}
         />
       ) : null}
