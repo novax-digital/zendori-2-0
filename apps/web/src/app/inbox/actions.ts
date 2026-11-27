@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { conversationStatusSchema,
+  draftTextForCustomer,
   ensureTicket,
 } from '@zendori/core';
 import type { SupabaseClient } from '@zendori/core';
@@ -1388,15 +1389,32 @@ export async function acceptDraft(formData: FormData): Promise<void> {
     redirect(inboxUrl({ ...base, error: 'Der Vorschlag ist nicht mehr verfügbar.' }));
   }
 
-  const sent = await sendAgentReply(supabase, org, conversationId, claim.content);
-  if (!sent.ok) {
-    // delivery failed after claiming → release the claim so the agent can retry
+  const releaseClaim = async (): Promise<void> => {
     await supabase
       .from('ai_drafts')
       .update({ status: 'pending' })
       .eq('org_id', org)
       .eq('id', draftId)
       .eq('status', 'accepted');
+  };
+
+  // Last gate before a customer: the answer itself, never the model's JSON
+  // frame around it (a draft stored before the worker took the frame apart).
+  const text = draftTextForCustomer(claim.content);
+  if (text === null || text.trim() === '') {
+    await releaseClaim();
+    redirect(
+      inboxUrl({
+        ...base,
+        error: 'Dieser Vorschlag ließ sich nicht lesen. Bitte fordere einen neuen Entwurf an.',
+      })
+    );
+  }
+
+  const sent = await sendAgentReply(supabase, org, conversationId, text);
+  if (!sent.ok) {
+    // delivery failed after claiming → release the claim so the agent can retry
+    await releaseClaim();
     redirect(inboxUrl({ ...base, error: sent.error }));
   }
 

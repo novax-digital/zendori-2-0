@@ -1,4 +1,5 @@
 export * from './schemas.js';
+export * from './draft-envelope.js';
 export * from './crypto.js';
 export * from './standard-webhooks.js';
 export * from './env.js';

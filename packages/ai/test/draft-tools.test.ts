@@ -11,6 +11,7 @@ interface RecordedRequest {
   messages: { role: string; content: unknown }[];
   tools?: { name: string; description: string; input_schema: unknown }[];
   tool_choice?: { type: string };
+  output_config?: unknown;
 }
 
 let server: Server;
@@ -95,6 +96,49 @@ const ORDER_TOOL = {
     required: ['order_id'],
   },
 };
+
+describe('the draft envelope', () => {
+  // Measured against the real API on 2026-11-26: with the envelope enforced as a
+  // structured output, a quotation the model closes with a straight quote —
+  // „Hörprobe" — ends the reply string, and the rest of the answer is lost
+  // behind valid JSON. The envelope is asked for in the prompt and parsed here.
+  it('is not enforced by the API: that would cut the reply at the first quote', async () => {
+    queue = [messageResponse([FINAL], 'end_turn')];
+    await draft(BASE_INPUT);
+    queue = [
+      messageResponse([toolUse('tu_1', 'bestellstatus', { order_id: '4711' })], 'tool_use'),
+      messageResponse([FINAL], 'end_turn'),
+    ];
+    await draft({ ...BASE_INPUT, tools: [ORDER_TOOL], runTool: async () => ({ ok: true }) });
+
+    expect(requests).toHaveLength(3);
+    for (const request of requests) expect(request.output_config).toBeUndefined();
+  });
+
+  it('never hands out the raw envelope when the answer is not valid JSON', async () => {
+    queue = [
+      messageResponse(
+        [
+          text(
+            '{"reply": "Klicke auf den „Hörprobe"-Knopf.", "confidence": 0.95, "used_source_ids": ["kb-1"]}'
+          ),
+        ],
+        'end_turn'
+      ),
+    ];
+    const recovered = await draft(BASE_INPUT);
+    expect(recovered.result).toEqual({
+      reply: 'Klicke auf den „Hörprobe"-Knopf.',
+      confidence: 0.95,
+      used_source_ids: ['kb-1'],
+    });
+
+    queue = [messageResponse([text('{"antwort": "Klicke auf „Start"."}')], 'end_turn')];
+    const unreadable = await draft(BASE_INPUT);
+    expect(unreadable.result.reply).not.toContain('{');
+    expect(unreadable.result.confidence).toBe(0);
+  });
+});
 
 describe('draft without tools', () => {
   it('is a single request without tool fields or action rules', async () => {

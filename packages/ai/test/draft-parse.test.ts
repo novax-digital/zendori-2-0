@@ -50,6 +50,34 @@ describe('parseDraftResponse', () => {
     });
   });
 
+  // Sent to a customer as it stood on 2026-11-26: the model closed a German
+  // quotation with a straight quote and did not escape it. `\\n` is the two
+  // characters backslash + n, as the model wrote them.
+  const BROKEN =
+    '{"reply": "Auf der Seite findest du einen „Hörprobe"-Knopf. 🪄\\n\\nKann ich sonst noch etwas tun?", "confidence": 0.95, "used_source_ids": ["e513bdb9-bca1-4c6f-9378-82ea7e368e29"]}';
+
+  it('takes an envelope apart that a quotation mark has broken', () => {
+    expect(() => JSON.parse(BROKEN)).toThrow();
+    expect(parseDraftResponse(BROKEN)).toEqual({
+      reply: 'Auf der Seite findest du einen „Hörprobe"-Knopf. 🪄\n\nKann ich sonst noch etwas tun?',
+      // the model's own figure — the answer is as good as in a valid envelope
+      confidence: 0.95,
+      used_source_ids: ['e513bdb9-bca1-4c6f-9378-82ea7e368e29'],
+    });
+  });
+
+  it('keeps a recovered envelope without a figure below every threshold', () => {
+    expect(parseDraftResponse('{"reply": "Nur „dies"."}')).toEqual({
+      reply: 'Nur „dies".',
+      confidence: 0.3,
+      used_source_ids: [],
+    });
+    // out of range is clamped, as for a valid envelope
+    expect(
+      parseDraftResponse('{"reply": "„x"", "confidence": 7, "used_source_ids": []}').confidence
+    ).toBe(1);
+  });
+
   it('falls back when JSON is valid but has the wrong shape', () => {
     const text = '{"foo":"bar"}';
     expect(parseDraftResponse(text)).toEqual({
@@ -65,6 +93,39 @@ describe('finalizeDraftResult', () => {
 
   it('passes results through untouched without truncation', () => {
     expect(finalizeDraftResult(ok, 'end_turn', 'de')).toEqual(ok);
+  });
+
+  it('never lets the raw JSON frame pass, whatever the stop reason', () => {
+    const frames = [
+      // an envelope nobody could take apart
+      '{"reply": "„Hallo"", "confidence": 1, "send_now": true, "used_source_ids": []}',
+      // valid JSON of the wrong shape
+      '{"foo":"bar"}',
+      '```json\n{"reply": 5}\n```',
+    ];
+    for (const frame of frames) {
+      for (const stop of ['end_turn', 'stop_sequence', 'max_tokens', null]) {
+        const result = finalizeDraftResult(parseDraftResponse(frame), stop, 'de');
+        expect(result.reply).not.toContain('{');
+        expect(result.reply).toContain('Mitarbeiter');
+        // confidence 0: below every threshold, so it can never auto-send
+        expect(result.confidence).toBe(0);
+        expect(result.used_source_ids).toEqual([]);
+      }
+    }
+  });
+
+  it('leaves a recovered envelope and ordinary prose alone', () => {
+    const recovered = parseDraftResponse(
+      '{"reply": "Klicke auf „Start".", "confidence": 0.9, "used_source_ids": ["a"]}'
+    );
+    expect(finalizeDraftResult(recovered, 'end_turn', 'de')).toEqual({
+      reply: 'Klicke auf „Start".',
+      confidence: 0.9,
+      used_source_ids: ['a'],
+    });
+    const prose = parseDraftResponse('Es tut mir leid, das kann ich nicht beantworten.');
+    expect(finalizeDraftResult(prose, 'end_turn', 'de')).toEqual(prose);
   });
 
   it('replaces a truncated raw-JSON fallback with a safe apology at confidence 0', () => {

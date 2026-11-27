@@ -1,6 +1,6 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { INLINE_RENDERABLE_MIMES } from '@zendori/core';
+import { INLINE_RENDERABLE_MIMES, draftTextForCustomer } from '@zendori/core';
 import type { Channel, Contact, Conversation, Message, OrgRole } from '@zendori/core';
 import type {
   CannedResponseItem,
@@ -364,16 +364,20 @@ export async function getConversationDetail(
   const messageRows = (messageData ?? []) as unknown as Message[];
   const noteRows = (noteData ?? []) as unknown as NoteRow[];
   const draftRow = draftData as unknown as DraftRow | null;
-  const draft: DraftItem | null = draftRow
-    ? {
-        id: draftRow.id,
-        content: draftRow.content,
-        confidence: Number(draftRow.confidence),
-        sources: parseDraftSources(draftRow.sources),
-        model: draftRow.model,
-        created_at: draftRow.created_at,
-      }
-    : null;
+  // Only ever the answer itself: a stored draft that still is the model's JSON
+  // frame is shown as its reply — or not at all when it cannot be read.
+  const draftText = draftRow ? draftTextForCustomer(draftRow.content) : null;
+  const draft: DraftItem | null =
+    draftRow && draftText !== null
+      ? {
+          id: draftRow.id,
+          content: draftText,
+          confidence: Number(draftRow.confidence),
+          sources: parseDraftSources(draftRow.sources),
+          model: draftRow.model,
+          created_at: draftRow.created_at,
+        }
+      : null;
 
   const [messages, emailByUserId] = await Promise.all([
     attachMessageAttachments(orgId, messageRows),

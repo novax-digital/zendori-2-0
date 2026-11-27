@@ -67,3 +67,46 @@ Pro Anthropic-/Embedding-Call aus `usage` berechnet und in `ai_runs.cost_usd` ge
 4. Inbox → Konversation öffnen: der Antwort-Vorschlag erscheint mit Confidence + Quelle.
 5. Übernehmen/Bearbeiten/Verwerfen testen.
 6. Spam-Nachricht einspeisen → kein Vorschlag (klassifiziert + übersprungen).
+
+## Anführungszeichen: Entwurfs-Hülle und abgeschnittene Felder (2026-11-27)
+
+**Vorfall (2026-11-26):** Ein übernommener Vorschlag ging als rohe Modell-Antwort an einen Kunden —
+`{"reply": "…", "confidence": 0.95, "used_source_ids": […]}` statt nur des Antworttexts.
+
+**Ursache:** Die Modelle schreiben eine deutsche Anführung — „Hörprobe“ — mit einem **geraden**
+Schlusszeichen und maskieren es nicht. Im JSON beendet dieses Zeichen den Text. Zwei Folgen:
+
+1. **Entwurf (Sonnet, Hülle nur im Prompt verlangt):** Die Hülle ist kein gültiges JSON mehr. Bisher
+   wurde dann die ganze Roh-Antwort zum Vorschlag (Sicherheit 0,3). In Produktion 4 von 80 Entwürfen
+   (5 %); nennt die Antwort einen Knopf in Anführungszeichen, im Versuch 10 von 10.
+2. **Klassifikation, Extraktion, Lernen (Haiku, Ausgabeform von der API erzwungen):** Das JSON bleibt
+   gültig, aber das Feld **endet still am Anführungszeichen**. Eine Ticket-Beschreibung von 208
+   Zeichen kam im Versuch mit 55 zurück. In Produktion bisher nicht aufgetreten (keine eingegangene
+   Nachricht enthielt „…“), mit E-Mails aus Outlook oder Word aber zu erwarten.
+
+**Was jetzt gilt:**
+
+- **Die Hülle wird an ihrem Rahmen zerlegt**, wenn sie kein gültiges JSON ist
+  (`packages/core/src/draft-envelope.ts`, `recoverDraftEnvelope`): Die Antwort ist, was zwischen
+  `{"reply": "` und den abschließenden Feldern steht; diese müssen für sich gültiges JSON sein und
+  dürfen nur Sicherheit und Quellen enthalten. Text und Sicherheit bleiben vollständig erhalten.
+- **Eine rohe Hülle wird nie Vorschlag oder Nachricht** (`finalizeDraftResult`): Was sich nicht
+  zerlegen lässt, wird durch die sichere Ersatzantwort mit Sicherheit 0 ersetzt.
+- **Die Inbox zeigt und sendet nur die Antwort** (`draftTextForCustomer` in `lib/inbox/queries.ts`
+  und `acceptDraft`): Ein gespeicherter Entwurf, der noch die Hülle ist, wird als seine Antwort
+  angezeigt und gesendet — oder gar nicht, wenn er sich nicht lesen lässt.
+- **Kundentext geht mit geraden Anführungszeichen an die Modelle** (`plainQuotes` in
+  `packages/ai/src/prompts.ts`): „ “ ” werden zu `"`. Gerade Anführungszeichen maskieren die
+  Modelle richtig. Zusätzlich gilt ein Feld, das in einer offenen Anführung endet, als abgeschnitten
+  (`cutAtOpenQuote`): Die Beschreibung wird dann durch die ganze Nachricht ersetzt, ein Betreff
+  verliert nur das Zeichen, ein halber Lern-Eintrag wird verworfen.
+
+**Bewusst NICHT gemacht:** die Ausgabeform des Entwurfs von der API erzwingen (structured outputs).
+Gemessen: Das JSON wäre dann immer gültig, die Antwort aber am ersten Anführungszeichen
+abgeschnitten (104 statt 324 Zeichen) — still und schlimmer als der sichtbare Fehler. Ein Hinweis im
+Prompt („keine geraden Anführungszeichen“) änderte nichts (0 von 10).
+
+**Geprüft:** Tests in `packages/core/test/draft-envelope.test.ts`, `packages/ai/test/draft-parse.test.ts`,
+`draft-tools.test.ts`, `quote-guard.test.ts`. Gegen die echte API mit erfundenem Inhalt: Entwurf 11
+von 11 vollständig und ohne Hülle (auch mit Werkzeug-Aufruf), Extraktion 12 von 12 vollständig
+(vorher 0 von 8 bei „…“), Lernen 4 von 4.
