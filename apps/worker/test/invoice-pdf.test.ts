@@ -74,7 +74,14 @@ export const SAMPLE_INVOICE: BillingInvoice = {
 };
 
 async function textOf(pdf: Buffer): Promise<{ text: string; pages: number }> {
-  const parsed = await pdfParse(pdf);
+  // Handed over as a plain Uint8Array, not as the Buffer: pdf.js 1.10 (inside
+  // pdf-parse) copies a Buffer with `new Buffer(…)` and then reads sub-streams
+  // from the START of the memory block that copy lives in (makeSubStream uses
+  // `bytes.buffer` without the offset). A copy below 4 KB comes out of Node's
+  // shared pool, so whether this 3 KB invoice parsed depended on what else had
+  // been allocated — "bad XRef entry" in CI (2026-11-27), never locally. A
+  // plain Uint8Array is copied into memory of its own, starting at byte 0.
+  const parsed = await pdfParse(new Uint8Array(pdf));
   return { text: parsed.text.replace(/\s+/g, ' '), pages: parsed.numpages };
 }
 
