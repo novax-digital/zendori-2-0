@@ -34,6 +34,11 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
   return (await response.json()) as unknown;
 }
 
+/** `test: true` for the "Test" tab (see WidgetConfig.test); nothing otherwise. */
+function testFlag(config: WidgetConfig): { test?: true } {
+  return config.test ? { test: true } : {};
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -59,7 +64,10 @@ function parseHistoryMessage(value: unknown): HistoryMessage | null {
 }
 
 export async function fetchBootstrap(config: WidgetConfig): Promise<BootstrapResponse> {
-  const data = await postJson(`${config.apiBase}/api/widget/bootstrap`, { token: config.token });
+  const data = await postJson(`${config.apiBase}/api/widget/bootstrap`, {
+    token: config.token,
+    ...testFlag(config),
+  });
   if (!isRecord(data) || !isRecord(data.theme) || !isRecord(data.realtime)) throw invalidResponse();
   const url = asString(data.realtime.url);
   const anonKey = asString(data.realtime.anonKey);
@@ -73,7 +81,7 @@ export async function createOrResumeSession(
   config: WidgetConfig,
   resume: StoredSession | null
 ): Promise<SessionResponse | 'expired'> {
-  const body: Record<string, unknown> = { token: config.token };
+  const body: Record<string, unknown> = { token: config.token, ...testFlag(config) };
   if (resume) body.resume = resume;
   const data = await postJson(`${config.apiBase}/api/widget/session`, body);
   // invalid resume → the server tells us to start over as a first-time visitor
@@ -134,6 +142,7 @@ export async function sendWidgetMessage(
 ): Promise<void> {
   const body: Record<string, unknown> = {
     token: config.token,
+    ...testFlag(config),
     conversationId: session.conversationId,
     secret: session.secret,
     clientMessageId: payload.clientMessageId,

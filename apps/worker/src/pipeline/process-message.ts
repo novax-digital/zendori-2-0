@@ -7,6 +7,10 @@
 // the agent's confidence threshold (handoff on low confidence / wants-human /
 // escalation keyword still wins). While a human owns the conversation the bot
 // stays silent unless an agent explicitly requested a draft (metadata.force_draft).
+// A TEST conversation (0050, tab "Test" of a chat channel) runs the same chain,
+// with these differences: the assigned agent answers even while it is paused or
+// only writes drafts, a write to the customer's own system always waits for a
+// person, no ticket is opened, and HubSpot never hears about it.
 // Message content is never logged (§7); the classification/extraction summaries
 // stored in the DB are PII-free by prompt design and live in RLS-protected
 // tables, not in logs.
@@ -95,6 +99,8 @@ interface LoadedConversation {
   priority: ConversationPriority;
   contact_id: string | null;
   subject: string | null;
+  /** 0050: started from the channel's "Test" tab (absent before the migration). */
+  is_test?: boolean;
 }
 
 interface LoadedChannel {
@@ -174,10 +180,21 @@ export class PipelineError extends Error {
   }
 }
 
+const MESSAGE_COLUMNS =
+  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, external_id, metadata, processing_state, created_at, ';
+const CHANNEL_EMBED = 'channel:channels!inner(id, type, name, agent_id)';
 const MESSAGE_SELECT =
-  'id, org_id, conversation_id, channel_id, direction, sender_type, content, content_type, external_id, metadata, processing_state, created_at, ' +
+  MESSAGE_COLUMNS +
+  'conversation:conversations!inner(id, org_id, mode, priority, contact_id, subject, is_test), ' +
+  CHANNEL_EMBED;
+/** The same without conversations.is_test — the worker may run ahead of 0050. */
+const MESSAGE_SELECT_PRE_0050 =
+  MESSAGE_COLUMNS +
   'conversation:conversations!inner(id, org_id, mode, priority, contact_id, subject), ' +
-  'channel:channels!inner(id, type, name, agent_id)';
+  CHANNEL_EMBED;
+
+/** What the ticket confirmation shows instead of a ticket number in a test. */
+const TEST_TICKET_DISPLAY_ID = 'TEST';
 
 /**
  * Process one inbound message. Idempotent: guards short-circuit anything that is
@@ -188,11 +205,19 @@ const MESSAGE_SELECT =
 export async function processMessage(messageId: string): Promise<void> {
   const supabase = getServiceClient();
 
-  const { data: messageData, error: loadError } = await supabase
+  let { data: messageData, error: loadError } = await supabase
     .from('messages')
     .select(MESSAGE_SELECT)
     .eq('id', messageId)
     .maybeSingle();
+  if (loadError && (loadError as { code?: string }).code === '42703') {
+    // conversations.is_test is 0050 — without it no conversation is a test
+    ({ data: messageData, error: loadError } = await supabase
+      .from('messages')
+      .select(MESSAGE_SELECT_PRE_0050)
+      .eq('id', messageId)
+      .maybeSingle());
+  }
   if (loadError) {
     // 42703 = channels.agent_id / agents not migrated yet (worker deployed
     // ahead of 0011). Return WITHOUT throwing so the message stays 'pending'
@@ -234,6 +259,8 @@ export async function processMessage(messageId: string): Promise<void> {
   }
 
   const orgId = message.org_id;
+  // Tried out from the channel's "Test" tab (0050): see the file header.
+  const isTest = conv.is_test === true;
   const updatedMetadata: Record<string, unknown> = { ...message.metadata };
   // Consume the explicit-draft request: clear the flag so a stale value can
   // never re-trigger a bot draft after the agent keeps owning the conversation.
@@ -248,7 +275,9 @@ export async function processMessage(messageId: string): Promise<void> {
       conv.contact_id ? loadContact(supabase, conv.contact_id) : Promise.resolve(null),
     ]);
     // A paused agent behaves like no agent: ticketising still runs, replies don't.
-    const activeAgent = agent && agent.isActive ? agent : null;
+    // In a test it answers anyway — trying an agent out before it goes live is
+    // what the test is for.
+    const activeAgent = agent && (agent.isActive || isTest) ? agent : null;
     const agentIdentity = activeAgent?.identity ?? null;
 
     // Conversational channels: typing indicator + read receipt while the
@@ -478,7 +507,7 @@ export async function processMessage(messageId: string): Promise<void> {
           ...ticketSeed,
         });
         await finishMessage(supabase, message.id, updatedMetadata);
-        await afterInbound(supabase, orgId, channel.id, conv.id);
+        await afterInbound(supabase, orgId, channel.id, conv);
         return;
       }
       if (activeAgent.mode === 'intake_only') {
@@ -494,9 +523,10 @@ export async function processMessage(messageId: string): Promise<void> {
           channel,
           reason: 'intake',
           settings,
+          isTest,
         });
         await finishMessage(supabase, message.id, updatedMetadata);
-        await afterInbound(supabase, orgId, channel.id, conv.id);
+        await afterInbound(supabase, orgId, channel.id, conv);
         return;
       }
     }
@@ -566,10 +596,11 @@ export async function processMessage(messageId: string): Promise<void> {
           channel,
           reason: overrideReason,
           settings,
+          isTest,
         });
       }
       await finishMessage(supabase, message.id, updatedMetadata);
-      await afterInbound(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv);
       return;
     }
 
@@ -583,7 +614,11 @@ export async function processMessage(messageId: string): Promise<void> {
       !forceDraft && activeAgent
         ? await prepareDraftActions(supabase, {
             orgId,
-            agent: { id: activeAgent.id, mode: activeAgent.mode },
+            // In a test (0050) the agent never WRITES to the customer's own
+            // system by itself, whatever the action allows in production: as
+            // for an agent that only writes drafts, a write waits in the inbox
+            // for "Ausführen". Reading actions run as usual.
+            agent: { id: activeAgent.id, mode: isTest ? 'draft_only' : activeAgent.mode },
             conversationId: conv.id,
             messageId: message.id,
             channelType: channel.type,
@@ -649,7 +684,7 @@ export async function processMessage(messageId: string): Promise<void> {
       // Defensive: unreachable (gate above), but never auto-act without an agent.
       await persistDraft(supabase, { ...draftPersist, status: 'pending' });
       await finishMessage(supabase, message.id, updatedMetadata);
-      await afterInbound(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv);
       return;
     }
     const settings = await loadHandoffSettings(supabase, orgId);
@@ -662,9 +697,12 @@ export async function processMessage(messageId: string): Promise<void> {
       handoffEnabled: activeAgent.handoffEnabled,
       escalationTarget: activeAgent.escalationTarget,
     });
+    // In a test the answer goes straight back into the test chat, also from an
+    // agent that only writes drafts — the confidence gate and every escalation
+    // rule above still apply, so the test shows what the agent would say.
     const decided = decideDraftAction(
       detection.action,
-      activeAgent.mode === 'autopilot',
+      activeAgent.mode === 'autopilot' || isTest,
       detection.suppressed
     );
     // Phase 13: a data action of this draft waits for a team member's
@@ -686,7 +724,12 @@ export async function processMessage(messageId: string): Promise<void> {
       //     it from the channel (the natural per-channel kill switch). Re-read
       //     and only send if it is still the same, active, autopilot agent.
       const stillBot = await isStillBotMode(supabase, orgId, conv.id);
-      const stillAutopilot = stillBot && (await isStillAutopilotAgent(supabase, channel.id, activeAgent.id));
+      // a test answers whatever state the agent is in — only its assignment counts
+      const stillAutopilot =
+        stillBot &&
+        (isTest
+          ? await isStillAssignedAgent(supabase, channel.id, activeAgent.id)
+          : await isStillAutopilotAgent(supabase, channel.id, activeAgent.id));
       // (c) Burst re-check: a newer customer message may have arrived during
       //     the multi-second draft — sending now would talk over it. Keep the
       //     answer as a suggestion; the newer run supersedes it via
@@ -722,7 +765,7 @@ export async function processMessage(messageId: string): Promise<void> {
         senderType: 'bot',
         files,
       });
-      await afterInbound(supabase, orgId, channel.id, conv.id);
+      await afterInbound(supabase, orgId, channel.id, conv);
       return; // message already marked done by the claim
     } else if ((action === 'handoff' || action === 'ticket') && detection.reason) {
       // Keep the draft as a suggestion for the agent, then escalate (§6): live
@@ -737,6 +780,7 @@ export async function processMessage(messageId: string): Promise<void> {
         channel,
         reason: detection.reason,
         settings,
+        isTest,
       });
     } else {
       // No handoff: keep the draft as a suggestion (Phase-4 behavior). When the
@@ -767,7 +811,7 @@ export async function processMessage(messageId: string): Promise<void> {
 
     // --- 6. done -------------------------------------------------------------
     await finishMessage(supabase, message.id, updatedMetadata);
-    await afterInbound(supabase, orgId, channel.id, conv.id);
+    await afterInbound(supabase, orgId, channel.id, conv);
   } catch (err) {
     if (err instanceof PipelineError) throw err;
     throw new PipelineError(currentStep, orgId, conv.id, err);
@@ -782,10 +826,16 @@ interface EscalateArgs {
   reason: HandoffReason;
   ticket: TicketSeed;
   settings: HandoffSettings;
+  /** 0050: a test conversation — the customer-facing part happens, no ticket does. */
+  isTest: boolean;
 }
 
 /** The one switch between the two escalation targets (Phase 12). */
 async function escalate(supabase: SupabaseClient, args: EscalateArgs): Promise<void> {
+  if (args.target === 'ticket' && args.isTest) {
+    await applyTestTicketEscalation(supabase, args);
+    return;
+  }
   if (args.target === 'ticket') {
     await applyTicketEscalation(supabase, {
       orgId: args.orgId,
@@ -819,10 +869,12 @@ async function afterInbound(
   supabase: SupabaseClient,
   orgId: string,
   channelId: string,
-  conversationId: string
+  conv: Pick<LoadedConversation, 'id' | 'is_test'>
 ): Promise<void> {
-  await maybeRequestHubspotSync(supabase, orgId, channelId, conversationId);
-  await requestConversationTicketsResync(supabase, { orgId, channelId, conversationId });
+  // a test conversation (0050) never reaches HubSpot, and it has no tickets
+  if (conv.is_test === true) return;
+  await maybeRequestHubspotSync(supabase, orgId, channelId, conv.id);
+  await requestConversationTicketsResync(supabase, { orgId, channelId, conversationId: conv.id });
 }
 
 /**
@@ -1032,6 +1084,24 @@ async function isStillAutopilotAgent(
   return (
     row?.agent_id === agentId && row.agent?.is_active === true && row.agent.mode === 'autopilot'
   );
+}
+
+/**
+ * Test conversations (0050): the channel still points to the SAME agent. Its
+ * mode and pause switch do not matter there, detaching it mid-pipeline does.
+ */
+async function isStillAssignedAgent(
+  supabase: SupabaseClient,
+  channelId: string,
+  agentId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('channels')
+    .select('agent_id')
+    .eq('id', channelId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { agent_id: string | null } | null)?.agent_id === agentId;
 }
 
 /**
@@ -1369,6 +1439,53 @@ async function applyTicketEscalation(
     content: text,
     senderType: 'system',
   });
+}
+
+/**
+ * Escalation target 'ticket' in a TEST conversation (0050): no ticket and no
+ * event are written, but the person trying the widget out sees what a customer
+ * would — the org's ticket confirmation, with "TEST" where the number goes. As
+ * in real conversations it is sent once: later messages get the short follow-up
+ * confirmation, and "Reine Annahme" stays quiet after the first.
+ */
+async function applyTestTicketEscalation(
+  supabase: SupabaseClient,
+  args: EscalateArgs
+): Promise<void> {
+  const ack = parseTicketAckTexts(args.settings.ticketAckTexts);
+  const confirmedBefore = await hasSystemReply(supabase, args.conv.id);
+  let text: string | null;
+  if (!confirmedBefore) {
+    text = selectTicketAckText(
+      new Date(),
+      ack,
+      parseBusinessHours(args.settings.businessHours),
+      TEST_TICKET_DISPLAY_ID
+    );
+  } else {
+    if (args.reason === 'intake' || !ack.enabled) return;
+    text = renderTicketAckText(DEFAULT_TICKET_FOLLOWUP_ACK_TEXT, TEST_TICKET_DISPLAY_ID);
+  }
+  if (!text) return;
+  await deliverBotReply(supabase, {
+    conv: args.conv,
+    channel: args.channel,
+    content: text,
+    senderType: 'system',
+  });
+}
+
+/** True when the conversation already carries a system notice to the customer. */
+async function hasSystemReply(supabase: SupabaseClient, conversationId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'out')
+    .eq('sender_type', 'system')
+    .limit(1);
+  if (error) return false; // a second confirmation is the cheaper mistake
+  return (data?.length ?? 0) > 0;
 }
 
 /** Tolerant jsonb → TicketAckTexts ('{}' = enabled with the default text). */

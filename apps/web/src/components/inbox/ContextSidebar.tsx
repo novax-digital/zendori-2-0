@@ -114,6 +114,8 @@ export default function ContextSidebar({
   );
 
   const contactLabel = contact?.name ?? contact?.email ?? 'Unbekannter Kontakt';
+  // Tried out from the channel's "Test" tab (0050): no tickets, no HubSpot.
+  const isTest = conversation.is_test === true;
   const statusOptions =
     hubspot.active || conversation.status === 'hubspot_sent'
       ? [...BASE_STATUS_OPTIONS, HUBSPOT_STATUS_OPTION]
@@ -304,35 +306,41 @@ export default function ContextSidebar({
             })}
           </div>
         )}
-        <div className="row">
-          {/* always offered (attach rule v2): a manual ticket is always a NEW one */}
-          <form action={createTicketFromConversation}>
-            {hiddenFields}
-            <Button type="submit" size="sm">
-              Ticket anlegen
-            </Button>
-          </form>
-          {/* only with an ACTIVE HubSpot connection — a paused one syncs nothing */}
-          {hubspot.active ? (
-            <form action={syncConversationTicketToHubspot}>
+        {isTest ? (
+          <p className="muted small">
+            Das ist ein Testgespräch. Für Testgespräche werden keine Tickets angelegt.
+          </p>
+        ) : (
+          <div className="row">
+            {/* always offered (attach rule v2): a manual ticket is always a NEW one */}
+            <form action={createTicketFromConversation}>
               {hiddenFields}
-              <Button
-                type="submit"
-                size="sm"
-                variant="ghost"
-                title="Legt bei Bedarf ein Ticket an und schickt es an HubSpot (Ticket-Strom)"
-              >
-                Ticket an HubSpot senden
+              <Button type="submit" size="sm">
+                Ticket anlegen
               </Button>
             </form>
-          ) : null}
-        </div>
+            {/* only with an ACTIVE HubSpot connection — a paused one syncs nothing */}
+            {hubspot.active ? (
+              <form action={syncConversationTicketToHubspot}>
+                {hiddenFields}
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="ghost"
+                  title="Legt bei Bedarf ein Ticket an und schickt es an HubSpot (Ticket-Strom)"
+                >
+                  Ticket an HubSpot senden
+                </Button>
+              </form>
+            ) : null}
+          </div>
+        )}
       </section>
 
       {/* HubSpot only appears with an ACTIVE connection (owner decision 2026-11-22).
           Without one the inbox shows nothing of it; a paused connection keeps
           just the link to a ticket that already exists in HubSpot. */}
-      {hubspot.active || hubspotTicketUrl ? (
+      {!isTest && (hubspot.active || hubspotTicketUrl) ? (
         <section className="rail-section">
           <h3>HubSpot</h3>
           {!hubspot.active ? (

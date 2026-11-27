@@ -5,9 +5,12 @@ import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { corsHeaders, preflight } from '@/lib/widget/cors';
 import { findWidgetChannelByToken, WidgetDbError } from '@/lib/widget/session';
+import { findWidgetChannelForTest } from '@/lib/widget/test-mode';
 
 const bodySchema = z.object({
   token: z.string().regex(/^[0-9a-f]{32}$/),
+  // the channel's own "Test" tab (0050): signed-in members only, drafts included
+  test: z.literal(true).optional(),
 });
 
 function json(body: unknown, status: number): NextResponse {
@@ -54,7 +57,9 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let channel;
   try {
-    channel = await findWidgetChannelByToken(admin, parsed.data.token);
+    channel = parsed.data.test
+      ? await findWidgetChannelForTest(admin, parsed.data.token)
+      : await findWidgetChannelByToken(admin, parsed.data.token);
   } catch (error) {
     if (error instanceof WidgetDbError) return serviceUnavailable();
     throw error;

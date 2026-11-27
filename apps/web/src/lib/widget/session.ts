@@ -79,18 +79,24 @@ function hashesMatch(a: string, b: string): boolean {
  * Resolves a public widget token to its active widget channel.
  * Returns null for unknown tokens, inactive channels or non-widget configs;
  * throws WidgetDbError on database errors.
+ *
+ * `includeInactive` is for the channel's own "Test" tab only (0050): a draft
+ * can be tried out before it goes live. The caller must have verified the
+ * signed-in member first (lib/widget/test-mode.ts) — a visitor never gets an
+ * inactive channel.
  */
 export async function findWidgetChannelByToken(
   admin: SupabaseClient,
-  token: string
+  token: string,
+  options?: { includeInactive?: boolean }
 ): Promise<{ id: string; org_id: string; config: WidgetChannelConfig } | null> {
-  const { data, error } = await admin
+  let query = admin
     .from('channels')
     .select('id, org_id, config')
     .eq('type', 'chat')
-    .eq('is_active', true)
-    .contains('config', { widget: true, public_token: token })
-    .limit(1);
+    .contains('config', { widget: true, public_token: token });
+  if (options?.includeInactive !== true) query = query.eq('is_active', true);
+  const { data, error } = await query.limit(1);
   if (error) throw new WidgetDbError('channels lookup');
   const row = (data ?? [])[0] as { id: string; org_id: string; config: unknown } | undefined;
   if (!row) return null;

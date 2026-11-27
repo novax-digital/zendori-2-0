@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
+import { isTestConversation } from '@zendori/core';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { corsHeaders, preflight } from '@/lib/widget/cors';
 import { findWidgetChannelByToken, verifySession, WidgetDbError } from '@/lib/widget/session';
+import { findWidgetChannelForTest } from '@/lib/widget/test-mode';
 
 const bodySchema = z
   .object({
     token: z.string().regex(/^[0-9a-f]{32}$/),
+    // the channel's own "Test" tab (0050): signed-in members only, drafts included
+    test: z.literal(true).optional(),
     conversationId: z.uuid(),
     secret: z.string().regex(/^[0-9a-f]{48}$/),
     clientMessageId: z.uuid(),
@@ -38,8 +42,15 @@ function serviceUnavailable(): NextResponse {
 /**
  * Applies optional contact details to the session's OWN contact row only.
  * Last submitted value wins. Deliberately no merging with other contacts of
- * the org that share the email — deduplication is handled agent-/AI-side
- * later (phase 4). Returns false if persisting failed.
+ * the org that share the email: in a chat the address is only CLAIMED — the
+ * answers go back into this browser, not to that mailbox — so taking over an
+ * existing contact would hand its identity (and whatever a data action looks up
+ * for it) to anyone who types the address.
+ *
+ * An e-mail address is unique per org (0006). When it already belongs to
+ * another contact, the name is still saved and the claimed address is kept for
+ * the team as an internal note (keepClaimedEmailAsNote) — the visitor gets the
+ * same "saved" as for any other address. Returns false if persisting failed.
  */
 async function applyContactUpdate(
   admin: SupabaseClient,
@@ -64,7 +75,11 @@ async function applyContactUpdate(
       .update(patch)
       .eq('id', contactId)
       .eq('org_id', orgId);
-    return !error;
+    if (!error) return true;
+    if (error.code === '23505' && email !== undefined) {
+      return keepClaimedEmailAsNote(admin, { orgId, conversationId, contactId, email, name });
+    }
+    return false;
   }
 
   // session without a contact → create our own and attach it to the conversation
@@ -80,6 +95,46 @@ async function applyContactUpdate(
     .eq('id', conversationId)
     .eq('org_id', orgId);
   return !attachError;
+}
+
+/**
+ * The e-mail the visitor entered already belongs to another contact of the org
+ * (a returning visitor in a new browser, someone who wrote by e-mail before —
+ * or somebody typing an address that is not theirs). Until 2026-11-27 the save
+ * simply failed, which also told the visitor that the address is known. Now:
+ * the name goes onto the session's own contact, and the address is left for the
+ * team as an internal note on the conversation — once, however often it is sent.
+ * Whether the two contacts are the same person stays a human decision.
+ */
+async function keepClaimedEmailAsNote(
+  admin: SupabaseClient,
+  params: { orgId: string; conversationId: string; contactId: string; email: string; name?: string }
+): Promise<boolean> {
+  const { orgId, conversationId, contactId, email, name } = params;
+  if (name !== undefined) {
+    const { error: nameError } = await admin
+      .from('contacts')
+      .update({ name })
+      .eq('id', contactId)
+      .eq('org_id', orgId);
+    if (nameError) return false;
+  }
+  const content =
+    `Im Chat angegebene E-Mail-Adresse: ${email}. Sie gehört bereits zu einem anderen Kontakt ` +
+    'und wurde deshalb nicht übernommen (die Angabe ist unbestätigt).';
+  const { data: existing, error: lookupError } = await admin
+    .from('notes')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('conversation_id', conversationId)
+    .eq('content', content)
+    .limit(1);
+  if (lookupError) return false;
+  if ((existing ?? []).length > 0) return true;
+  const { error: noteError } = await admin
+    .from('notes')
+    .insert({ org_id: orgId, conversation_id: conversationId, author_id: null, content });
+  return !noteError;
 }
 
 export function OPTIONS(): Response {
@@ -98,6 +153,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'Ungültige Anfrage.' }, 400);
   }
   const { token, conversationId, secret, clientMessageId, content, contact } = parsed.data;
+  const test = parsed.data.test === true;
 
   const [ipAllowed, conversationAllowed] = await Promise.all([
     checkRateLimit('widget-message-ip', clientIp(request)),
@@ -121,7 +177,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   let channel;
   let verified;
   try {
-    channel = await findWidgetChannelByToken(admin, token);
+    channel = test
+      ? await findWidgetChannelForTest(admin, token)
+      : await findWidgetChannelByToken(admin, token);
     if (channel) {
       verified = await verifySession(admin, conversationId, secret);
     }
@@ -136,6 +194,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'Sitzung ist ungültig oder abgelaufen.' }, 401);
   }
   const session = verified.session;
+  if (test) {
+    // the "Test" tab writes into test conversations only — never into a real one
+    let isTest: boolean;
+    try {
+      isTest = await isTestConversation(admin, channel.org_id, session.conversation_id);
+    } catch {
+      return serviceUnavailable();
+    }
+    if (!isTest) return json({ error: 'Sitzung ist ungültig oder abgelaufen.' }, 401);
+  }
   // AUTHORITATIVE conversation: may differ from the client-sent id when the
   // session was rotated by ticket separation (stale tab) — messages must land
   // in the session's CURRENT conversation, never in the abandoned one.

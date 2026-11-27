@@ -16,6 +16,7 @@ import {
   markContactPromptDone,
   markTeaserDismissed,
   saveStoredSession,
+  testStorageId,
 } from './storage';
 import { createWidgetUi } from './ui';
 import type { BubbleHandle } from './ui';
@@ -34,6 +35,10 @@ import type {
  *   <script src="https://…/widget.js" data-zendori-token="TOKEN" async></script>
  *
  * Optional: data-zendori-url overrides the API base (default: script origin).
+ *
+ * data-zendori-test is for Zendori's own "Test" tab only (see WidgetConfig.test):
+ * the chat opens right away and keeps its own session, apart from the one a
+ * visitor of the same browser may have on the live widget.
  */
 
 declare global {
@@ -105,7 +110,7 @@ function resolveConfig(): WidgetConfig | null {
     }
   }
   if (!apiBase) apiBase = window.location.origin;
-  return { token, apiBase };
+  return { token, apiBase, test: script.dataset.zendoriTest !== undefined };
 }
 
 async function bootstrapWithRetry(
@@ -161,6 +166,9 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
   let retryDelayMs = RETRY_DELAY_START_MS;
   let activeSession: { conversationId: string; secret: string } | null = null;
   let sessionFlight: Promise<SessionResponse | null> | null = null;
+  // Everything this browser remembers is kept per widget; a test keeps its own
+  // set, so trying the widget out never touches a real visitor session.
+  const storageId = config.test ? testStorageId(config.token) : config.token;
 
   // never trust the stored shape: old three-field themes, missing keys, edits
   const theme = normalizeWidgetTheme(bootData.theme);
@@ -172,21 +180,21 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     },
     onContactSave: (name, email) => saveContact(name, email),
     onContactSkip: () => {
-      markContactPromptDone(config.token);
+      markContactPromptDone(storageId);
     },
     onTeaserDismiss: () => {
-      markTeaserDismissed(config.token);
+      markTeaserDismissed(storageId);
     },
   });
 
   // Invite ONCE per browser: not for returning chatters, and never a second
   // time — showing it counts, whether the visitor then closes it, opens the
   // chat or just moves on to the next page.
-  if (theme.teaser && !isTeaserDismissed(config.token) && !loadStoredSession(config.token)) {
+  if (theme.teaser && !isTeaserDismissed(storageId) && !loadStoredSession(storageId)) {
     window.setTimeout(() => {
-      if (ui.isOpen() || isTeaserDismissed(config.token)) return;
+      if (ui.isOpen() || isTeaserDismissed(storageId)) return;
       ui.showTeaser();
-      markTeaserDismissed(config.token);
+      markTeaserDismissed(storageId);
     }, TEASER_DELAY_MS);
   }
 
@@ -247,16 +255,16 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     if (sessionFlight) return sessionFlight;
     const flight = (async (): Promise<SessionResponse | null> => {
       try {
-        const stored = loadStoredSession(config.token);
+        const stored = loadStoredSession(storageId);
         const result = await createOrResumeSession(config, stored);
         if (result === 'expired') {
           activeSession = null;
-          clearStoredSession(config.token);
+          clearStoredSession(storageId);
           return null;
         }
         const secret = result.secret || stored?.secret || '';
         activeSession = { conversationId: result.conversationId, secret };
-        saveStoredSession(config.token, activeSession);
+        saveStoredSession(storageId, activeSession);
         realtime.subscribe(result.topic);
         return result;
       } finally {
@@ -368,7 +376,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
           // the reply pipeline takes several seconds — show "…" until the
           // broadcast reply arrives (or the failsafe timeout clears it)
           showTypingIndicator();
-          if (!isContactPromptDone(config.token)) ui.showContactPrompt();
+          if (!isContactPromptDone(storageId)) ui.showContactPrompt();
         } else {
           item.bubble.setState('failed');
         }
@@ -407,7 +415,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
           if (error.status === 401 || error.status === 404) {
             // stale/invalid session — the next attempt creates a fresh one
             activeSession = null;
-            clearStoredSession(config.token);
+            clearStoredSession(storageId);
             continue;
           }
           if (error.status === 400) return 'rejected';
@@ -438,7 +446,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
         clientMessageId: generateClientMessageId(),
         contact,
       });
-      markContactPromptDone(config.token);
+      markContactPromptDone(storageId);
       return null;
     } catch (error) {
       if (error instanceof WidgetApiError && error.status === 400) {
@@ -452,7 +460,7 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
     ui.setOffline(true);
   });
   window.addEventListener('online', () => {
-    if (activeSession || loadStoredSession(config.token)) {
+    if (activeSession || loadStoredSession(storageId)) {
       // re-join the broadcast channel and reload history to catch missed replies
       void refreshFromServer(3);
     } else {
@@ -462,9 +470,11 @@ function mount(config: WidgetConfig, bootData: BootstrapResponse): void {
   });
 
   // resume an existing session on load: render history + subscribe
-  if (loadStoredSession(config.token)) {
+  if (loadStoredSession(storageId)) {
     void refreshFromServer(3);
   }
+  // the "Test" tab is there to chat — no extra click on the launcher
+  if (config.test) ui.open();
 }
 
 function boot(): void {

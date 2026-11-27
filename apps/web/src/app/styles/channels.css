@@ -185,3 +185,48 @@
     height: 640px;
   }
 }
+
+/* --- Tab "Test" of a chat channel (components/WidgetTestFrame.tsx) ---------------
+   What a test does on the left, the real widget in a framed stand-in page on
+   the right. The frame is wide enough for the widget's desktop layout; on a
+   narrow screen it stacks and shows the phone layout. */
+.wt {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+.wt-info {
+  min-width: 0;
+}
+.wt-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+/* fills the browser mock below its address bar */
+.wt-frame {
+  position: absolute;
+  inset: 34px 0 0 0;
+  width: 100%;
+  height: calc(100% - 34px);
+  border: 0;
+}
+/* the stand-in page inside the frame (app/widget-test) */
+.wt-site {
+  min-height: 100vh;
+  background: var(--surface-sunken);
+}
+@media (max-width: 1100px) {
+  .wt {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* the chat is what the tab is for — it comes first when the columns stack */
+  .wt-preview {
+    order: -1;
+  }
+  .wt-preview .wd-browser {
+    height: 640px;
+  }
+}

@@ -51,14 +51,11 @@ export default async function TestChannelPage({
         {activeChannels.length === 0 ? (
           <EmptyState
             title="Kein aktiver Kanal"
-            text="Lege zuerst einen Test-Channel an, dann kannst du hier Nachrichten einspeisen."
+            text="Nachrichten lassen sich nur in einen aktiven Kanal einspeisen. Einen Chat-Kanal probierst du auf seiner Seite im Reiter „Test“ aus, auch als Entwurf."
             action={
               canOpenChannels ? (
-                <Button
-                  href={href('/settings/channels', { org: orgId, panel: 'new', type: 'test' })}
-                  variant="primary"
-                >
-                  Test-Channel anlegen
+                <Button href={href('/settings/channels', { org: orgId })} variant="primary">
+                  Zu den Kanälen
                 </Button>
               ) : undefined
             }

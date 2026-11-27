@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { SupabaseClient } from '@zendori/core';
-import { findOpenTicket } from '@zendori/core';
+import { findOpenTicket, isMissingColumnError, isTestConversation } from '@zendori/core';
 import { shouldStartNewConversation } from '@zendori/channels';
 import { checkRateLimit, clientIp } from '@/lib/rate-limit';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
@@ -13,9 +13,13 @@ import {
   verifySession,
   WidgetDbError,
 } from '@/lib/widget/session';
+import { findWidgetChannelForTest } from '@/lib/widget/test-mode';
 
 const bodySchema = z.object({
   token: z.string().regex(/^[0-9a-f]{32}$/),
+  // the channel's own "Test" tab (0050): signed-in members only, drafts
+  // included; the session it starts is a TEST conversation
+  test: z.literal(true).optional(),
   // shape is validated separately below: only requests WITHOUT a resume field
   // create a fresh session, so a malformed resume must count as invalid
   // (→ expired) rather than as "no resume"
@@ -154,6 +158,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({ error: 'Ungültige Anfrage.' }, 400);
   }
   const { token, resume: rawResume } = parsed.data;
+  const test = parsed.data.test === true;
 
   let admin;
   try {
@@ -167,7 +172,9 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let channel;
   try {
-    channel = await findWidgetChannelByToken(admin, token);
+    channel = test
+      ? await findWidgetChannelForTest(admin, token)
+      : await findWidgetChannelByToken(admin, token);
   } catch (error) {
     if (error instanceof WidgetDbError) return serviceUnavailable();
     throw error;
@@ -196,6 +203,16 @@ export async function POST(request: Request): Promise<NextResponse> {
       // session gone or wrong secret — never reveal which
       return json({ expired: true }, 200);
     }
+    if (test) {
+      // the "Test" tab only ever continues a conversation it started itself
+      let isTest: boolean;
+      try {
+        isTest = await isTestConversation(admin, channel.org_id, verified.session.conversation_id);
+      } catch {
+        return serviceUnavailable();
+      }
+      if (!isTest) return json({ expired: true }, 200);
+    }
     const { data: touched, error: touchError } = await admin
       .from('widget_sessions')
       .update({ last_seen_at: new Date().toISOString() })
@@ -218,10 +235,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     // stores it). `pending` never splits; an empty conversation (no inbound
     // message yet) is reused so returning visitors don't pile up empty tickets.
     // Best-effort: any failure falls back to resuming the old conversation.
-    let splitDue = shouldStartNewConversation(
-      verified.conversation,
-      channel.config.conversation_split_hours
-    );
+    // A test keeps its one conversation: nothing is separated into tickets there.
+    let splitDue =
+      !test &&
+      shouldStartNewConversation(verified.conversation, channel.config.conversation_split_hours);
     if (splitDue) {
       // Phase 11 attach rule: an OPEN ticket pins the visitor to that
       // conversation (lazy lookup only when the window says "split";
@@ -279,10 +296,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       subject: null,
       status: 'open',
       mode: 'bot',
+      ...(test ? { is_test: true } : {}),
     })
     .select('id')
     .single();
   if (conversationError || !conversationRow) {
+    // the contact above belongs to nothing now — do not leave it behind
+    await admin.from('contacts').delete().eq('id', contactId).eq('org_id', channel.org_id);
+    // a test before migration 0050: not available yet, rather than a broken chat
+    if (test && isMissingColumnError(conversationError)) return serviceUnavailable();
     return json({ error: 'Sitzung konnte nicht erstellt werden.' }, 500);
   }
   const conversationId = (conversationRow as { id: string }).id;

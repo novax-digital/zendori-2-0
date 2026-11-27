@@ -88,7 +88,8 @@ bisherigen Farbe, ohne dass jemand speichern muss.
 ## Manueller Test
 
 1. Einstellungen → Kanäle → „Chat-Widget anlegen" → Theme (Farbe/Titel/Begrüßung) speichern.
-2. Navigation → **Widget-Demo**: Bubble unten rechts erscheint im Theme.
+2. Kanal öffnen → Reiter **Test** (seit 2026-11-27, docs/webchat-test.md; die frühere Seite
+   „Widget-Demo“ leitet dorthin): Das Chat-Fenster erscheint im Theme.
 3. Nachricht senden → erscheint in der Inbox (zweiter Tab: live).
 4. In der Inbox antworten → Antwort erscheint im Widget **ohne Reload**.
 5. Kontaktdaten-Block im Widget ausfüllen → Kontakt in der Inbox-Sidebar aktualisiert.
@@ -106,8 +107,9 @@ bisherigen Farbe, ohne dass jemand speichern muss.
 11. „Hinweis neben dem Button“ einschalten. **Erwartet:** Die Vorschau springt auf „Geschlossen“ und
     zeigt die Sprechblase neben dem Chat-Button.
 12. „Design speichern“. **Erwartet:** Meldung „Design gespeichert.“; nach dem Neuladen stehen alle Werte noch da.
-13. **Widget-Demo** (Tab „Einbetten“) öffnen. **Erwartet:** Das Widget erscheint im gespeicherten
-    Design; nach etwa 4 s kommt der Hinweis (einmal pro Browser). Ein Klick auf eine Schnellantwort
+13. Reiter **Test** öffnen (früher „Widget-Demo“). **Erwartet:** Das Widget erscheint im gespeicherten
+    Design, der Chat ist dort schon geöffnet. Den Hinweis neben dem Button (nach etwa 4 s, einmal
+    pro Browser) sieht man auf der eigenen Website mit dem Embed-Code. Ein Klick auf eine Schnellantwort
     sendet sie als Nachricht in die Inbox.
 14. Fenster auf Handybreite ziehen und den Chat öffnen. **Erwartet:** Der Chat füllt den ganzen
     Bildschirm, geschlossen wird über den Pfeil oben rechts.

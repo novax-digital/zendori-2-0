@@ -13,6 +13,7 @@ import { z } from 'zod';
 import {
   createLogger,
   decryptSecret,
+  isTestConversation,
   loadWorkerEnv,
   type ChannelType,
   type ConversationPriority,
@@ -139,6 +140,14 @@ export async function syncConversation(conversationId: string): Promise<void> {
   if (!convData) return; // conversation vanished — nothing to sync
   const conv = convData as unknown as LoadedConversationRow;
   const orgId = conv.org_id;
+
+  // A test conversation (0050, tab "Test" of a chat channel) never reaches
+  // HubSpot. Every way of asking for a sync ends here — the pipeline, a status
+  // change and the inbox button — so this is the one place that refuses.
+  if (await isTestConversation(supabase, orgId, conv.id)) {
+    await stampSynced(supabase, conversationId, orgId, syncStartedAt);
+    return;
+  }
 
   // --- active HubSpot integration (unique per org, type=hubspot) --------------
   const { data: integrationData, error: integrationError } = await supabase

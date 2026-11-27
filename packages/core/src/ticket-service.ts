@@ -3,6 +3,7 @@ import { isMissingColumnError, isMissingRelationError } from './db.js';
 import { requestTicketHubspotSync } from './hubspot-rules.js';
 import type { ConversationPriority } from './schemas.js';
 import { PRIORITY_RANK, isPlaceholderSubject, type TicketOrigin, type TicketStatus } from './tickets.js';
+import { TEST_TICKET_REFUSED_CODE, isTestConversation } from './test-conversations.js';
 
 // The ONE way tickets come into existence (Phase 11, docs/phase-11-tickets.md).
 // Works with the worker's service-role client and with a user-scoped client
@@ -66,7 +67,9 @@ export interface TicketRef {
 
 export type EnsureTicketResult =
   | { outcome: 'created' | 'attached'; ticket: TicketRef }
-  | { outcome: 'unavailable'; reason: 'schema_skew' };
+  | { outcome: 'unavailable'; reason: 'schema_skew' }
+  /** A test conversation (0050) never becomes a ticket — nothing was written. */
+  | { outcome: 'skipped'; reason: 'test_conversation' };
 
 interface OpenTicketRow {
   id: string;
@@ -229,6 +232,11 @@ export async function ensureTicket(
   supabase: SupabaseClient,
   input: EnsureTicketInput
 ): Promise<EnsureTicketResult> {
+  // Trying the widget out must not take a number from the org's ticket range,
+  // mail the team or reach HubSpot (0050): a test conversation has no tickets.
+  if (await isTestConversation(supabase, input.orgId, input.conversationId)) {
+    return { outcome: 'skipped', reason: 'test_conversation' };
+  }
   const open = await findOpenTicket(supabase, input.orgId, input.conversationId);
   if (open === 'unavailable') return { outcome: 'unavailable', reason: 'schema_skew' };
   const policy = input.attach ?? 'auto';
@@ -255,6 +263,10 @@ export async function ensureTicket(
     .select('id, number, display_id, status, subject, channel_id')
     .single();
   if (error) {
+    // the database guard said the same thing (a writer raced the check above)
+    if ((error as { code?: string }).code === TEST_TICKET_REFUSED_CODE) {
+      return { outcome: 'skipped', reason: 'test_conversation' };
+    }
     if ((error as { code?: string }).code === '23505') {
       // Only reachable while the 0030 partial index still exists (worker ahead
       // of 0031) or on a number/display-id collision: attach to the newest open

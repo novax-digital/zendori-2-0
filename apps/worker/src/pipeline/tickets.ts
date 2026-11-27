@@ -26,6 +26,8 @@ export async function ensureTicketForConversation(
 ): Promise<EnsuredTicket | null> {
   try {
     const result = await ensureTicket(supabase, input);
+    // a test conversation (0050) has no tickets — by design, nothing to report
+    if (result.outcome === 'skipped') return null;
     if (result.outcome === 'unavailable') {
       if (!skewWarned) {
         skewWarned = true;

@@ -225,6 +225,8 @@ export const conversationSchema = z.object({
   priority: conversationPrioritySchema,
   last_message_at: z.string().nullable(),
   external_refs: z.record(z.string(), z.unknown()),
+  /** 0050: started from a chat channel's "Test" tab (absent before the migration). */
+  is_test: z.boolean().optional(),
   created_at: z.string(),
 });
 export type Conversation = z.infer<typeof conversationSchema>;

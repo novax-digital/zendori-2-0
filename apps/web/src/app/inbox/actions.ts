@@ -12,7 +12,6 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { deliverOutboundEmail } from '@/lib/email/dispatch';
 import { deliverOutboundWhatsApp } from '@/lib/whatsapp/dispatch';
-import { checkChannelQuota } from '@/lib/channel-limits';
 import { getMemberAccess, hasAreaEdit, hasConversationEdit } from '@/lib/access';
 import { canAccessChannel, canEditArea } from '@zendori/core';
 
@@ -72,12 +71,6 @@ function cannedResponsesUrl(org: string, error?: string): string {
   const params = new URLSearchParams({ org });
   if (error) params.set('error', error);
   return `/settings/canned-responses?${params.toString()}`;
-}
-
-function channelsUrl(org: string, error?: string): string {
-  const params = new URLSearchParams({ org });
-  if (error) params.set('error', error);
-  return `/settings/channels?${params.toString()}`;
 }
 
 function testChannelUrl(org: string, message?: { error?: string; notice?: string }): string {
@@ -644,46 +637,9 @@ export async function deleteCannedResponse(formData: FormData): Promise<void> {
   redirect(cannedResponsesUrl(org));
 }
 
-// --- test channel ------------------------------------------------------------------
-
-const testChannelSchema = z.object({
-  org: z.uuid(),
-  name: z.string().min(2),
-});
-
-export async function createTestChannel(formData: FormData): Promise<void> {
-  if (!(await hasAreaEdit(formData.get('org'), 'inbox'))) {
-    redirect(inboxUrl(fallbackInboxRedirect(formData, 'Keine Berechtigung.')));
-  }
-  const parsed = testChannelSchema.safeParse({
-    org: formData.get('org'),
-    name: textField(formData.get('name')),
-  });
-  if (!parsed.success) {
-    redirect(
-      channelsUrl(
-        textField(formData.get('org')),
-        'Bitte einen Namen mit mindestens 2 Zeichen angeben.'
-      )
-    );
-  }
-  const { org, name } = parsed.data;
-
-  // Quota pre-check (0017; DB trigger is the backstop).
-  const quotaError = await checkChannelQuota(org, 'test');
-  if (quotaError) redirect(channelsUrl(org, quotaError));
-
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase
-    .from('channels')
-    .insert({ org_id: org, type: 'chat', name, config: { test: true } });
-  if (error) {
-    redirect(channelsUrl(org, 'Channel konnte nicht angelegt werden.'));
-  }
-
-  revalidatePath('/settings/channels');
-  redirect(channelsUrl(org));
-}
+// --- test messages -----------------------------------------------------------------
+// (Test channels can no longer be created — a chat channel is tried out on its
+// own "Test" tab, docs/webchat-test.md. Existing ones keep working with this.)
 
 const ingestSchema = z.object({
   org: z.uuid(),
@@ -1012,6 +968,10 @@ const handoffActionSchema = z.object({
   conversationId: z.uuid(),
 });
 
+/** A test conversation (0050) never becomes a ticket; both ticket buttons say so. */
+const TEST_CONVERSATION_NO_TICKET =
+  'Das ist ein Testgespräch. Für Testgespräche werden keine Tickets angelegt.';
+
 /**
  * „Übernehmen" (§6 trigger #4): the agent takes the conversation off the bot.
  * Sets mode='human', status='pending', assigns it to the acting agent and
@@ -1138,6 +1098,7 @@ export async function syncConversationTicketToHubspot(formData: FormData): Promi
 
   let displayId = '';
   let failed = false;
+  let isTest = false;
   try {
     const result = await ensureTicket(supabase, {
       orgId: org,
@@ -1146,7 +1107,9 @@ export async function syncConversationTicketToHubspot(formData: FormData): Promi
       attach: 'always',
       createdBy: user.id,
     });
-    if (result.outcome === 'unavailable') {
+    if (result.outcome === 'skipped') {
+      isTest = true;
+    } else if (result.outcome === 'unavailable') {
       failed = true;
     } else {
       displayId = result.ticket.displayId;
@@ -1160,6 +1123,7 @@ export async function syncConversationTicketToHubspot(formData: FormData): Promi
   } catch {
     failed = true;
   }
+  if (isTest) redirect(inboxUrl({ ...base, error: TEST_CONVERSATION_NO_TICKET }));
   if (failed) redirect(inboxUrl({ ...base, error: errorText }));
   revalidatePath('/inbox');
   revalidatePath('/tickets');
@@ -1195,7 +1159,7 @@ export async function createTicketFromConversation(formData: FormData): Promise<
   if (!user) redirect('/login');
 
   // redirect() throws — keep it OUTSIDE the try so it is never swallowed
-  let outcome: 'created' | 'attached' | 'unavailable' | 'failed' = 'failed';
+  let outcome: 'created' | 'attached' | 'unavailable' | 'skipped' | 'failed' = 'failed';
   let displayId = '';
   try {
     const result = await ensureTicket(supabase, {
@@ -1207,9 +1171,14 @@ export async function createTicketFromConversation(formData: FormData): Promise<
       createdBy: user.id,
     });
     outcome = result.outcome;
-    if (result.outcome !== 'unavailable') displayId = result.ticket.displayId;
+    if (result.outcome === 'created' || result.outcome === 'attached') {
+      displayId = result.ticket.displayId;
+    }
   } catch {
     outcome = 'failed';
+  }
+  if (outcome === 'skipped') {
+    redirect(inboxUrl({ ...base, error: TEST_CONVERSATION_NO_TICKET }));
   }
   if (outcome === 'unavailable') {
     redirect(inboxUrl({ ...base, error: 'Tickets sind noch nicht verfügbar (Migration 0030 ausstehend).' }));

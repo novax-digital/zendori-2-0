@@ -6,7 +6,7 @@
 // reusable. Message content is never logged (§7); ai_runs summaries are
 // content-free by construction.
 import { AI_MODELS, learn } from '@zendori/ai';
-import type { SupabaseClient } from '@zendori/core';
+import { isTestConversation, type SupabaseClient } from '@zendori/core';
 import { getServiceClient } from '../db.js';
 
 export const LEARN_DISTILL_QUEUE = 'learned.distill';
@@ -50,6 +50,12 @@ export async function distillLearnedAnswer(learnedAnswerId: string): Promise<voi
   if (row.status !== 'candidate') return; // already distilled/decided
   if (!row.message_id) {
     // origin message deleted before distillation — nothing left to learn from
+    await autoReject(supabase, row.id);
+    return;
+  }
+  // What a team member typed while trying the widget out (0050) is not an
+  // answer to a customer — it must not become knowledge.
+  if (row.conversation_id && (await isTestConversation(supabase, row.org_id, row.conversation_id))) {
     await autoReject(supabase, row.id);
     return;
   }

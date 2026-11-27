@@ -33,6 +33,8 @@ const BARE_PREFIXES = [
   '/invite',
   '/widget-demo',
   '/widget-host',
+  // the framed page behind a chat channel's "Test" tab (only the widget on it)
+  '/widget-test',
   // hosted public form page — trailing slash on purpose: startsWith('/f')
   // would swallow every future /f* route
   '/f/',

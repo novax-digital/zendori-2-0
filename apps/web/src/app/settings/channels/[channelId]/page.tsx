@@ -4,10 +4,12 @@
 // webhook, intake address). Chat and voice channels have more than three
 // sections and therefore page tabs (?tab=…). Actions return here via the
 // validated returnTo field (plus the tab the form was on).
+// A chat channel also has the tab "Test" (0050, docs/webchat-test.md): the real
+// widget in a frame, usable while the channel is still a draft.
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { canViewArea, isAdminRole, type Channel } from '@zendori/core';
+import { canAccessChannel, canViewArea, isAdminRole, type Channel } from '@zendori/core';
 import { businessHoursSchema, hasConfiguredHours, type BusinessHours } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
 import { channelFeeOf, formatChannelFee, loadChannelFees } from '@/lib/channel-fees';
@@ -17,12 +19,14 @@ import { appUrl } from '@/lib/env';
 import { href } from '@/lib/href';
 import ConfirmDeleteButton from '@/components/ConfirmDeleteButton';
 import WidgetDesigner from '@/components/WidgetDesigner';
+import WidgetTestFrame from '@/components/WidgetTestFrame';
 import DismissibleBanners from '@/components/DismissibleBanners';
 import NoAccessPanel from '@/components/NoAccessPanel';
 import VoicePicker from '@/components/VoicePicker';
 import GreetingSuggestion from '@/components/GreetingSuggestion';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import { Field, SettingRow } from '@/components/ui/Field';
 import { CodeBlock, Section, Tabs } from '@/components/ui/Layout';
 import Menu from '@/components/ui/Menu';
@@ -55,10 +59,11 @@ const SPLIT_PRESETS = [24, 72, 168];
 const VOICE_FORM_ID = 'voice-settings';
 const THEME_FORM_ID = 'widget-theme';
 
-type TabKey = 'general' | 'design' | 'embed' | 'voice';
+type TabKey = 'general' | 'design' | 'test' | 'embed' | 'voice';
 const CHAT_TABS: { key: TabKey; label: string }[] = [
   { key: 'general', label: 'Allgemein' },
   { key: 'design', label: 'Design' },
+  { key: 'test', label: 'Test' },
   { key: 'embed', label: 'Einbetten' },
 ];
 const VOICE_TABS: { key: TabKey; label: string }[] = [
@@ -304,13 +309,140 @@ export default async function ChannelDetailPage({
       <CodeBlock>
         {`<script src="${base}/widget.js" data-zendori-token="${widget.publicToken}" async></script>`}
       </CodeBlock>
-      {/* former sidebar entry "Widget-Demo" */}
       <p className="muted small">
-        Ausprobieren:{' '}
-        <Link href={href('/widget-demo', { org: orgId })}>Widget-Demo öffnen</Link>
+        Vorher ausprobieren:{' '}
+        <Link href={href(returnTo, { org: orgId, tab: 'test' })}>Reiter „Test“</Link>
+        {channel.is_active
+          ? null
+          : ' — der Kanal ist noch ein Entwurf, auf deiner Website erscheint der Chat erst, wenn du ihn aktivierst.'}
       </p>
     </Section>
   ) : null;
+
+  // --- tab "Test" (chat) ---------------------------------------------------------
+
+  let testTab: ReactNode = null;
+  if (widget && activeTab === 'test') {
+    // Before migration 0050 a test cannot be marked as one — say so instead of
+    // showing a chat that fails on the first message.
+    const { error: probeError } = await supabase.from('conversations').select('is_test').limit(1);
+    const testReady = !probeError;
+    const assignedAgent = agentOptions.find((a) => a.id === channel.agent_id) ?? null;
+    const mayChat = canAccessChannel(access, channel.id);
+    // Only worth a line when the agent can act in the customer's own system at
+    // all (Phase 13). A failed lookup simply leaves the line out.
+    let agentHasActions = false;
+    if (assignedAgent) {
+      const { count } = await supabase
+        .from('agent_data_actions')
+        .select('data_action_id', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('agent_id', assignedAgent.id);
+      agentHasActions = (count ?? 0) > 0;
+    }
+
+    let agentHint: ReactNode;
+    if (!assignedAgent) {
+      agentHint = (
+        <Callout tone="warn" title="Kein Agent zugewiesen">
+          Ohne Agenten antwortet im Chat niemand automatisch, deine Nachrichten landen nur in der
+          Inbox. Einen Agenten weist du unter{' '}
+          <Link href={href(returnTo, { org: orgId })}>Allgemein</Link> zu.
+        </Callout>
+      );
+    } else if (assignedAgent.mode === 'intake_only') {
+      agentHint = (
+        <Callout title={`„${assignedAgent.name}“ nimmt Anliegen nur auf`}>
+          Dieser Agent beantwortet Fragen nicht selbst (Reine Annahme). Im Test siehst du, was ein
+          Besucher darauf zu sehen bekommt.
+        </Callout>
+      );
+    } else if (!assignedAgent.is_active || assignedAgent.mode !== 'autopilot') {
+      agentHint = (
+        <Callout
+          title={
+            assignedAgent.is_active
+              ? `„${assignedAgent.name}“ schreibt im Betrieb nur Entwürfe`
+              : `„${assignedAgent.name}“ ist pausiert`
+          }
+        >
+          Im Test antwortet der Agent trotzdem direkt im Chat, damit du ihn ausprobieren kannst.
+          {assignedAgent.is_active
+            ? ' Auf deiner Website gehen seine Antworten erst raus, wenn er auf „Autopilot“ steht.'
+            : ' Auf deiner Website antwortet er erst, wenn du ihn wieder einschaltest.'}
+        </Callout>
+      );
+    } else {
+      agentHint = (
+        <p className="muted small">
+          Es antwortet „{assignedAgent.name}“, so wie später auf deiner Website.
+        </p>
+      );
+    }
+
+    testTab = (
+      <div className="wt">
+        <div className="wt-info">
+          <Section
+            title="Chat ausprobieren"
+            help="Rechts läuft das echte Chat-Fenster dieses Kanals, mit deinem Design. Schreib hinein wie ein Besucher deiner Website."
+          >
+            <div className="stack">
+              {channel.is_active ? null : (
+                <Callout title="Der Kanal ist noch ein Entwurf">
+                  Auf deiner Website ist der Chat noch nicht erreichbar. Testen kannst du ihn hier
+                  trotzdem schon.
+                </Callout>
+              )}
+              {agentHint}
+            </div>
+          </Section>
+          <Section title="Was ein Test auslöst">
+            <ul className="steps">
+              <li>
+                Das Gespräch steht in der Inbox, mit dem Kennzeichen „Test“. Von dort kannst du auch
+                als Mitarbeiter antworten.
+              </li>
+              <li>
+                Es entstehen keine Tickets, keine E-Mails ans Team und keine Einträge in HubSpot
+                oder einem angebundenen Endsystem.
+              </li>
+              <li>Die Antworten der KI zählen wie gewohnt zum Verbrauch.</li>
+              {agentHasActions ? (
+                <li>
+                  Aktionen, die in eurem Endsystem etwas ändern, führt der Agent im Test nie von
+                  selbst aus. Sie warten in der Inbox auf „Ausführen“.
+                </li>
+              ) : null}
+            </ul>
+            {canViewArea(access, 'inbox') ? (
+              <div>
+                <Button href={href('/inbox', { org: orgId, channel: channel.id })} size="sm">
+                  Gespräche dieses Kanals in der Inbox
+                </Button>
+              </div>
+            ) : null}
+          </Section>
+        </div>
+        {!testReady ? (
+          <Callout tone="warn" title="Der Test ist noch nicht freigeschaltet">
+            Dafür fehlt noch ein Update der Datenbank (Migration 0050). Danach erscheint hier das
+            Chat-Fenster.
+          </Callout>
+        ) : !mayChat ? (
+          <Callout title="Kein Zugriff auf diesen Kanal">
+            Dein Zugang ist auf andere Kanäle beschränkt. Einen Test kann ein Inhaber oder Admin
+            starten.
+          </Callout>
+        ) : (
+          <WidgetTestFrame
+            src={href('/widget-test', { org: orgId, channel: channel.id })}
+            publicToken={widget.publicToken}
+          />
+        )}
+      </div>
+    );
+  }
 
   // --- tab "Sprachassistent" (voice) -------------------------------------------
 
@@ -563,15 +695,17 @@ export default async function ChannelDetailPage({
 
       <div className="page-body">
         <DismissibleBanners error={error} notice={notice} />
-        {/* the design tab needs room for the preview next to the controls */}
-        <div className={activeTab === 'design' ? 'wd-page' : 'form-narrow'}>
+        {/* design and test need room for the widget next to the text */}
+        <div className={activeTab === 'design' || activeTab === 'test' ? 'wd-page' : 'form-narrow'}>
           {activeTab === 'design'
             ? designTab
-            : activeTab === 'embed'
-              ? embedTab
-              : activeTab === 'voice'
-                ? voiceTab
-                : generalTab}
+            : activeTab === 'test'
+              ? testTab
+              : activeTab === 'embed'
+                ? embedTab
+                : activeTab === 'voice'
+                  ? voiceTab
+                  : generalTab}
         </div>
       </div>
 

@@ -3155,3 +3155,125 @@ describe.skipIf(!enabled)('RLS: agent identity suggestions (0049)', () => {
     expect(row).toEqual({ state: 'queued', result: null });
   });
 });
+
+describe.skipIf(!enabled)('Test conversations (0050)', () => {
+  let admin: SupabaseClient;
+  let owner: SupabaseClient;
+  let ownerId: string;
+  let orgId: string;
+  let channelId: string;
+  const email = `test-conv-${randomUUID()}@test.zendori.dev`;
+  const password = `pw-${randomUUID()}`;
+
+  const queuedFor = async (entityId: string): Promise<number> => {
+    const { data } = await admin
+      .from('member_notifications')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('entity_id', entityId);
+    return (data ?? []).length;
+  };
+  const conversation = async (isTest: boolean): Promise<string> => {
+    const { data, error } = await admin
+      .from('conversations')
+      .insert({ org_id: orgId, channel_id: channelId, ...(isTest ? { is_test: true } : {}) })
+      .select('id, is_test')
+      .single();
+    expect(error).toBeNull();
+    expect(data!.is_test).toBe(isTest);
+    return data!.id as string;
+  };
+
+  beforeAll(async () => {
+    admin = createClient(url!, serviceKey!, { auth: { persistSession: false } });
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    ownerId = created.data.user!.id;
+    owner = createClient(url!, anonKey!, { auth: { persistSession: false } });
+    await owner.auth.signInWithPassword({ email, password });
+
+    const slug = `test-conv-${randomUUID().slice(0, 8)}`;
+    await owner.from('organizations').insert({ name: 'Test Conv Org', slug });
+    const { data: org } = await owner.from('organizations').select('id').eq('slug', slug).single();
+    orgId = org!.id as string;
+    const { data: channel } = await admin
+      .from('channels')
+      .insert({ org_id: orgId, type: 'chat', name: 'Chat', config: {} })
+      .select('id')
+      .single();
+    channelId = channel!.id as string;
+    // a colleague-less org: the owner subscribes, the service role acts (actor null)
+    await owner.from('notification_preferences').insert({
+      org_id: orgId,
+      user_id: ownerId,
+      events: ['conversation.new', 'handoff.pending', 'assigned'],
+    });
+  });
+
+  afterAll(async () => {
+    if (orgId) await admin.from('organizations').delete().eq('id', orgId);
+    if (ownerId) await admin.auth.admin.deleteUser(ownerId);
+  });
+
+  it('a real conversation notifies the team, a test conversation nobody', async () => {
+    const real = await conversation(false);
+    const test = await conversation(true);
+    expect(await queuedFor(real)).toBe(1);
+    expect(await queuedFor(test)).toBe(0);
+
+    // a waiting handoff: the same split
+    await admin.from('handoff_events').insert([
+      { org_id: orgId, conversation_id: real, reason: 'keyword', outcome: 'pending_human' },
+      { org_id: orgId, conversation_id: test, reason: 'keyword', outcome: 'pending_human' },
+    ]);
+    expect(await queuedFor(real)).toBe(2);
+    expect(await queuedFor(test)).toBe(0);
+  });
+
+  it('a test conversation never becomes a ticket — not through the service, not past it', async () => {
+    const { ensureTicket } = await import('../src/ticket-service.js');
+    const test = await conversation(true);
+
+    const viaService = await ensureTicket(admin, {
+      orgId,
+      conversationId: test,
+      origin: 'handoff',
+      subject: 'Test',
+    });
+    expect(viaService).toEqual({ outcome: 'skipped', reason: 'test_conversation' });
+    // a member's own client (inbox button "Ticket anlegen") gets the same answer
+    const viaMember = await ensureTicket(owner, {
+      orgId,
+      conversationId: test,
+      origin: 'manual',
+      attach: 'never',
+      createdBy: ownerId,
+    });
+    expect(viaMember.outcome).toBe('skipped');
+
+    // a writer that skips the service is stopped by the database
+    const direct = await admin
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: test, origin: 'manual' });
+    expect(direct.error?.code).toBe('ZT001');
+
+    const { data: tickets } = await admin.from('tickets').select('id').eq('conversation_id', test);
+    expect(tickets).toEqual([]);
+  });
+
+  it('the number range is untouched by a refused ticket', async () => {
+    const real = await conversation(false);
+    const first = await admin
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: real, origin: 'manual' })
+      .select('number')
+      .single();
+    const test = await conversation(true);
+    await admin.from('tickets').insert({ org_id: orgId, conversation_id: test, origin: 'manual' });
+    const second = await admin
+      .from('tickets')
+      .insert({ org_id: orgId, conversation_id: real, origin: 'manual' })
+      .select('number')
+      .single();
+    expect(Number(second.data!.number)).toBe(Number(first.data!.number) + 1);
+  });
+});

@@ -49,4 +49,11 @@ export type ContactDetails = {
 export type WidgetConfig = {
   token: string;
   apiBase: string;
+  /**
+   * Set by data-zendori-test on Zendori's own "Test" tab (0050): the API then
+   * answers for a draft channel too and marks the conversation as a test. It
+   * only works for a signed-in member — on a customer website the attribute
+   * makes the widget stay invisible.
+   */
+  test: boolean;
 };

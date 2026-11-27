@@ -320,3 +320,37 @@ describe('openedAt (voice: the whole call is the ticket context)', () => {
     expect(attach.updates.find((u) => u.table === 'tickets')?.patch).not.toHaveProperty('opened_at');
   });
 });
+
+describe('test conversations (0050) never become tickets', () => {
+  it('skips before anything is read or written about tickets', async () => {
+    const fake = makeFake({ conversation: { is_test: true }, openTicket: OPEN });
+    const result = await ensureTicket(fake.client, { ...BASE, origin: 'handoff', subject: 'Test' });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'test_conversation' });
+    expect(fake.inserts).toEqual([]);
+    expect(fake.updates).toEqual([]);
+  });
+
+  it("holds for every attach policy — also the inbox button's 'never' and 'always'", async () => {
+    for (const attach of ['auto', 'always', 'never'] as const) {
+      const fake = makeFake({ conversation: { is_test: true } });
+      const result = await ensureTicket(fake.client, { ...BASE, origin: 'manual', attach });
+      expect(result.outcome).toBe('skipped');
+      expect(fake.inserts).toEqual([]);
+    }
+  });
+
+  it('maps the database guard (ZT001) to the same outcome when a writer raced the check', async () => {
+    const fake = makeFake({
+      openTicket: null,
+      insertError: { code: 'ZT001', message: 'test conversations have no tickets' },
+    });
+    const result = await ensureTicket(fake.client, { ...BASE, origin: 'no_agent' });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'test_conversation' });
+  });
+
+  it('an ordinary conversation is untouched by the check', async () => {
+    const fake = makeFake({ conversation: { contact_id: 'contact-1', is_test: false } });
+    const result = await ensureTicket(fake.client, { ...BASE, origin: 'handoff' });
+    expect(result.outcome).toBe('created');
+  });
+});

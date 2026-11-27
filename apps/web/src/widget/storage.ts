@@ -32,6 +32,19 @@ function removeItem(key: string): void {
   }
 }
 
+/**
+ * Storage id of a widget in Zendori's own "Test" tab (0050): the test keeps a
+ * session of its own, apart from a real visitor session in the same browser.
+ */
+export function testStorageId(token: string): string {
+  return `test-${token}`;
+}
+
+/** Every key the widget may keep for one storage id — what "start over" clears. */
+export function widgetStorageKeys(id: string): string[] {
+  return [sessionKey(id), contactPromptKey(id), teaserKey(id)];
+}
+
 function sessionKey(token: string): string {
   return `zendori-widget-${token}`;
 }

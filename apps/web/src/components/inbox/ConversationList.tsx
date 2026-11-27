@@ -81,6 +81,12 @@ export default function ConversationList({
                 </Badge>
                 {/* who answers while the conversation is live: the bot or a human */}
                 {active ? <Badge>{item.mode === 'bot' ? 'Bot' : 'Mensch'}</Badge> : null}
+                {/* tried out from the channel's "Test" tab (0050) — not a customer */}
+                {item.is_test ? (
+                  <Badge tone="accent" title="Testgespräch aus dem Reiter „Test“ des Kanals">
+                    Test
+                  </Badge>
+                ) : null}
                 {item.channel ? (
                   <span className="inbox-row-channel" title={item.channel.name}>
                     {item.channel.name}

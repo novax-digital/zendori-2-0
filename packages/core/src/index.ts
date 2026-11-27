@@ -17,6 +17,7 @@ export * from './billing-invoices.js';
 export * from './permissions.js';
 export * from './tickets.js';
 export * from './ticket-service.js';
+export * from './test-conversations.js';
 export * from './hubspot-rules.js';
 export * from './demo.js';
 export * from './contact.js';

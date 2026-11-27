@@ -71,6 +71,14 @@ export default function ConversationView({
           </div>
         </div>
         <div className="inbox-thread-actions">
+          {conversation.is_test ? (
+            <Badge
+              tone="accent"
+              title="Aus dem Reiter „Test“ des Kanals: keine Tickets, keine E-Mails ans Team, nichts an HubSpot oder ein Endsystem"
+            >
+              Testgespräch
+            </Badge>
+          ) : null}
           {/* who answers this conversation right now */}
           {conversation.mode === 'human' ? (
             <Badge title="Der Bot schweigt, bis die Konversation zurückgegeben wird">Mensch</Badge>

@@ -9,6 +9,10 @@
 // (flavor webform) or an existing website form sending to an intake address
 // (flavor form). A built form's row links to its builder,
 // /settings/forms/[formId], which is that channel's page.
+//
+// "Test" is no channel type to create any more (owner 2026-11-27): a chat
+// channel is tried out on its own tab "Test" (docs/webchat-test.md). Test
+// channels that already exist stay in the list and keep working.
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { Channel, ChannelKind } from '@zendori/core';
@@ -17,7 +21,6 @@ import { formDefinitionSchema } from '@zendori/channels';
 import { requireActiveOrg } from '@/lib/org';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { listChannels } from '@/lib/inbox/queries';
-import { createTestChannel } from '@/app/inbox/actions';
 import { createForm } from '@/app/settings/forms/actions';
 import {
   createWidgetChannel,
@@ -57,7 +60,8 @@ const CREATE_FORM_ID = 'new-channel';
  * A type with several flavors ("Formular") asks for the variant in a second
  * step; the URL always carries the flavor (?type=…).
  */
-const CREATE_TYPES: { key: string; title: string; help: string; flavors: ChannelFlavor[] }[] = [
+type CreatableFlavor = Exclude<ChannelFlavor, 'test'>;
+const CREATE_TYPES: { key: string; title: string; help: string; flavors: CreatableFlavor[] }[] = [
   {
     key: 'email',
     title: FLAVOR_LABELS.email,
@@ -87,12 +91,6 @@ const CREATE_TYPES: { key: string; title: string; help: string; flavors: Channel
     title: FLAVOR_LABELS.voice,
     help: 'Anrufe nimmt der Sprachassistent entgegen',
     flavors: ['voice'],
-  },
-  {
-    key: 'test',
-    title: FLAVOR_LABELS.test,
-    help: 'Nachrichten manuell einspeisen, zum Ausprobieren',
-    flavors: ['test'],
   },
 ];
 
@@ -201,7 +199,7 @@ export default async function ChannelsPage({
     </>
   );
 
-  const createView = (flavor: ChannelFlavor): CreateView => {
+  const createView = (flavor: CreatableFlavor): CreateView => {
     switch (flavor) {
       case 'form':
         return {
@@ -275,38 +273,14 @@ export default async function ChannelsPage({
         };
       case 'chat':
         return {
-          intro: (
-            <>
-              Das Widget bindest du mit einem einzigen Script-Tag in deine Website ein. Nachrichten
-              erscheinen als Konversationen in der Inbox. Ausprobieren:{' '}
-              <Link href={href('/widget-demo', { org: orgId })}>Widget-Demo</Link>
-            </>
-          ),
+          intro:
+            'Das Widget bindest du mit einem einzigen Script-Tag in deine Website ein. Nachrichten erscheinen als Konversationen in der Inbox. Nach dem Anlegen kannst du den Chat im Reiter „Test“ ausprobieren, auch bevor er auf deiner Website läuft.',
           submitLabel: 'Widget-Channel anlegen',
           form: (
             <form id={CREATE_FORM_ID} className="stack" action={createWidgetChannel}>
               {formBase('chat')}
               <Field label="Name" htmlFor="widget-name">
                 <input id="widget-name" name="name" type="text" required minLength={2} maxLength={80} placeholder="z. B. Website-Chat zendori.de" />
-              </Field>
-            </form>
-          ),
-        };
-      case 'test':
-        return {
-          intro: (
-            <>
-              Über einen Test-Kanal speist du Nachrichten manuell ein (
-              <Link href={href('/test-channel', { org: orgId })}>Test-Channel</Link>), um Inbox, KI
-              und Zuweisung ohne echten Kanal auszuprobieren.
-            </>
-          ),
-          submitLabel: 'Test-Channel anlegen',
-          form: (
-            <form id={CREATE_FORM_ID} className="stack" action={createTestChannel}>
-              {formBase('test')}
-              <Field label="Name" htmlFor="test-name">
-                <input id="test-name" name="name" type="text" required minLength={2} placeholder="z. B. Test-Kanal Support" />
               </Field>
             </form>
           ),
@@ -554,8 +528,11 @@ export default async function ChannelsPage({
                             </Link>
                           ) : null}
                           {flavor === 'chat' ? (
-                            <Link className="menu-item" href={href('/widget-demo', { org: orgId })}>
-                              <span className="menu-label">Widget-Demo öffnen</span>
+                            <Link
+                              className="menu-item"
+                              href={href(`${LIST_PATH}/${channel.id}`, { org: orgId, tab: 'test' })}
+                            >
+                              <span className="menu-label">Chat testen</span>
                             </Link>
                           ) : null}
                         </Menu>
